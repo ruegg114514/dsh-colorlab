@@ -920,6 +920,141 @@ window.__ModuleLoader__.load({
     const PROSE_SHEET_ID = 'dsh-colorlab/prose.css'
     const ROW_SHEET_ID = 'dsh-colorlab/row.css'
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
+    const LATEX_SHEET_ID = 'dsh-colorlab/latex.css'
+
+    /* ====================================================================== *
+     * 二·六、LaTeX 代码块的命令色
+     *
+     * 背景：Shiki 的 `css-variables` 主题把 scope 归并成少数几个令牌，而
+     * Sublime 的 Mariana 是按 scope 上色的。两边对同一批 scope 的分派不同：
+     *
+     *   Sublime Mariana          Shiki css-variables
+     *   ───────────────          ────────────────────
+     *   keyword           → keyword      （`var(pink)` = #C594C5 紫）
+     *   support.function  → function     （`var(blue)` = #6699CC 蓝）
+     *   entity.name.function → function  （`var(blue5)` = #5FB3B3 青）
+     *
+     * `support.function` 和 `entity.name.function` 在 Sublime 里是**不同颜色**
+     * （蓝 vs 青），但 Shiki 把它们合并成同一个 `function` 令牌 —— 一个令牌
+     * 只能一个颜色。
+     *
+     * 后果：LaTeX 的命令（`\chapter` `\ket` `\frac`，scope 是
+     * `support.function.*`）在 Sublime 里是**蓝**的，在本插件里却是**青**的
+     * —— 因为插件把 function 令牌取成了 `blue5`（青）。
+     *
+     * 修法：只给 LaTeX 代码块换掉 function 令牌的颜色，其它语言（JS/Python
+     * 的函数名，`entity.name.function`）保持青色不变。
+     * ====================================================================== */
+
+    /** LaTeX 块的类名（插件自己加在 pre 上）。 */
+    const LATEX_BLOCK_CLASS = 'dmt-latex'
+
+    /** LaTeX 命令在 Mariana 里是 `var(blue)`（= PALETTE_BASE.blue）。 */
+    const LATEX_FUNCTION_COLOR = PALETTE_BASE.blue
+
+    /**
+     * 判定一个代码块是不是 LaTeX。
+     *
+     * 为什么不能靠宿主标记：宿主的 Shiki 输出是
+     * `<pre class="shiki css-variables">`，**pre 上没有语言名**
+     * （Shiki 的 `codeToHtml` 只加 `class="shiki <themeName>"`），
+     * 宿主也没有把 lang 写到 DOM 上。
+     *
+     * 所以看**内容特征**：`support.function` 令牌上色、且文本以 `\` 开头的
+     * span —— 这正是 LaTeX 命令（`\chapter` `\begin` `\frac`）。JavaScript
+     * 的函数名不以 `\` 开头，Python 也不以。
+     *
+     * @param {Element} pre - 代码块容器（pre.shiki）。
+     * @returns {boolean} 是否判定为 LaTeX。
+     */
+    function isLatexBlock(pre) {
+      if (!pre || typeof pre.querySelectorAll !== 'function') return false
+      let spans
+      try {
+        spans = pre.querySelectorAll('span[style*="--shiki-token-function"]')
+      } catch {
+        return false
+      }
+      if (!spans || spans.length === 0) return false
+      let latexish = 0
+      for (let i = 0; i < spans.length; i += 1) {
+        const text = spans[i].textContent || ''
+        /* LaTeX 命令：反斜杠 + 字母（`\chapter` `\begin` `\frac`）。 */
+        if (/^\\[A-Za-z]/.test(text)) latexish += 1
+      }
+      if (latexish === 0) return false
+      /* 要求"像 LaTeX 命令的 span"占 function span 的多数，避免个别
+         转义符（JS 里的 `\` 续行）误判整个代码块。 */
+      return latexish * 2 >= spans.length
+    }
+
+    /**
+     * 给 LaTeX 代码块打标记，并维护一条覆盖 function 令牌的样式表。
+     *
+     * CSS 变量在 `pre` 上重新定义会作用到它的全部后代，所以只需要
+     * `pre.dmt-latex { --shiki-token-function: #6699CC }` 一条规则 ——
+     * Shiki 生成的 token span 用的是 `var(--shiki-token-function)`，
+     * 会自动取到新值。
+     */
+    function syncLatexSheet() {
+      if (typeof document === 'undefined') return
+      const wanted = state.enabled !== 'off' && shouldApply() && state.syntax !== 'off'
+      /* 需要时持续观察 DOM（代码块是动态渲染的）。 */
+      if (wanted) ensureLatexObserver()
+      else disposeLatexObserver()
+      let blocks = []
+      try {
+        blocks = document.querySelectorAll('pre.shiki')
+      } catch {
+        blocks = []
+      }
+      let latexCount = 0
+      for (let i = 0; i < blocks.length; i += 1) {
+        const pre = blocks[i]
+        if (!pre) continue
+        if (isLatexBlock(pre)) {
+          latexCount += 1
+          if (!pre.classList.contains(LATEX_BLOCK_CLASS)) {
+            try {
+              pre.classList.add(LATEX_BLOCK_CLASS)
+            } catch {
+              /* classList 不可用就跳过这个块 */
+            }
+          }
+        } else if (pre.classList.contains(LATEX_BLOCK_CLASS)) {
+          try {
+            pre.classList.remove(LATEX_BLOCK_CLASS)
+          } catch {
+            /* 同上 */
+          }
+        }
+      }
+      diag.latex = latexCount
+      if (!wanted || latexCount === 0) {
+        if (latexEl !== null) {
+          try {
+            latexEl.remove()
+          } catch (error) {
+            note('remove latex sheet', error)
+          }
+          latexEl = null
+        }
+        return
+      }
+      try {
+        if (latexEl === null) {
+          latexEl = document.createElement('style')
+          latexEl.dataset.plugin = 'dsh-colorlab'
+          latexEl.dataset.pluginCss = LATEX_SHEET_ID
+          document.head.appendChild(latexEl)
+        }
+        latexEl.textContent =
+          'pre.' + LATEX_BLOCK_CLASS + '{--shiki-token-function:' + LATEX_FUNCTION_COLOR + '}'
+      } catch (error) {
+        note('install latex sheet', error)
+        diag.latex = 'error'
+      }
+    }
 
     /**
      * 文件卡片的两组目标。
@@ -1397,7 +1532,7 @@ window.__ModuleLoader__.load({
 
     const state = { ...DEFAULTS }
     const store = createStore({ ...DEFAULTS, status: initialStatus() })
-    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off' }
+    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', latex: 0 }
 
     /**
      * 未确认的颜色改动；空对象 = 无草稿。
@@ -1500,6 +1635,62 @@ window.__ModuleLoader__.load({
 
     /** 过程行高亮样式表元素（独立于主题通道与正文高亮）。 */
     let rowEl = null
+
+    /** LaTeX 代码块命令色覆盖样式表元素。 */
+    let latexEl = null
+
+    /**
+     * LaTeX 块标记的观察器。
+     *
+     * 为什么需要：代码块是**动态渲染**的 —— 滚动到旧消息时才插进 DOM。
+     * 只在设置变更时扫一遍，早于渲染的块永远拿不到标记。
+     * 所以监听 DOM 变化，来了新块就重新判定。
+     */
+    let latexObserver = null
+    let latexObserverTimer = null
+
+    /** 观察器回调是同步的，但重扫整个文档不便宜 —— 合并到下一帧做一次。 */
+    function scheduleLatexRescan() {
+      if (latexObserverTimer !== null) return
+      if (typeof setTimeout !== 'function') return
+      latexObserverTimer = setTimeout(() => {
+        latexObserverTimer = null
+        syncLatexSheet()
+      }, 120)
+      if (latexObserverTimer && typeof latexObserverTimer.unref === 'function') latexObserverTimer.unref()
+    }
+
+    /** 装上观察器（幂等）。 */
+    function ensureLatexObserver() {
+      if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return
+      if (latexObserver !== null) return
+      try {
+        latexObserver = new MutationObserver(() => scheduleLatexRescan())
+        latexObserver.observe(document.body, { childList: true, subtree: true })
+      } catch {
+        latexObserver = null
+      }
+    }
+
+    /** 拆掉观察器。 */
+    function disposeLatexObserver() {
+      if (latexObserver !== null) {
+        try {
+          latexObserver.disconnect()
+        } catch {
+          /* 已断开 */
+        }
+        latexObserver = null
+      }
+      if (latexObserverTimer !== null) {
+        try {
+          clearTimeout(latexObserverTimer)
+        } catch {
+          /* 无 timer */
+        }
+        latexObserverTimer = null
+      }
+    }
 
     /** 卡片覆盖样式表元素 + 检测到的卡片类名（null = 还没检测到，稍后重试）。 */
     let cardEl = null
@@ -1704,6 +1895,7 @@ window.__ModuleLoader__.load({
       syncProseSheet()
       syncRowSheet()
       syncCardSheet()
+      syncLatexSheet()
       publish()
     }
 
@@ -3240,6 +3432,29 @@ window.__ModuleLoader__.load({
                 cardEl = null
               }
               diag.card = 'off'
+              if (latexEl !== null) {
+                try {
+                  latexEl.remove()
+                } catch (error) {
+                  note('teardown latex sheet', error)
+                }
+                latexEl = null
+              }
+              diag.latex = 0
+              disposeLatexObserver()
+              /* 去掉打在代码块上的标记，否则下次启用时残留。 */
+              try {
+                const marked = document.querySelectorAll('pre.' + LATEX_BLOCK_CLASS)
+                for (let i = 0; i < marked.length; i += 1) {
+                  try {
+                    marked[i].classList.remove(LATEX_BLOCK_CLASS)
+                  } catch {
+                    /* classList 不可用 */
+                  }
+                }
+              } catch {
+                /* 无 DOM */
+              }
               try {
                 document.documentElement.removeAttribute('data-dsh-colorlab')
               } catch {
@@ -3274,6 +3489,10 @@ window.__ModuleLoader__.load({
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
+        LATEX_SHEET_ID,
+        LATEX_BLOCK_CLASS,
+        LATEX_FUNCTION_COLOR,
+        isLatexBlock,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
