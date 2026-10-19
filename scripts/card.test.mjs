@@ -98,7 +98,12 @@ if (changedFilesCss === null || deliverablesCss === null) {
  * 真实浏览器里，CSSOM 的每个 rule 是一个独立对象：
  *   - `selectorText` 只含**这一条**规则的选择器
  *   - `cssText` 是这一条规则的完整文本
+ *   - `style` 是一个 CSSStyleDeclaration，可用 `getPropertyValue` 问某个声明
  * 宿主的一个 CSS Module 文件里有很多条规则，所以要拆开。
+ *
+ * ⚡ `style.getPropertyValue` 必须还原：插件为了省掉「序列化 2179 条规则的
+ * cssText」而优先用它。替身不给这个成员的话，测到的就只是 cssText 兜底路径，
+ * 真正跑在生产里的那条快路径反而没被覆盖。
  */
 function toCssomRules(cssText) {
   const rules = []
@@ -109,9 +114,18 @@ function toCssomRules(cssText) {
     const body = match[2]
     /* 去掉 `css$2 = "` 这类编译期前缀残留。 */
     const clean = selector.replace(/^css\$\d+\s*=\s*"?/, '').trim()
+    const decls = new Map()
+    for (const part of body.split(';')) {
+      const at = part.indexOf(':')
+      if (at === -1) continue
+      decls.set(part.slice(0, at).trim(), part.slice(at + 1).trim())
+    }
     rules.push({
       selectorText: clean,
       cssText: clean + '{' + body + '}',
+      style: {
+        getPropertyValue: (name) => (decls.has(name) ? decls.get(name) : ''),
+      },
     })
   }
   return rules
