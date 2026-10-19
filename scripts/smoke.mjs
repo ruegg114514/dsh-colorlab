@@ -132,7 +132,7 @@ function finish() {
     console.log('  1. 确认 profile package.json 的 dsh.profile.bundles 里有 dsh-colorlab，并已 pnpm install')
     console.log('  2. 重启 DSH 桌面端（loader 只在启动时扫描 bundle 列表）')
     console.log('  3. 打开设置 → 插件表，确认 mariana-theme 行是启用状态')
-    console.log('  4. 打开设置 → Mariana 主题，看顶部状态条（通道 / 令牌数 / 外观 / 配置）')
+    console.log('  4. 打开设置 → ColorLab，看顶部状态条（通道 / 令牌数 / 外观 / 配置）')
     process.exit(1)
   }
   const checked = results.filter((result) => !result.skipped).length
