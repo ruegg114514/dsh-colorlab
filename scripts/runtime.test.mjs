@@ -201,8 +201,8 @@ function main() {
 
     const layer = theme._layers.get('dsh-colorlab')
     check(layer !== undefined, 'apply 后走 overrideTokens 通道')
-    /* 148 = 101 alias + 12 specific + 9 static + 11 shiki + 3 shiki-diff + 9 prose + 2 row + 1 patch */
-    check(layer !== undefined && Object.keys(layer.tokens).length === 148, '叠加层含 148 个令牌', layer ? String(Object.keys(layer.tokens).length) : 'n/a')
+    /* 151 = 101 alias + 12 specific + 9 static + 11 shiki + 3 shiki-diff + 9 prose + 2 row + 3 markdown + 1 patch */
+    check(layer !== undefined && Object.keys(layer.tokens).length === 151, '叠加层含 151 个令牌', layer ? String(Object.keys(layer.tokens).length) : 'n/a')
     check(layer !== undefined && layer.tokens['--dsw-alias-bg-base'].dark === '#343D46', '深色底色 = #343D46')
     check(layer !== undefined && typeof layer.tokens['--dsw-alias-bg-base'].light === 'string', '浅色值同时齐备')
 
