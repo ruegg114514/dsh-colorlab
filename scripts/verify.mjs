@@ -132,6 +132,13 @@ const PROSE_TOKENS = [
  */
 const ROW_TOKENS = ['--dmt-row-color', '--dmt-summary-color']
 
+/**
+ * Markdown 细节令牌。同 `--dmt-prose-*`，是插件自己的命名空间，
+ * 只被插件注入的 Markdown 样式表的 var() 消费。
+ * 三个：列表符号（绿）、引用正文（橙）、行内代码背景。
+ */
+const MARKDOWN_TOKENS = ['--dmt-md-list-marker', '--dmt-md-quote', '--dmt-md-code-bg']
+
 const KNOWN = new Set([
   ...ALIAS_TOKENS,
   ...SPECIFIC_TOKENS,
@@ -140,6 +147,7 @@ const KNOWN = new Set([
   ...SHIKI_DIFF_TOKENS,
   ...PROSE_TOKENS,
   ...ROW_TOKENS,
+  ...MARKDOWN_TOKENS,
   ...PATCH_TOKENS,
 ])
 
