@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
- * LaTeX 代码块命令色的回归测试。
+ * 代码高亮的**令牌映射**回归测试。
  *
- * 背景：Shiki 的 `css-variables` 主题把 `support.function`（LaTeX 命令）和
- * `entity.name.function`（JS/Python 函数名）合并成同一个 `function` 令牌，
- * 而 Sublime 的 Mariana 给它们不同颜色：
+ * 背景：Shiki 的 `css-variables` 主题把 scope 归并成少数几个令牌，而
+ * Sublime 的 Mariana 是按 scope 上色的。两边对同一批 scope 的分派不同：
  *
- *   support.function    → var(blue)  = #6699CC 蓝   ← LaTeX 命令
- *   entity.name.function → var(blue5) = #5FB3B3 青   ← 其它语言的函数名
+ *   Sublime Mariana                 Shiki css-variables
+ *   ───────────────                 ────────────────────
+ *   keyword                  → keyword   （`var(pink)` = #C594C5 紫）
+ *   support.function         → function  （`var(blue)`  = #6699CC 蓝）
+ *   entity.name.function     → function  （`var(blue5)` = #5FB3B3 青）
  *
- * 一个令牌只能一个颜色，所以插件改成：**只给 LaTeX 代码块**换掉 function 令牌。
- * 这套件验证「哪些块被判定为 LaTeX」这个判定逻辑。
+ * `support.function`（Python 内置函数 print/len/open、LaTeX 命令 \chapter）
+ * 和 `entity.name.function`（函数定义名）在 Sublime 里是**不同颜色**，
+ * 但 Shiki 把它们合并成同一个 `function` 令牌 —— 一个令牌只能一个颜色。
+ *
+ * 本插件取 `var(blue)`（#6699CC）：函数**调用**比函数**定义**常见得多，
+ * 且前者才是 Sublime 里最常看到的那个色。
  */
 
 import { readFileSync } from 'node:fs'
@@ -58,99 +64,60 @@ function loadPlugin() {
   return captured.factory(fakeRequire)
 }
 
-const { isLatexBlock, LATEX_BLOCK_CLASS, LATEX_FUNCTION_COLOR, PALETTE } = loadPlugin().__test
+const test = loadPlugin().__test
+const { PALETTE, resolveTokens, DEFAULTS, MARKDOWN_RULES, buildMarkdownSheet } = test
 
-check(typeof isLatexBlock === 'function', 'isLatexBlock 已导出')
-check(typeof LATEX_BLOCK_CLASS === 'string' && LATEX_BLOCK_CLASS.length > 0, 'LATEX_BLOCK_CLASS 已声明', LATEX_BLOCK_CLASS)
+/* ------------------------------------------------------------------ *
+ * 1. function 令牌 = Mariana 的 var(blue)
+ * ------------------------------------------------------------------ */
 
-/* LaTeX 命令色必须是 Mariana 的 var(blue)（Sublime 里 support.function 的色）。 */
+check(PALETTE && PALETTE.blue === '#6699CC', 'PALETTE.blue = #6699CC（Mariana var(blue)）', PALETTE && PALETTE.blue)
+
+const tokens = resolveTokens(DEFAULTS)
+const fn = tokens['--shiki-token-function']
+check(fn !== undefined, '解析出 --shiki-token-function')
 check(
-  LATEX_FUNCTION_COLOR === '#6699CC',
-  'LaTeX 命令色 = Mariana var(blue) #6699CC',
-  LATEX_FUNCTION_COLOR,
+  fn !== undefined && fn.dark === '#6699CC',
+  'function 令牌 = #6699CC（对齐 support.function）',
+  fn ? fn.dark : 'n/a',
 )
 check(
-  PALETTE && PALETTE.blue === LATEX_FUNCTION_COLOR,
-  '与 PALETTE.blue 一致（同一个色源）',
-  PALETTE ? PALETTE.blue : 'n/a',
+  fn !== undefined && fn.light === '#3E6FA8',
+  '浅色是同色相的提亮版（浅色底上原色太深）',
+  fn ? fn.light : 'n/a',
+)
+
+/* 其它令牌的对照（防止改 function 时手滑改了别的）。 */
+check(
+  tokens['--shiki-token-keyword'] !== undefined && tokens['--shiki-token-keyword'].dark === PALETTE.purple,
+  'keyword 令牌 = #C594C5 紫（var(pink)）',
+  tokens['--shiki-token-keyword'] ? tokens['--shiki-token-keyword'].dark : 'n/a',
+)
+check(
+  tokens['--shiki-token-string'] !== undefined && tokens['--shiki-token-string'].dark === PALETTE.green,
+  'string 令牌 = #99C794 绿（var(green)）',
+  tokens['--shiki-token-string'] ? tokens['--shiki-token-string'].dark : 'n/a',
+)
+check(
+  tokens['--shiki-token-constant'] !== undefined && tokens['--shiki-token-constant'].dark === PALETTE.orange,
+  'constant 令牌 = #F9AE58 橙（var(orange)）',
+  tokens['--shiki-token-constant'] ? tokens['--shiki-token-constant'].dark : 'n/a',
 )
 
 /* ------------------------------------------------------------------ *
- * 造一个最小的 DOM 替身
+ * 2. Markdown 细节规则
  * ------------------------------------------------------------------ */
 
-/**
- * 造一个假的 pre 元素：它按 `spans` 列表返回 querySelectorAll 的结果。
- * 每个 span 是 { text, style }，style 里含 --shiki-token-function 就算命中。
- */
-function fakePre(spans) {
-  const matched = spans.filter((span) => span.style && span.style.includes('--shiki-token-function'))
-  return {
-    textContent: spans.map((span) => span.text).join(''),
-    querySelectorAll(selector) {
-      if (selector !== 'span[style*="--shiki-token-function"]') return []
-      /* 真实 DOM 里查到的是元素，有 textContent；替身要还原这一点。 */
-      return matched.map((span) => ({ textContent: span.text }))
-    },
-  }
-}
+check(Array.isArray(MARKDOWN_RULES) && MARKDOWN_RULES.length === 3, '三条 Markdown 细节规则', String(MARKDOWN_RULES && MARKDOWN_RULES.length))
 
-const FN = 'color:var(--shiki-token-function)'
-
-/* ---- LaTeX 代码块：命令名以 \ 开头 ---- */
-const latexPre = fakePre([
-  { text: '\\chapter', style: FN },
-  { text: '{', style: 'color:var(--shiki-token-punctuation)' },
-  { text: '从经典到量子', style: 'color:var(--shiki-token-foreground)' },
-  { text: '}', style: 'color:var(--shiki-token-punctuation)' },
-  { text: '\\begin', style: FN },
-  { text: '{roadmapbox}', style: 'color:var(--shiki-token-constant)' },
-  { text: '\\frac', style: FN },
-  { text: '\\ket', style: FN },
-  { text: '\\label', style: FN },
-  { text: '{ch:x}', style: 'color:var(--shiki-token-constant)' },
-])
-check(isLatexBlock(latexPre) === true, 'LaTeX 块被判定为 LaTeX')
-
-/* ---- JavaScript：函数名不以 \ 开头 ---- */
-const jsPre = fakePre([
-  { text: 'const', style: 'color:var(--shiki-token-keyword)' },
-  { text: ' answer', style: 'color:var(--shiki-token-foreground)' },
-  { text: ' = ', style: 'color:var(--shiki-token-punctuation)' },
-  { text: 'compute', style: FN },
-  { text: '(x)', style: 'color:var(--shiki-token-punctuation)' },
-  { text: ' => x * 2', style: 'color:var(--shiki-token-foreground)' },
-])
-check(isLatexBlock(jsPre) === false, 'JavaScript 块不被判定为 LaTeX')
-
-/* ---- Python：函数名同样不以 \ 开头 ---- */
-const pyPre = fakePre([
-  { text: 'def', style: 'color:var(--shiki-token-keyword)' },
-  { text: ' solve', style: FN },
-  { text: '(a, b):', style: 'color:var(--shiki-token-punctuation)' },
-  { text: ' return a + b', style: 'color:var(--shiki-token-foreground)' },
-])
-check(isLatexBlock(pyPre) === false, 'Python 块不被判定为 LaTeX')
-
-/* ---- 没有 function span 的块（纯文本 / 未高亮）---- */
-const plainPre = fakePre([
-  { text: 'hello world', style: 'color:var(--shiki-token-foreground)' },
-])
-check(isLatexBlock(plainPre) === false, '无 function span 的块不被判定为 LaTeX')
-
-/* ---- 少数派：只有 1 个 \ 开头，其余是普通函数名 → 不判定 ---- */
-const mixedPre = fakePre([
-  { text: '\\n', style: FN },
-  { text: 'compute', style: FN },
-  { text: 'render', style: FN },
-  { text: 'update', style: FN },
-  { text: 'fetch', style: FN },
-])
-check(isLatexBlock(mixedPre) === false, '少数派 \\ 开头不误判（JS 续行符）')
-
-/* ---- 边界：null / 无 querySelectorAll ---- */
-check(isLatexBlock(null) === false, 'null → false')
-check(isLatexBlock({}) === false, '无 querySelectorAll → false')
+const sheet = buildMarkdownSheet()
+check(sheet.includes('li::marker'), '列表符号规则存在')
+check(sheet.includes('blockquote'), '引用规则存在')
+check(sheet.includes('code{background'), '行内代码背景规则存在')
+check(sheet.includes('[class*="_markdown_"]'), '用宿主 markdown 容器的稳定前缀做锚点')
+check(!sheet.includes('!important'), '不使用 !important')
+/* 紧凑摘要区是宿主刻意压缩的展示，不该被主题细节干扰。 */
+check(sheet.includes(':not([data-markdown-variant="compact"])'), '排除紧凑变体')
 
 console.log('')
 if (failures > 0) {
