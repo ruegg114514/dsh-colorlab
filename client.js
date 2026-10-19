@@ -1115,14 +1115,24 @@ window.__ModuleLoader__.load({
         for (let r = 0; r < rules.length; r += 1) {
           const rule = rules[r]
           if (!rule) continue
-          const text = rule.cssText || ''
+          /* ⚡ 用 rule.style.getPropertyValue 而不是 rule.cssText：
+             宿主注入了 160 张样式表、约 2179 条规则，读 cssText 会把每一条
+             规则都**序列化**成字符串（纯为了一次 includes 判断），实测这是
+             启动时的一次可观开销。getPropertyValue 直接问声明块，不序列化。 */
+          const style = rule.style
+          const canQuery = style !== undefined && style !== null && typeof style.getPropertyValue === 'function'
+          const selector = rule.selectorText || ''
           for (const target of CARD_TARGETS) {
             if (found.some((entry) => entry.varName === target.varName)) continue
-            if (!text.includes(target.varName)) continue
+            const has = canQuery
+              ? style.getPropertyValue(target.varName) !== ''
+              /* 老浏览器 / 测试替身：退回文本匹配。 */
+              : (rule.cssText || '').includes(target.varName)
+            if (!has) continue
             /* 类名后缀是宿主 CSS Module 的约定（_card / _root），但前缀哈希每次构建都变。
                所以只固定后缀，不固定前缀。 */
             const suffix = target.defClass
-            const match = new RegExp('\\.([a-zA-Z0-9]+' + suffix + ')\\b').exec(rule.selectorText || text)
+            const match = new RegExp('\\.([a-zA-Z0-9]+' + suffix + ')\\b').exec(selector || rule.cssText || '')
             if (match !== null) {
               found.push({ defClass: match[1], varName: target.varName, hoverVar: target.hoverVar })
             }
@@ -1464,6 +1474,30 @@ window.__ModuleLoader__.load({
      * 四、运行时：把设置翻译成令牌叠加层
      * ====================================================================== */
 
+    /**
+     * 把 CSS 写进 `<style>`，但**只在内容真的变了时才写**。
+     *
+     * 为什么必须这样（实测的启动变慢主因）：给 `<style>.textContent` 赋值会让
+     * 浏览器**重新解析整张样式表并触发一次全文档样式重算** —— 哪怕内容一个字
+     * 都没变。而 `applyNow()` 在启动期会被反复调用：
+     *
+     *   1. `apply()` 里立即一次；
+     *   2. 每次 `theme/change` 事件；
+     *   3. **等待 `form` 服务时的 250ms 重试**（`bindWhenReady` 最多 120 轮 ≈ 30 秒）
+     *      —— 第 3 条以前每 250ms 就把四五张表全部重写一遍。
+     *
+     * 缓存挂在元素自己身上（`__dmtCss`），所以元素被移除重建后会自动重新写入。
+     *
+     * @param {HTMLStyleElement|null} el - 目标 style 元素。
+     * @param {string} css - 期望内容。
+     */
+    function writeSheet(el, css) {
+      if (el === null) return
+      if (el.__dmtCss === css) return
+      el.__dmtCss = css
+      el.textContent = css
+    }
+
     /** 极简可订阅 store（不引第三方状态库）。 */
     function createStore(initial) {
       let snapshot = initial
@@ -1514,12 +1548,27 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 上一次 publish 出去的内容签名。
+     * 内容没变就不 `store.set` —— `set` 会换掉快照引用，让设置页的
+     * `useSyncExternalStore` 重渲染一次。
+     */
+    let lastPublishSignature = null
+
+    /**
      * 把内部诊断对象摊成 store 快照。
      * 快照 = 已生效值 + 草稿覆盖（控件与预览显示草稿），外加 `draftFields`
      * 告诉界面"有哪些字段还没应用"。
+     *
+     * ⚡ 内容完全一致时直接返回：`applyNow()` 在启动期等 `form` 服务时会每 250ms
+     * 被调一次，而它每次都调 `publish()` —— 没有这个守卫就是「设置页每 250ms
+     * 重渲染一次」。也顺带保证快照引用稳定（React 要求没变时引用不变）。
      */
     function publish() {
-      store.set({ ...state, ...draft, draftFields: Object.keys(draft), status: { ...diag } })
+      const payload = { ...state, ...draft, draftFields: Object.keys(draft), status: { ...diag } }
+      const signature = JSON.stringify(payload)
+      if (signature === lastPublishSignature) return
+      lastPublishSignature = signature
+      store.set(payload)
     }
 
     /** 应用后的清理句柄（overrideTokens 的 disposer 或回退 style 的移除函数）。 */
@@ -1528,6 +1577,11 @@ window.__ModuleLoader__.load({
     let channel = 'none'
     /** 回退通道插入的 <style> 元素。 */
     let fallbackEl = null
+    /**
+     * 上一次成功推给 `overrideTokens` 的令牌签名。
+     * 内容一致时跳过重复推送（见 applyNow 里的说明）。
+     */
+    let lastTokenSignature = null
     /** 缓存的 theme 服务句柄。 */
     let themeService = null
 
@@ -1597,7 +1651,7 @@ window.__ModuleLoader__.load({
           proseEl.dataset.pluginCss = PROSE_SHEET_ID
           document.head.appendChild(proseEl)
         }
-        proseEl.textContent = buildProseSheet()
+        writeSheet(proseEl, buildProseSheet())
         diag.prose = 'on'
       } catch (error) {
         note('install prose sheet', error)
@@ -1634,7 +1688,7 @@ window.__ModuleLoader__.load({
           markdownEl.dataset.pluginCss = MARKDOWN_SHEET_ID
           document.head.appendChild(markdownEl)
         }
-        markdownEl.textContent = buildMarkdownSheet()
+        writeSheet(markdownEl, buildMarkdownSheet())
         diag.markdown = 'on'
       } catch (error) {
         note('install markdown sheet', error)
@@ -1652,6 +1706,14 @@ window.__ModuleLoader__.load({
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
     let cardRetryCount = 0
+    /**
+     * 上次扫描时看到的样式表数量。
+     *
+     * ⚡ 只在数量**变了**的时候才重扫。宿主注入了 160 张样式表 / 约 2179 条规则，
+     * 而等待 ui-deliverables 出现的重试是每秒一次、最多 60 次 —— 每次都全量扫一遍
+     * 就是 60 次无谓遍历。数量没变就说明没有新表进来，不可能有新发现。
+     */
+    let cardScanSheetCount = -1
 
     /**
      * 按当前设置挂上或卸下文件卡片头部覆盖样式表。
@@ -1660,7 +1722,19 @@ window.__ModuleLoader__.load({
      */
     function syncCardSheet() {
       if (typeof document === 'undefined') return
-      if (cardTargets === undefined) cardTargets = detectCardTargets()
+      if (cardTargets === undefined) {
+        const sheets = document.styleSheets
+        const count = sheets !== undefined && sheets !== null && typeof sheets.length === 'number'
+          ? sheets.length
+          : -1
+        if (count !== cardScanSheetCount) {
+          cardScanSheetCount = count
+          cardTargets = detectCardTargets()
+        } else {
+          /* 样式表没有增减 → 上轮的结论仍然成立，不必再扫。 */
+          cardTargets = []
+        }
+      }
       const css = buildCardSheet(state, cardTargets)
       const wanted = state.enabled !== 'off' && shouldApply() && css !== ''
       if (!wanted) {
@@ -1696,7 +1770,7 @@ window.__ModuleLoader__.load({
           cardEl.dataset.pluginCss = CARD_SHEET_ID
           document.head.appendChild(cardEl)
         }
-        cardEl.textContent = css
+        writeSheet(cardEl, css)
         diag.card = 'on'
       } catch (error) {
         note('install card sheet', error)
@@ -1733,7 +1807,7 @@ window.__ModuleLoader__.load({
           rowEl.dataset.pluginCss = ROW_SHEET_ID
           document.head.appendChild(rowEl)
         }
-        rowEl.textContent = css
+        writeSheet(rowEl, css)
         diag.row = 'on'
       } catch (error) {
         note('install row sheet', error)
@@ -1762,6 +1836,8 @@ window.__ModuleLoader__.load({
       channel = 'none'
       diag.channel = 'none'
       diag.applied = 0
+      /* 层已摘掉，签名一并作废 —— 否则下次 applyNow 会以为层还装着而跳过重装。 */
+      lastTokenSignature = null
     }
 
     /** 回退通道：注入一条样式表直接改令牌。 */
@@ -1811,31 +1887,42 @@ window.__ModuleLoader__.load({
       if (!shouldApply()) {
         teardown()
       } else if (themeService !== null && typeof themeService.overrideTokens === 'function') {
-        /* 首选：官方扩展点。同 source 再次调用即整层替换，不需要先 teardown。 */
-        try {
-          const disposer = themeService.overrideTokens('dsh-colorlab', tokens)
-          if (releaseLayer !== null && channel === 'override') {
-            /* 旧层已被同 source 的新层顶掉，旧 disposer 现在是 no-op；丢掉引用即可。 */
-            releaseLayer = null
-          }
-          if (fallbackEl !== null) {
-            try {
-              fallbackEl.remove()
-            } catch (error) {
-              note('remove fallback after override', error)
-            }
-            fallbackEl = null
-          }
-          releaseLayer = disposer
-          channel = 'override'
-          diag.channel = 'override'
+        /* 内容签名：层已装且令牌完全一致时跳过。
+           `overrideTokens` 每次调用都会让宿主的 ThemePresenter 重建令牌表并把
+           结果逐条写成 body 内联变量（整页重算）—— 启动期等 form 服务的 250ms
+           重试会把同一份令牌推几十遍，纯属白烧。
+           只在"层确实装着 + 内容没变"时跳过，所以 teardown 后仍会正常重装。 */
+        const signature = JSON.stringify(tokens)
+        if (channel === 'override' && releaseLayer !== null && signature === lastTokenSignature) {
           diag.applied = Object.keys(tokens).length
-        } catch (error) {
-          note('overrideTokens', error)
-          diag.theme = 'override-failed'
-          /* 扩展点抛错：立刻转回退通道，不留"半生效"状态。 */
-          if (installFallback(tokens)) {
-            /* installFallback 已设 diag.channel/applied */
+        } else {
+          /* 首选：官方扩展点。同 source 再次调用即整层替换，不需要先 teardown。 */
+          try {
+            const disposer = themeService.overrideTokens('dsh-colorlab', tokens)
+            if (releaseLayer !== null && channel === 'override') {
+              /* 旧层已被同 source 的新层顶掉，旧 disposer 现在是 no-op；丢掉引用即可。 */
+              releaseLayer = null
+            }
+            if (fallbackEl !== null) {
+              try {
+                fallbackEl.remove()
+              } catch (error) {
+                note('remove fallback after override', error)
+              }
+              fallbackEl = null
+            }
+            releaseLayer = disposer
+            channel = 'override'
+            diag.channel = 'override'
+            diag.applied = Object.keys(tokens).length
+            lastTokenSignature = signature
+          } catch (error) {
+            note('overrideTokens', error)
+            diag.theme = 'override-failed'
+            /* 扩展点抛错：立刻转回退通道，不留"半生效"状态。 */
+            if (installFallback(tokens)) {
+              /* installFallback 已设 diag.channel/applied */
+            }
           }
         }
       } else if (installFallback(tokens)) {
@@ -2420,6 +2507,8 @@ window.__ModuleLoader__.load({
 
     /** 设置页主体。 */
     function MarianaSettingsPage() {
+      /* 设置页样式表在这里按需安装（启动路径不碰它）。幂等，重复渲染只插一次。 */
+      ensurePageStyles()
       const snapshot = React.useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
       const status = snapshot.status || initialStatus()
       const isDark = status.scheme === 'dark'
@@ -3245,19 +3334,29 @@ window.__ModuleLoader__.load({
      * 七、插件入口
      * ====================================================================== */
 
-    /** 只挂一份设置页样式表；重复 apply 只更新内容，绝不堆叠。 */
-    function installPageStyles(ctx) {
+    /**
+     * 只挂一份设置页样式表；重复调用只插一次。
+     *
+     * ⚡ 为什么改成**延迟安装**：这张表 15 KB，只被设置页自己用。以前在
+     * `apply()` 里启动时就插进 DOM，等于每次启动都白解析一遍 15 KB CSS
+     * 并触发一次样式重算 —— 而用户多数时候根本不会打开设置页。
+     * 现在由 `MarianaSettingsPage` 在**首次渲染时**调用，启动路径完全不碰它。
+     */
+    let pageStyleEl = null
+
+    function ensurePageStyles() {
       if (typeof document === 'undefined') return
-      ctx.effect(() => {
+      if (pageStyleEl !== null) return
+      try {
         const tag = document.createElement('style')
         tag.dataset.plugin = 'dsh-colorlab'
         tag.dataset.pluginCss = SHEET_ID
         tag.textContent = SHEET
         document.head.appendChild(tag)
-        return () => {
-          tag.remove()
-        }
-      }, 'mariana-theme: page stylesheet')
+        pageStyleEl = tag
+      } catch (error) {
+        note('install page styles', error)
+      }
     }
 
     /**
@@ -3327,7 +3426,8 @@ window.__ModuleLoader__.load({
         if (!bound) {
           bound = true
           bindWhenReady(ctx, 0)
-          installPageStyles(ctx)
+          /* 设置页样式表不在这里装 —— 由 MarianaSettingsPage 首次渲染时按需安装，
+             启动路径省掉一次 15 KB 的 CSS 解析（见 ensurePageStyles）。 */
           registerSectionWhenReady(ctx, 0)
 
           ctx.effect(
@@ -3396,6 +3496,14 @@ window.__ModuleLoader__.load({
                 markdownEl = null
               }
               diag.markdown = 'off'
+              if (pageStyleEl !== null) {
+                try {
+                  pageStyleEl.remove()
+                } catch (error) {
+                  note('teardown page styles', error)
+                }
+                pageStyleEl = null
+              }
               try {
                 document.documentElement.removeAttribute('data-dsh-colorlab')
               } catch {
@@ -3415,6 +3523,10 @@ window.__ModuleLoader__.load({
         DEFAULTS,
         OPTIONS,
         BOOT_BACKGROUND,
+        SHEET_ID,
+        MarianaSettingsPage,
+        writeSheet,
+        update,
         PROSE_SHEET_ID,
         ROW_SHEET_ID,
         CUSTOM_SLOTS,
