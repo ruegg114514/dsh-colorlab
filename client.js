@@ -855,7 +855,12 @@ window.__ModuleLoader__.load({
             '--shiki-token-comment': { dark: '#8792A2', light: '#6B7686' },
             '--shiki-token-keyword': { dark: PALETTE.purple, light: '#8A5E8A' },
             '--shiki-token-parameter': { dark: PALETTE.orange, light: '#C97A2B' },
-            '--shiki-token-function': { dark: PALETTE.teal, light: '#3E8E8E' },
+            /* function 令牌 = Mariana 的 var(blue) #6699CC。
+               Sublime Mariana 里 `support.function, support.macro` → var(blue)，
+               所以 Python 内置函数（print/len/open）、LaTeX 命令（\chapter）
+               都是这个蓝。（另一条规则 `entity.name.function` → var(blue5) 青
+               只管「函数定义名」，Shiki 把两者合并了，取更常见的蓝。） */
+            '--shiki-token-function': { dark: PALETTE.blue, light: '#3E6FA8' },
             '--shiki-token-string-expression': { dark: '#A9D4A4', light: '#3E7A3A' },
             '--shiki-token-punctuation': { dark: PALETTE.dim, light: '#5A6472' },
             '--shiki-token-link': { dark: PALETTE.blueUi, light: LIGHT.link },
@@ -889,6 +894,10 @@ window.__ModuleLoader__.load({
         ? state.summaryColor
         : DEFAULTS.summaryColor
       out['--dmt-summary-color'] = { light: summaryColor, dark: summaryColor }
+      /* Markdown 细节色：对齐 Sublime Mariana 的 markup.* 规则。 */
+      out['--dmt-md-list-marker'] = { light: PALETTE.green, dark: PALETTE.green }
+      out['--dmt-md-quote'] = { light: PALETTE.orange, dark: PALETTE.orange }
+      out['--dmt-md-code-bg'] = { light: LIGHT.code, dark: s.layer2 }
       return out
     }
 
@@ -920,140 +929,100 @@ window.__ModuleLoader__.load({
     const PROSE_SHEET_ID = 'dsh-colorlab/prose.css'
     const ROW_SHEET_ID = 'dsh-colorlab/row.css'
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
-    const LATEX_SHEET_ID = 'dsh-colorlab/latex.css'
+    const MARKDOWN_SHEET_ID = 'dsh-colorlab/markdown.css'
 
     /* ====================================================================== *
-     * 二·六、LaTeX 代码块的命令色
+     * 二·六、Markdown 的细节着色
      *
-     * 背景：Shiki 的 `css-variables` 主题把 scope 归并成少数几个令牌，而
-     * Sublime 的 Mariana 是按 scope 上色的。两边对同一批 scope 的分派不同：
+     * 背景：Shiki 的 `css-variables` 主题只给少数几个 markdown scope 映射了
+     * 令牌，剩下的**继承正文色**：
      *
-     *   Sublime Mariana          Shiki css-variables
-     *   ───────────────          ────────────────────
-     *   keyword           → keyword      （`var(pink)` = #C594C5 紫）
-     *   support.function  → function     （`var(blue)` = #6699CC 蓝）
-     *   entity.name.function → function  （`var(blue5)` = #5FB3B3 青）
+     *   markup.heading.markdown   → 只有 fontStyle（bold），无颜色
+     *   markup.bold.markdown       → 只有 fontStyle（bold），无颜色
+     *   markup.italic.markdown     → 只有 fontStyle（italic），无颜色
+     *   markup.inline             → token-string（绿）
+     *   meta.link.inline.markdown → token-link（蓝）
      *
-     * `support.function` 和 `entity.name.function` 在 Sublime 里是**不同颜色**
-     * （蓝 vs 青），但 Shiki 把它们合并成同一个 `function` 令牌 —— 一个令牌
-     * 只能一个颜色。
+     * 而 Sublime 的 Mariana 按 scope 上色，这几处**有颜色**：
      *
-     * 后果：LaTeX 的命令（`\chapter` `\ket` `\frac`，scope 是
-     * `support.function.*`）在 Sublime 里是**蓝**的，在本插件里却是**青**的
-     * —— 因为插件把 function 令牌取成了 `blue5`（青）。
+     *   punctuation.definition.heading          → var(red2)  红
+     *   markup.quote punctuation.definition.blockquote → var(orange) 橙
+     *   markup.list punctuation.definition.list_item   → var(orange) 橙
+     *   markup.list.numbered.bullet            → var(green) 绿
+     *   markup.raw.inline                      → 蓝灰背景
      *
-     * 修法：只给 LaTeX 代码块换掉 function 令牌的颜色，其它语言（JS/Python
-     * 的函数名，`entity.name.function`）保持青色不变。
+     * 所以在预览 .md 文件时，`#` 标题符号、`>` 引用符号、列表符号都是白的，
+     * 与 Sublime 不一致。
+     *
+     * 怎么补：Shiki 的 markdown token span **没有**对应的 `--shiki-token-*`
+     * 变量（它们根本没被映射），所以不能靠改 CSS 变量 —— 只能直接用 CSS
+     * 选择器给这些 span 上色。Shiki 的 span 是平铺的（没有 scope 类名），
+     * 但宿主的 markdown 容器有稳定的 `_markdown_` 前缀（来自源文件名），
+     * 而 Shiki 给 markdown 的 span 会带上 `style="color: var(--shiki-token-*)"`
+     * 或纯文本 —— 没法直接区分。
+     *
+     * 换个思路：**按内容特征**挑出这些符号。Shiki 给 markdown 的标点符号
+     * 保留了原文，所以可以用选择器 + 文本匹配不到 —— CSS 做不到。
+     *
+     * 最终方案：直接用**宿主 markdown 容器里的结构选择器**。宿主渲染 markdown
+     * 用的是 marked + 自己的 renderer，标题的 `#` 是 `punctuation.definition.heading`
+     * scope 生成的 span（Shiki 输出的）。这些 span 没有类名，但它们在
+     * `pre.shiki` 之外 —— 在**行内 markdown**（对话正文）里，宿主是用
+     * CSS 规则给 `.markdown h1` 之类的元素上色的，不走 Shiki。
+     *
+     * 所以：只有**代码块形式的 markdown**（```markdown 围栏）走 Shiki，
+     * 而**行内 markdown**（对话正文、预览面板）走宿主的 CSS。
+     * 宿主那部分的规则我们改不了（不 fork 宿主），只能靠覆盖。
      * ====================================================================== */
 
-    /** LaTeX 块的类名（插件自己加在 pre 上）。 */
-    const LATEX_BLOCK_CLASS = 'dmt-latex'
-
-    /** LaTeX 命令在 Mariana 里是 `var(blue)`（= PALETTE_BASE.blue）。 */
-    const LATEX_FUNCTION_COLOR = PALETTE_BASE.blue
+    /**
+     * Markdown 细节着色规则表。
+     *
+     * 只做宿主**当前没有**、而 Sublime Mariana **有**的三处。
+     * 选择器用宿主 markdown 容器的 `_markdown_` 前缀（来自源文件名，跨构建稳定，
+     * 与正文高亮用的是同一套锚点）+ 结构选择器。
+     *
+     * 宿主现状 vs Sublime Mariana：
+     *   li::marker    宿主 `--dsw-alias-label-secondary`（灰） → Mariana `var(green)`
+     *   blockquote    宿主只有左边框，文字是正文色          → Mariana `var(orange)`
+     *   code（行内）  宿主无背景                            → Mariana 蓝灰底
+     *
+     * 标题 h1-h6 已经是粗体、继承正文色 —— 与 Mariana 的 `markup.heading`
+     * （bold + 继承）一致，不动。
+     */
+    const MARKDOWN_RULES = Object.freeze([
+      /* 列表符号 —— Mariana 的 var(green)。 */
+      { selector: 'li::marker', decl: 'color:var(--dmt-md-list-marker)' },
+      /* 引用正文 —— Mariana 的 var(orange)。 */
+      { selector: 'blockquote', decl: 'color:var(--dmt-md-quote)' },
+      /* 行内代码 —— Mariana 的 markup.raw.inline 蓝灰底。 */
+      { selector: 'code', decl: 'background:var(--dmt-md-code-bg)' },
+    ])
 
     /**
-     * 判定一个代码块是不是 LaTeX。
+     * 生成 Markdown 细节样式表。
      *
-     * 为什么不能靠宿主标记：宿主的 Shiki 输出是
-     * `<pre class="shiki css-variables">`，**pre 上没有语言名**
-     * （Shiki 的 `codeToHtml` 只加 `class="shiki <themeName>"`），
-     * 宿主也没有把 lang 写到 DOM 上。
+     * 用 `--dmt-md-*` 自定义变量而不是写死颜色，这样跟着主题变。
      *
-     * 所以看**内容特征**：`support.function` 令牌上色、且文本以 `\` 开头的
-     * span —— 这正是 LaTeX 命令（`\chapter` `\begin` `\frac`）。JavaScript
-     * 的函数名不以 `\` 开头，Python 也不以。
+     * 容器选择器与正文高亮同一套锚点（`[class*="_markdown_"]`，前缀来自宿主
+     * 源文件名、跨构建稳定），但**排除紧凑变体** —— 紧凑摘要区是宿主
+     * 刻意压缩的展示，不该被主题细节干扰。
      *
-     * @param {Element} pre - 代码块容器（pre.shiki）。
-     * @returns {boolean} 是否判定为 LaTeX。
+     * 优先级说明：这些规则与「正文高亮」那套规则会同时命中同一个元素
+     * （比如 `li::marker`）。两张样式表都挂在 `<head>`，后插入的赢 ——
+     * markdown 样式表在 syncMarkdownSheet 里挂得比 prose 晚，所以 markdown
+     * 的细节色覆盖正文高亮的对应色。这是刻意的：正文高亮是「对话正文」的
+     * 增强，markdown 细节是「对齐 Sublime」的基础层，后者不该被前者盖掉。
+     *
+     * @returns {string} CSS 文本。
      */
-    function isLatexBlock(pre) {
-      if (!pre || typeof pre.querySelectorAll !== 'function') return false
-      let spans
-      try {
-        spans = pre.querySelectorAll('span[style*="--shiki-token-function"]')
-      } catch {
-        return false
+    function buildMarkdownSheet() {
+      const root = '[class*="_markdown_"]:not([data-markdown-variant="compact"])'
+      const chunks = []
+      for (const rule of MARKDOWN_RULES) {
+        chunks.push(root + ' ' + rule.selector + '{' + rule.decl + '}')
       }
-      if (!spans || spans.length === 0) return false
-      let latexish = 0
-      for (let i = 0; i < spans.length; i += 1) {
-        const text = spans[i].textContent || ''
-        /* LaTeX 命令：反斜杠 + 字母（`\chapter` `\begin` `\frac`）。 */
-        if (/^\\[A-Za-z]/.test(text)) latexish += 1
-      }
-      if (latexish === 0) return false
-      /* 要求"像 LaTeX 命令的 span"占 function span 的多数，避免个别
-         转义符（JS 里的 `\` 续行）误判整个代码块。 */
-      return latexish * 2 >= spans.length
-    }
-
-    /**
-     * 给 LaTeX 代码块打标记，并维护一条覆盖 function 令牌的样式表。
-     *
-     * CSS 变量在 `pre` 上重新定义会作用到它的全部后代，所以只需要
-     * `pre.dmt-latex { --shiki-token-function: #6699CC }` 一条规则 ——
-     * Shiki 生成的 token span 用的是 `var(--shiki-token-function)`，
-     * 会自动取到新值。
-     */
-    function syncLatexSheet() {
-      if (typeof document === 'undefined') return
-      const wanted = state.enabled !== 'off' && shouldApply() && state.syntax !== 'off'
-      /* 需要时持续观察 DOM（代码块是动态渲染的）。 */
-      if (wanted) ensureLatexObserver()
-      else disposeLatexObserver()
-      let blocks = []
-      try {
-        blocks = document.querySelectorAll('pre.shiki')
-      } catch {
-        blocks = []
-      }
-      let latexCount = 0
-      for (let i = 0; i < blocks.length; i += 1) {
-        const pre = blocks[i]
-        if (!pre) continue
-        if (isLatexBlock(pre)) {
-          latexCount += 1
-          if (!pre.classList.contains(LATEX_BLOCK_CLASS)) {
-            try {
-              pre.classList.add(LATEX_BLOCK_CLASS)
-            } catch {
-              /* classList 不可用就跳过这个块 */
-            }
-          }
-        } else if (pre.classList.contains(LATEX_BLOCK_CLASS)) {
-          try {
-            pre.classList.remove(LATEX_BLOCK_CLASS)
-          } catch {
-            /* 同上 */
-          }
-        }
-      }
-      diag.latex = latexCount
-      if (!wanted || latexCount === 0) {
-        if (latexEl !== null) {
-          try {
-            latexEl.remove()
-          } catch (error) {
-            note('remove latex sheet', error)
-          }
-          latexEl = null
-        }
-        return
-      }
-      try {
-        if (latexEl === null) {
-          latexEl = document.createElement('style')
-          latexEl.dataset.plugin = 'dsh-colorlab'
-          latexEl.dataset.pluginCss = LATEX_SHEET_ID
-          document.head.appendChild(latexEl)
-        }
-        latexEl.textContent =
-          'pre.' + LATEX_BLOCK_CLASS + '{--shiki-token-function:' + LATEX_FUNCTION_COLOR + '}'
-      } catch (error) {
-        note('install latex sheet', error)
-        diag.latex = 'error'
-      }
+      return chunks.join('\n')
     }
 
     /**
@@ -1532,7 +1501,7 @@ window.__ModuleLoader__.load({
 
     const state = { ...DEFAULTS }
     const store = createStore({ ...DEFAULTS, status: initialStatus() })
-    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', latex: 0 }
+    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off' }
 
     /**
      * 未确认的颜色改动；空对象 = 无草稿。
@@ -1597,6 +1566,9 @@ window.__ModuleLoader__.load({
     /** 正文高亮样式表元素（独立于主题通道，由 prose 开关单独控制）。 */
     let proseEl = null
 
+    /** Markdown 细节样式表元素（独立于 prose 开关 —— 对齐 Sublime 的基础层）。 */
+    let markdownEl = null
+
     /**
      * 按当前设置挂上或卸下正文高亮样式表。
      *
@@ -1633,64 +1605,45 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * 按当前设置挂上或卸下 Markdown 细节样式表。
+     *
+     * 与正文高亮**解耦**：正文高亮是「对话正文」的增强（可关），
+     * Markdown 细节是「对齐 Sublime Mariana 的 markup 规则」的基础层
+     * （预览 .md 文件、对话里的 markdown 都该有），不随 prose 开关消失。
+     */
+    function syncMarkdownSheet() {
+      if (typeof document === 'undefined') return
+      const wanted = state.enabled !== 'off' && shouldApply()
+      if (!wanted) {
+        if (markdownEl !== null) {
+          try {
+            markdownEl.remove()
+          } catch (error) {
+            note('remove markdown sheet', error)
+          }
+          markdownEl = null
+        }
+        diag.markdown = 'off'
+        return
+      }
+      try {
+        if (markdownEl === null) {
+          markdownEl = document.createElement('style')
+          markdownEl.dataset.plugin = 'dsh-colorlab'
+          markdownEl.dataset.pluginCss = MARKDOWN_SHEET_ID
+          document.head.appendChild(markdownEl)
+        }
+        markdownEl.textContent = buildMarkdownSheet()
+        diag.markdown = 'on'
+      } catch (error) {
+        note('install markdown sheet', error)
+        diag.markdown = 'error'
+      }
+    }
+
     /** 过程行高亮样式表元素（独立于主题通道与正文高亮）。 */
     let rowEl = null
-
-    /** LaTeX 代码块命令色覆盖样式表元素。 */
-    let latexEl = null
-
-    /**
-     * LaTeX 块标记的观察器。
-     *
-     * 为什么需要：代码块是**动态渲染**的 —— 滚动到旧消息时才插进 DOM。
-     * 只在设置变更时扫一遍，早于渲染的块永远拿不到标记。
-     * 所以监听 DOM 变化，来了新块就重新判定。
-     */
-    let latexObserver = null
-    let latexObserverTimer = null
-
-    /** 观察器回调是同步的，但重扫整个文档不便宜 —— 合并到下一帧做一次。 */
-    function scheduleLatexRescan() {
-      if (latexObserverTimer !== null) return
-      if (typeof setTimeout !== 'function') return
-      latexObserverTimer = setTimeout(() => {
-        latexObserverTimer = null
-        syncLatexSheet()
-      }, 120)
-      if (latexObserverTimer && typeof latexObserverTimer.unref === 'function') latexObserverTimer.unref()
-    }
-
-    /** 装上观察器（幂等）。 */
-    function ensureLatexObserver() {
-      if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return
-      if (latexObserver !== null) return
-      try {
-        latexObserver = new MutationObserver(() => scheduleLatexRescan())
-        latexObserver.observe(document.body, { childList: true, subtree: true })
-      } catch {
-        latexObserver = null
-      }
-    }
-
-    /** 拆掉观察器。 */
-    function disposeLatexObserver() {
-      if (latexObserver !== null) {
-        try {
-          latexObserver.disconnect()
-        } catch {
-          /* 已断开 */
-        }
-        latexObserver = null
-      }
-      if (latexObserverTimer !== null) {
-        try {
-          clearTimeout(latexObserverTimer)
-        } catch {
-          /* 无 timer */
-        }
-        latexObserverTimer = null
-      }
-    }
 
     /** 卡片覆盖样式表元素 + 检测到的卡片类名（null = 还没检测到，稍后重试）。 */
     let cardEl = null
@@ -1891,11 +1844,13 @@ window.__ModuleLoader__.load({
         diag.theme = 'unavailable'
       }
 
-      /* 注入式样式表统一在这里同步（无论走了哪条通道）。 */
+      /* 注入式样式表统一在这里同步（无论走了哪条通道）。
+         顺序有意义：markdown 细节表要挂在 prose 之后，这样它的规则
+         能盖住正文高亮对同一元素的着色（markdown 是基础层）。 */
       syncProseSheet()
+      syncMarkdownSheet()
       syncRowSheet()
       syncCardSheet()
-      syncLatexSheet()
       publish()
     }
 
@@ -3432,29 +3387,15 @@ window.__ModuleLoader__.load({
                 cardEl = null
               }
               diag.card = 'off'
-              if (latexEl !== null) {
+              if (markdownEl !== null) {
                 try {
-                  latexEl.remove()
+                  markdownEl.remove()
                 } catch (error) {
-                  note('teardown latex sheet', error)
+                  note('teardown markdown sheet', error)
                 }
-                latexEl = null
+                markdownEl = null
               }
-              diag.latex = 0
-              disposeLatexObserver()
-              /* 去掉打在代码块上的标记，否则下次启用时残留。 */
-              try {
-                const marked = document.querySelectorAll('pre.' + LATEX_BLOCK_CLASS)
-                for (let i = 0; i < marked.length; i += 1) {
-                  try {
-                    marked[i].classList.remove(LATEX_BLOCK_CLASS)
-                  } catch {
-                    /* classList 不可用 */
-                  }
-                }
-              } catch {
-                /* 无 DOM */
-              }
+              diag.markdown = 'off'
               try {
                 document.documentElement.removeAttribute('data-dsh-colorlab')
               } catch {
@@ -3489,10 +3430,9 @@ window.__ModuleLoader__.load({
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
-        LATEX_SHEET_ID,
-        LATEX_BLOCK_CLASS,
-        LATEX_FUNCTION_COLOR,
-        isLatexBlock,
+        MARKDOWN_SHEET_ID,
+        MARKDOWN_RULES,
+        buildMarkdownSheet,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
