@@ -2401,11 +2401,11 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dmt-head' },
-          h('div', { className: 'dmt-title' }, 'Mariana 配色方案'),
+          h('div', { className: 'dmt-title' }, 'ColorLab 配色方案'),
           h(
             'div',
             { className: 'dmt-sub' },
-            'Sublime Text 的 Mariana 主题：覆盖设计令牌（底色、文字、边框、状态色）、代码块语法高亮与终端底色。',
+            '内置 Sublime Text 的 Mariana 配色作为默认预设，并提供可调整的配色引擎：设计令牌（底色、文字、边框、状态色）、代码块语法高亮、正文高亮与终端底色。',
           ),
         ),
 
@@ -2470,8 +2470,8 @@ window.__ModuleLoader__.load({
         /* 启用 */
         h(
           Row,
-          { title: '启用 Mariana 主题', hint: '关闭后立即回退为宿主默认配色，设置保持不变' },
-          h(Switch, { on: snapshot.enabled !== 'off', label: '启用 Mariana 主题', onToggle: toggle('enabled') }),
+          { title: '启用 ColorLab', hint: '关闭后立即回退为宿主默认配色，设置保持不变' },
+          h(Switch, { on: snapshot.enabled !== 'off', label: '启用 ColorLab', onToggle: toggle('enabled') }),
         ),
 
         /* 外观模式 */
@@ -3089,7 +3089,7 @@ window.__ModuleLoader__.load({
           () =>
             slots.inject('settings.section', () =>
               slots.register(
-                { name: 'settings.section', id: 'mariana-theme', order: 37, label: 'Mariana 主题' },
+                { name: 'settings.section', id: 'mariana-theme', order: 37, label: 'ColorLab' },
                 MarianaSettingsPage,
               ),
             ),
