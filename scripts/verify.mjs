@@ -446,19 +446,26 @@ if (failures.length === 0) {
     fail(`DEFAULTS.rowColor 不是纯 hex：${rowColorHex}`)
   }
 
-  /* ---- 3d：文件卡片头部覆盖样式表 ---- */
-  const { buildCardSheet, CARD_SHEET_ID } = test
+  /* ---- 3d：文件卡片底色覆盖样式表 ---- */
+  const { buildCardSheet, detectCardTargets, CARD_SHEET_ID, CARD_TARGETS } = test
   expect(typeof buildCardSheet === 'function', 'buildCardSheet 已导出')
+  expect(typeof detectCardTargets === 'function', 'detectCardTargets 已导出')
   expect(typeof CARD_SHEET_ID === 'string' && CARD_SHEET_ID.length > 0, 'CARD_SHEET_ID 已声明')
+  expect(Array.isArray(CARD_TARGETS) && CARD_TARGETS.length === 2, 'CARD_TARGETS 覆盖两种卡片组件', String(CARD_TARGETS && CARD_TARGETS.length))
+
+  /* 目标组：改动文件卡片（_card / --changes-fill）+ 交付文件卡片（_root / --deliverable-fill）。 */
+  const changesTarget = { defClass: 'kuvljq_card', varName: '--changes-fill', hoverVar: '--changes-hover' }
+  const deliverTarget = { defClass: 'flL80G_root', varName: '--deliverable-fill', hoverVar: '--deliverable-hover' }
 
   /* 空串 = 跟随宿主默认 → 不产出任何规则。 */
-  expect(buildCardSheet({ ...DEFAULTS, cardColor: '' }, 'kuvljq_card') === '', 'cardColor 空串 → 空样式表（跟随宿主）')
-  expect(buildCardSheet({ ...DEFAULTS, cardColor: 'bad' }, 'kuvljq_card') === '', '非法 cardColor → 空样式表')
-  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, null) === '', '类名未检测到 → 空样式表')
-  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, '') === '', '空类名 → 空样式表')
-  expect(buildCardSheet(undefined, 'kuvljq_card') === '', 'state 缺省 → 空样式表，不抛')
+  expect(buildCardSheet({ ...DEFAULTS, cardColor: '' }, [changesTarget]) === '', 'cardColor 空串 → 空样式表（跟随宿主）')
+  expect(buildCardSheet({ ...DEFAULTS, cardColor: 'bad' }, [changesTarget]) === '', '非法 cardColor → 空样式表')
+  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, []) === '', '目标组为空 → 空样式表')
+  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, null) === '', '目标组未检测到 → 空样式表')
+  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, '') === '', '空目标组 → 空样式表')
+  expect(buildCardSheet(undefined, [changesTarget]) === '', 'state 缺省 → 空样式表，不抛')
 
-  const cardSheet = buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, 'kuvljq_card')
+  const cardSheet = buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, [changesTarget])
   expect(cardSheet.length > 0, '挑色后产出规则')
   expect(cardSheet.includes('.kuvljq_card,.kuvljq_card.kuvljq_card.kuvljq_card'), '三遍类名提特异性（压过宿主的 body… .x_card）')
   expect(cardSheet.includes('--changes-fill:#3B454F'), '覆盖 --changes-fill')
@@ -474,7 +481,19 @@ if (failures.length === 0) {
     fail('悬停色不是合法 hex：' + cardSheet)
   }
   /* 类名带任意哈希前缀都能生成（检测器给什么用什么）。 */
-  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, 'abc123_card').includes('.abc123_card'), '类名前缀不写死')
+  expect(buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, [{ ...changesTarget, defClass: 'abc123_card' }]).includes('.abc123_card'), '类名前缀不写死')
+
+  /* 交付文件卡片：变量定义在 _root 上，消费在 _file 上 —— 覆盖 _root 即可，
+     因为 _file 读的就是 var(--deliverable-fill)。 */
+  const deliverSheet = buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, [deliverTarget])
+  expect(deliverSheet.includes('--deliverable-fill:#3B454F'), '覆盖 --deliverable-fill')
+  expect(deliverSheet.includes('.flL80G_root,.flL80G_root.flL80G_root.flL80G_root'), '交付文件卡片同样三遍类名提特异性')
+  expect(/--deliverable-hover:#[0-9a-f]{6}/i.test(deliverSheet), '交付文件卡片也有悬停色')
+
+  /* 两种卡片同时存在时，两条规则都要有（不能只覆盖一种）。 */
+  const bothSheet = buildCardSheet({ ...DEFAULTS, cardColor: '#3B454F' }, [changesTarget, deliverTarget])
+  expect(bothSheet.includes('--changes-fill:#3B454F'), '两种卡片并存时也覆盖 --changes-fill')
+  expect(bothSheet.includes('--deliverable-fill:#3B454F'), '两种卡片并存时也覆盖 --deliverable-fill')
 
   /* ---- 4：对比度（只查 dark，因为 Mariana 是深色主题）---- */
   const dark = resolveTokens(DEFAULTS)
