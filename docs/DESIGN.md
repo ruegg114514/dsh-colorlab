@@ -215,6 +215,50 @@ hex 每补全一次合法值就触发，全走这条路就是"输入一个字母
 
 ---
 
+## LaTeX 代码块的命令色
+
+**为什么 LaTeX 的高亮跟 Sublime 不一样。**
+
+两边用的是**同一套 scope 命名**（TextMate 风格）—— Sublime 的
+`LaTeX.sublime-syntax` 和 Shiki 的 `latex` 语法都把 `\chapter` 标成
+`support.function.section.latex`。分类完全一致，**差别在配色规则**：
+
+| scope | Sublime Mariana | Shiki `css-variables` |
+|---|---|---|
+| `keyword` | `var(pink)` = `#C594C5` 紫 | `--shiki-token-keyword` |
+| **`support.function`** | **`var(blue)` = `#6699CC` 蓝** | **`--shiki-token-function`** |
+| **`entity.name.function`** | **`var(blue5)` = `#5FB3B3` 青** | **`--shiki-token-function`**（同一个！） |
+| `entity.name` | `var(orange)` = `#F9AE58` 橙 | `--shiki-token-constant` |
+
+**关键**：Sublime 区分 `support.function`（蓝）和 `entity.name.function`（青），
+但 Shiki 的 `css-variables` 主题把两者**合并成同一个 `function` 令牌** ——
+一个令牌只能一个颜色。
+
+后果：LaTeX 的命令（`\chapter` `\ket` `\frac`）在 Sublime 里是**蓝**的，
+在本插件里却是**青**的 —— 因为插件把 function 令牌取成了 `blue5`（青，
+对齐 JS/Python 的函数名）。
+
+（实测：以 Sublime Mariana 打开一份 LaTeX 文档，采样 `\chapter` / `\ket` 的
+像素色为 `#6699CC`，与方案文件里的 `var(blue)` 一致。）
+
+**修法**：只给 LaTeX 代码块换掉 function 令牌的颜色，其它语言不动。
+
+1. **怎么认出 LaTeX 块**：宿主渲染的代码块是
+   `<pre class="shiki css-variables">`，**pre 上没有语言名**（Shiki 的
+   `codeToHtml` 只加 `class="shiki <themeName>"`；宿主也没把 lang 写进 DOM）。
+   所以看内容特征：`--shiki-token-function` 上色、且文本以 `\` 开头的 span ——
+   那正是 LaTeX 命令。JS 的函数名 / Python 的函数名都不以 `\` 开头。
+   要求这类 span 占 function span 的**多数**（`latexish * 2 >= total`），
+   避免 JS 里的 `\` 续行符误判整个块。
+2. **怎么改色**：CSS 变量在 `pre` 上重新定义会作用到全部后代，所以只需要
+   `pre.dmt-latex { --shiki-token-function: #6699CC }` 一条规则 —— Shiki 的
+   token span 用的是 `var(--shiki-token-function)`，自动取到新值。
+3. **动态渲染**：代码块是滚动时才插进 DOM 的，只在设置变更时扫一遍不够 ——
+   用 `MutationObserver`（只听 `childList`，不改 `attributes`，所以改 class
+   不会自激）触发重扫，合并到 120ms 的节流里。
+
+---
+
 ## Config schema 的 volatile 标记
 
 Host 半体额外导出 `Config`，DSH 据此投射出设置表单。但 `@deepseek-ai/dsh-settings`
@@ -236,7 +280,7 @@ Host 半体额外导出 `Config`，DSH 据此投射出设置表单。但 `@deeps
 
 ## 校验
 
-### 离线校验（不需要重启，共 10 个套件）
+### 离线校验（不需要重启，共 11 个套件）
 
 ```sh
 node scripts/test-all.mjs
@@ -250,6 +294,7 @@ node scripts/test-all.mjs --electron
 | 语法检查 ×2 | `index.js` / `client.js` 能被解析 |
 | `verify.mjs` | 令牌名合法性 / 值合法性 / 双值齐备 / WCAG 对比度 / 覆盖完整性 / **正文与过程行选择器、var() 兜底、注入防御** / **两类卡片的底色覆盖** |
 | `card.test.mjs` | 从**安装态 app.asar** 抠出宿主真实 CSS，验证**两类卡片组件**（`_card` / `_root`）都能被检出并生成覆盖规则 |
+| `latex.test.mjs` | LaTeX 代码块判定：LaTeX 块判中、JS/Python 块不判中、少数派 `\` 开头不误判、命令色 = `var(blue)` |
 | `runtime.test.mjs` | 两条通道切换、`theme/change` 重算、浅色回退、开关、**正文与过程行样式表挂载/卸载**、`ctx.dispose` 无残留 |
 | `custom.test.mjs` | 自定义配色传导、非法输入防御、无死槽位、方案保存/载入/上限、对比度计算、**正文亮度三档与层次保持** |
 | `page.test.mjs` | 设置页渲染、控件数量、正文/过程行预览、槽位取色、勾选写盘、方案载入/删除、**亮度档位写盘** |
@@ -305,6 +350,10 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] 文件卡片颜色：挑色后「已编辑 N 个文件」卡片的**头部横带**变成该颜色
 - [ ] 文件卡片颜色：挑色后「交付文件」卡片的**整张底色**也变成该颜色
 - [ ] 文件卡片颜色：鼠标悬停到这两种卡片上，底色朝白提亮一档
+- [ ] LaTeX 代码块：`\chapter` `\begin` `\frac` 是**蓝色** `#6699CC`（与 Sublime 一致）
+- [ ] LaTeX 代码块：`\label` `\zh` 是**青色** `#60B4B4`（Sublime 里 `support.function.label` 的色）
+- [ ] 其它语言的代码块：函数名仍是**青色** `#5FB3B3`（没被 LaTeX 规则误伤）
+- [ ] 滚动到旧消息里的 LaTeX 代码块，命令色也是蓝色的（动态渲染的块也被标记了）
 - [ ] 配色方案：起名保存 → 列表出现带 5 个色点的条目 → 显示「使用中」
 - [ ] 配色方案：改几个颜色 → 点「载入」→ 一键切回
 - [ ] 配色方案：「恢复默认配色」后已保存的方案仍在
