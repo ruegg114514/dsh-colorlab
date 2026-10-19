@@ -79,10 +79,14 @@ Settings → **ColorLab**:
 | **Custom colours** | 18 slots (8 surfaces / 3 text / 7 syntax), each adjustable |
 | **Presets** | Save the current palette and load it back later, up to 12 |
 
-LaTeX code blocks get their commands in Mariana's `var(blue)` (`#6699CC`), the
-same colour Sublime's Mariana gives `support.function`. Other languages keep
-their function names in `var(blue5)` (`#5FB3B3`) — Shiki merges both scopes
-into one token, so the plugin only recolours the LaTeX blocks.
+LaTeX code blocks and Python built-ins (`print`, `len`, `open`) get Mariana's
+`var(blue)` (`#6699CC`) — the colour Sublime's Mariana gives `support.function`.
+Shiki merges that scope with `entity.name.function` into a single token, so
+function *calls* and LaTeX commands match Sublime, while function *definition
+names* are blue there too.
+
+Markdown gets Sublime's `markup.*` details: list markers in `var(green)`,
+blockquote text in `var(orange)`, and inline code on a tinted background.
 
 ### 18 custom colour slots
 
@@ -295,9 +299,13 @@ Mariana 是 Sublime Text 3.0（2017）起及 Sublime Text 4 的默认配色，
 | **自定义配色** | 18 个槽位（界面底色 8 / 文字 3 / 语法色 7），逐个调 |
 | **配色方案** | 把当前配色存成方案，随时载入，最多 12 套 |
 
-LaTeX 代码块里的命令用 Mariana 的 `var(blue)`（`#6699CC`），与 Sublime 里
-`support.function` 的颜色一致。其它语言（JS/Python 的函数名）保持 `var(blue5)`
-青色 —— Shiki 把两者合并成同一个令牌，插件只对 LaTeX 块单独换色。
+LaTeX 命令和 Python 内置函数（`print` `len` `open`）用 Mariana 的
+`var(blue)`（`#6699CC`），与 Sublime 里 `support.function` 的颜色一致 ——
+Shiki 把 `support.function` 和 `entity.name.function` 合并成同一个令牌，
+所以函数**调用**和 LaTeX 命令与 Sublime 一致，函数**定义名**则也是蓝色。
+
+Markdown 会补上 Sublime 的 `markup.*` 细节：列表符号 `var(green)` 绿、
+引用正文 `var(orange)` 橙、行内代码加淡色底。
 
 ### 18 个自定义槽位
 
