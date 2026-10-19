@@ -31,6 +31,7 @@ const suites = [
   { name: '语法检查 index.js', args: ['--check', join(root, 'index.js')], node: true },
   { name: '语法检查 client.js', args: ['--check', join(root, 'client.js')], node: true },
   { name: '静态校验（令牌/对比度/覆盖）', args: [join(here, 'verify.mjs')] },
+  { name: '文件卡片检测（宿主真实 CSS）', args: [join(here, 'card.test.mjs')] },
   { name: '运行时行为', args: [join(here, 'runtime.test.mjs')] },
   { name: '自定义配色与配色方案', args: [join(here, 'custom.test.mjs')] },
   { name: '设置页渲染与交互', args: [join(here, 'page.test.mjs')] },
