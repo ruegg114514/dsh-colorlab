@@ -295,6 +295,104 @@ Sublime Mariana 的 `markup.*` 规则里，宿主**没有**而 Sublime**有**的
 
 ---
 
+## 启动性能：为什么装着插件启动会变慢
+
+### 先量清楚
+
+| 项 | 实测值 |
+|---|---|
+| `client.js` 体积 | 135 KB |
+| 编译 + 执行 bundle 顶层 + factory | **6.4 ms** |
+| `resolveTokens`（151 令牌） | 0.09 ms/次 |
+| 四张样式表的字符串构建 | 合计 0.02 ms/次 |
+| 宿主注入的样式表 | **160 张 / 约 2179 条规则 / 276 KB** |
+| 设置页样式表 | 15.5 KB |
+
+**纯 JS 只占 6.4 ms** —— 所以慢的不是计算，是**对 DOM/CSS 做的事**。下面四条是
+逐条量出来并修掉的，每条都在 `runtime.test.mjs` 场景 9/10 里有回归锁。
+
+### 一、`applyNow()` 被反复调用，每次都重写一切（主因）
+
+`applyNow()` 在启动期会被调很多次：
+
+1. `apply()` 里立即一次；
+2. 每次 `theme/change`；
+3. **等 `form` 服务时的 250ms 重试**（`bindWhenReady`，最多 120 轮 ≈ 30 秒）。
+
+而它以前每次都无条件做两件昂贵的事：
+
+- **重推 `overrideTokens`** —— 宿主的 ThemePresenter 会因此重建令牌表，并把
+  151 个令牌逐条写成 `body` 内联变量（整页重算）；
+- **重写四张 `<style>` 的 `textContent`** —— 赋值会让浏览器**重新解析整张表
+  并触发全文档样式重算**，哪怕内容一个字都没变。
+
+**修法**：
+
+- `writeSheet(el, css)` 只在内容真的变了才赋值（缓存挂在元素自己的 `__dmtCss` 上，
+  元素被移除重建后自动失效）；
+- `overrideTokens` 前先比令牌的内容签名，**只在"层确实装着 + 内容没变"时跳过**
+  —— 所以 `teardown()` 之后仍会正常重装（`teardown` 会把签名作废）；
+- `publish()` 也加了内容签名：内容没变就不 `store.set`，否则设置页每 250ms
+  被 `useSyncExternalStore` 重渲染一次（顺带满足 React「没变则引用不变」的要求）。
+
+回归锁（20 次内容相同的 `theme/change`）：
+
+```
+✓ 状态未变时 20 次 theme/change 不再重推令牌 — 1 → 1        （旧：1 → 21）
+✓ 状态未变时不再重写 <style>                  — 3 → 3        （旧：3 → 83）
+✓ 改设置时仍然重新应用（守卫没有吃掉正确性）   — 1 → 2
+✓ 切浅色 + 仅深色模式 → 叠加层被卸掉
+✓ 切回深色 → 叠加层重新装上（签名作废逻辑正确）
+```
+
+### 二、卡片检测把 2179 条规则全序列化了一遍
+
+`detectCardTargets()` 要在宿主的 CSSOM 里找两组变量，以前的写法是：
+
+```js
+const text = rule.cssText || ''      // ← 对每一条规则都序列化
+if (!text.includes(target.varName)) continue
+```
+
+`rule.cssText` 会把整条规则序列化成字符串，**只为了一次 `includes` 判断**。
+160 张表 / 2179 条规则全走一遍，是启动时一次可观的开销。
+
+**修法**：改用 `rule.style.getPropertyValue(varName)` —— 直接问声明块，
+不序列化。老浏览器/测试替身没有 `.style` 时退回文本匹配。
+（`card.test.mjs` 的 CSSOM 替身现在也还原了 `.style` 成员，否则测到的只是
+兜底路径，跑在生产里的快路径反而没覆盖。）
+
+另外加了**样式表计数守卫**：等 ui-deliverables 出现的重试是每秒一次、最多 60 次，
+现在只在「样式表数量变了」时才重扫 —— 数量没变就说明没有新表进来，不可能有新发现。
+
+### 三、15.5 KB 的设置页 CSS 在启动时就被解析
+
+`installPageStyles(ctx)` 以前在 `apply()` 里就把整张设置页样式表插进 DOM，
+可用户多数时候根本不打开设置页。
+
+**修法**：改由 `MarianaSettingsPage` 在**首次渲染时**调 `ensurePageStyles()`
+按需安装（幂等，重复渲染不堆叠）。启动路径完全不碰这 15.5 KB。
+
+### 四、宿主半体的模块导入
+
+`index.js` 顶层 `const Config = buildConfig()` 会做 `createRequire` 探测
+（按"最可能命中"的顺序试多个锚点）。**在普通 Node 下实测 50.7 ms**（所有锚点
+全部失败的最坏情况）；真实 DSH 里第一个锚点就能命中 `app.asar` 内的
+`schemastery`，所以是一个量级更小的开销 —— 这一项没有改动。
+
+### 已知取舍：`[class*="_markdown_"]`
+
+正文/Markdown 两张表共有 16 条规则以 `[class*="_markdown_"]` 打头。属性子串
+选择器用不了类名索引，比精确类名贵。之所以这么写是为了**跨宿主构建稳定**
+（前缀来自源文件名，末尾哈希每次构建都变）。
+
+好在这里的匹配是右到左的：浏览器先找 `strong`/`em`/`a`/`code`/`li` 这些
+**右端**元素（数量不多），再沿祖先链检查属性，代价是可控的。若要进一步优化，
+可以像 `detectCardTargets` 那样在运行时解析出真实哈希类再拼精确选择器 ——
+但那会让"宿主换模块名就失效"的风险回来，暂不做。
+
+---
+
 ## Config schema 的 volatile 标记
 
 Host 半体额外导出 `Config`，DSH 据此投射出设置表单。但 `@deepseek-ai/dsh-settings`
@@ -401,3 +499,6 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] 关掉「启用」：立即回退；再打开：立即恢复
 - [ ] 重启 DSH 后设置保持（`cordis.patch.yml` 里有 `mariana-theme` 行）
 - [ ] 禁用插件：所有样式消失（含正文），无残留色块
+- [ ] **启动耗时**：开着插件重启，首屏出现时间与禁用插件时相比没有肉眼可见的差别
+- [ ] **设置页样式表按需加载**：重启后不打开设置页，`document.head` 里没有
+      `data-plugin-css="dsh-colorlab/page.css"` 这个 `<style>`（打开设置页后才有）
