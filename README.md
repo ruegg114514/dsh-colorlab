@@ -75,7 +75,7 @@ Settings → **ColorLab**:
 | **Prose preview** | Shows both states side by side, right under the toggle |
 | **Prose colours** | 9 independent slots: heading, bold, italic, inline code, list marker, quote text, quote rule, link, strikethrough |
 | **Process row highlight** | Colours process rows — tool rows one colour, summary rows another |
-| **File card header** | Recolours the header band of "edited N files" cards |
+| **File card colour** | Recolours the header band of "edited N files" cards and the whole card body of "delivered files" cards |
 | **Custom colours** | 18 slots (8 surfaces / 3 text / 7 syntax), each adjustable |
 | **Presets** | Save the current palette and load it back later, up to 12 |
 
@@ -286,7 +286,7 @@ Mariana 是 Sublime Text 3.0（2017）起及 Sublime Text 4 的默认配色，
 | **正文高亮预览** | 紧跟开关，直接展示开/关两种效果 |
 | **正文颜色** | 9 个独立槽位：标题、加粗、斜体、行内代码、列表标记、引用文字、引用竖线、链接、删除线 |
 | **过程行高亮** | 工具行一个颜色、汇总行另一个颜色 |
-| **文件卡片头部** | 「已编辑 N 个文件」卡片头部横带单独可调 |
+| **文件卡片颜色** | 「已编辑 N 个文件」卡片的头部横带，以及「交付文件」卡片的整张底色 |
 | **自定义配色** | 18 个槽位（界面底色 8 / 文字 3 / 语法色 7），逐个调 |
 | **配色方案** | 把当前配色存成方案，随时载入，最多 12 套 |
 
@@ -392,7 +392,7 @@ WCAG 对比度，不是估算。
 ## 校验
 
 ```sh
-npm test        # 9 个套件，离线可跑
+npm test        # 10 个套件，离线可跑
 npm run check   # 语法检查
 ```
 
