@@ -1,0 +1,16 @@
+# dsh-colorlab bundle patch
+#
+# `dsh.bundle.patch` layer. Installing this package appends `dsh-colorlab`
+# to `dsh.profile.bundles`, and profile boot merges this patch as a single
+# plugin row.
+#
+# `id` is the profile row id. It doubles as the Host settings namespace, so
+# renaming it orphans any persisted config — keep it stable across versions.
+#
+# NOTE: the row id is still `mariana-theme`, while the package was renamed to
+# `dsh-colorlab`. The id doubles as the settings namespace, so changing it
+# would orphan every colour slot override and every saved preset users already
+# have in their profile. The name is cosmetic; the id is load-bearing.
+- insert:
+    - id: mariana-theme
+      name: dsh-colorlab

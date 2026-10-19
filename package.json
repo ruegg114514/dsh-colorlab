@@ -1,0 +1,72 @@
+{
+  "name": "dsh-colorlab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chat UI colour theme plugin for DeepSeek Harness. Ships the Mariana palette as its default preset and adds a colour engine: 18 adjustable colour slots, 9 Markdown prose roles, saved presets, WCAG contrast hints and light/dark modes.",
+  "license": "MIT",
+  "type": "module",
+  "author": "dsh-colorlab contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruegg114514/dsh-colorlab.git"
+  },
+  "homepage": "https://github.com/ruegg114514/dsh-colorlab#readme",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "theme",
+    "colorscheme",
+    "colorlab",
+    "mariana",
+    "sublime"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-theme",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "scripts/verify.mjs",
+    "scripts/runtime.test.mjs",
+    "scripts/custom.test.mjs",
+    "scripts/page.test.mjs",
+    "scripts/contract.test.mjs",
+    "scripts/loader.test.mjs",
+    "scripts/host.test.mjs",
+    "scripts/test-all.mjs",
+    "scripts/smoke.mjs",
+    "screenshots.json",
+    "README.md",
+    "LICENSE",
+    "assets/",
+    "docs/"
+  ],
+  "scripts": {
+    "test": "node scripts/test-all.mjs",
+    "test:electron": "node scripts/test-all.mjs --electron",
+    "verify": "node scripts/verify.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "check": "node --check index.js && node --check client.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
