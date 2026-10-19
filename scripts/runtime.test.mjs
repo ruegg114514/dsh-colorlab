@@ -27,6 +27,8 @@ const root = join(here, '..')
 
 function createFakeDom() {
   const created = []
+  /** ⚡ <style>.textContent 的写入次数 —— 启动优化的回归锁（见场景 9）。 */
+  const counters = { styleWrites: 0 }
   const head = {
     children: [],
     appendChild(node) {
@@ -54,6 +56,7 @@ function createFakeDom() {
   }
   return {
     created,
+    counters,
     head,
     documentElement,
     document: {
@@ -65,7 +68,6 @@ function createFakeDom() {
           dataset: {},
           attributes: {},
           style: {},
-          textContent: '',
           parentNode: null,
           setAttribute(name, value) {
             this.attributes[name] = String(value)
@@ -77,6 +79,17 @@ function createFakeDom() {
             if (this.parentNode !== null) this.parentNode.removeChild(this)
           },
         }
+        /* 用访问器记录 <style> 的写入 —— 每次赋值都会让浏览器重解析样式表。 */
+        let text = ''
+        Object.defineProperty(node, 'textContent', {
+          get() {
+            return text
+          },
+          set(value) {
+            text = value
+            if (node.tagName === 'STYLE') counters.styleWrites += 1
+          },
+        })
         return node
       },
     },
@@ -124,8 +137,24 @@ function createFakeCtx(options = {}) {
 function createFakeTheme(options = {}) {
   const layers = new Map()
   let scheme = options.scheme || 'dark'
+  /** overrideTokens 被真正调用的次数（启动优化的回归锁）。 */
+  let overrideCalls = 0
   const snapshot = () => ({ preference: scheme, active: { id: scheme, colorScheme: scheme, tokens: {} }, revision: 1 })
-  const themeCtx = { on: () => () => {}, emit() {} }
+  /* theme/change 需要真的能 emit —— 插件用它触发 applyNow。 */
+  const themeListeners = new Map()
+  const themeCtx = {
+    on(event, handler) {
+      const list = themeListeners.get(event) || []
+      list.push(handler)
+      themeListeners.set(event, list)
+      return () => {
+        themeListeners.set(event, (themeListeners.get(event) || []).filter((h) => h !== handler))
+      }
+    },
+    emit(event, ...args) {
+      for (const handler of [...(themeListeners.get(event) || [])]) handler(...args)
+    },
+  }
   const theme = {
     ctx: themeCtx,
     getTheme: () => snapshot(),
@@ -133,6 +162,7 @@ function createFakeTheme(options = {}) {
       scheme = next === 'light' ? 'light' : 'dark'
     },
     overrideTokens(source, tokens) {
+      overrideCalls += 1
       const record = { tokens, alive: true }
       layers.set(source, record)
       if (options.supportsOverride === false) throw new Error('not supported')
@@ -144,6 +174,7 @@ function createFakeTheme(options = {}) {
     /* 测试辅助 */
     _layers: layers,
     _scheme: () => scheme,
+    _overrideCalls: () => overrideCalls,
   }
   return theme
 }
@@ -165,6 +196,12 @@ function loadPlugin(dom) {
         createElement: (...args) => ({ args }),
         Fragment: 'fragment',
         useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+        /* 设置页组件用到的另一个 hook，给个够跑渲染的最小实现。 */
+        useState: (initial) => [initial, () => {}],
+        useMemo: (factory) => factory(),
+        useRef: (initial) => ({ current: initial }),
+        useEffect: () => {},
+        useCallback: (fn) => fn,
       }
     }
     throw new Error('unexpected require: ' + id)
@@ -511,6 +548,111 @@ function main() {
         && node.parentNode !== null,
     )
     check(attached.length === 0, '宿主 rowHighlight=off → 不挂过程行样式表', String(attached.length) + ' 个在 DOM')
+    ctx.dispose()
+  }
+
+  /* ---- 场景 9：启动优化 —— 重复 applyNow 不该重复干活 ----------
+     启动期 applyNow 会被反复调用（theme/change 事件 + 等 form 服务时的
+     250ms 重试）。以前每次都会：重推 overrideTokens（宿主整表重算）、
+     重写四五张 <style>（浏览器重解析 + 全文档样式重算）。
+     这里用「内容没变 → 只干一次」把它们锁住。 */
+  {
+    const dom = createFakeDom()
+    const theme = createFakeTheme()
+    const ctx = createFakeCtx({ services: { theme }, props: { theme } })
+    const exports = loadPlugin(dom)
+    exports.apply(ctx)
+
+    const callsAfterApply = theme._overrideCalls()
+    const writesAfterApply = dom.counters.styleWrites
+    check(callsAfterApply === 1, '首次 apply 推一次 overrideTokens', String(callsAfterApply) + ' 次')
+    check(writesAfterApply > 0, '首次 apply 写入样式表', String(writesAfterApply) + ' 次')
+
+    /* 模拟主题事件连发 20 次（状态完全没变）。 */
+    for (let i = 0; i < 20; i += 1) {
+      theme.setTheme('dark')
+      theme.ctx.emit('theme/change')
+    }
+    check(
+      theme._overrideCalls() === callsAfterApply,
+      '状态未变时 20 次 theme/change 不再重推令牌（省掉宿主整表重算）',
+      `${callsAfterApply} → ${theme._overrideCalls()}`,
+    )
+    check(
+      dom.counters.styleWrites === writesAfterApply,
+      '状态未变时不再重写 <style>（省掉浏览器重解析 + 样式重算）',
+      `${writesAfterApply} → ${dom.counters.styleWrites}`,
+    )
+
+    /* 真正改设置 → 令牌内容变了，必须重新推（守卫不能吃掉正确性）。 */
+    exports.__test.update({ surface: 'deep' })
+    check(
+      theme._overrideCalls() > callsAfterApply,
+      '改设置时仍然重新应用（守卫没有吃掉正确性）',
+      `${callsAfterApply} → ${theme._overrideCalls()}`,
+    )
+
+    /* 仅切外观、且模式是「仅深色」→ 应当卸层，而不是带着同一份令牌重推。 */
+    const beforeLight = theme._overrideCalls()
+    theme.setTheme('light')
+    theme.ctx.emit('theme/change')
+    check(
+      theme._layers.get('dsh-colorlab') === undefined,
+      '切浅色 + 仅深色模式 → 叠加层被卸掉',
+      theme._layers.get('dsh-colorlab') === undefined ? '已卸' : '仍在',
+    )
+    check(
+      theme._overrideCalls() === beforeLight,
+      '卸层时不再多推一次令牌',
+      `${beforeLight} → ${theme._overrideCalls()}`,
+    )
+
+    /* 切回深色 → 层必须重新装上（teardown 已把签名作废）。 */
+    theme.setTheme('dark')
+    theme.ctx.emit('theme/change')
+    check(
+      theme._layers.get('dsh-colorlab') !== undefined,
+      '切回深色 → 叠加层重新装上（签名作废逻辑正确）',
+      theme._layers.get('dsh-colorlab') !== undefined ? '已装' : '缺失',
+    )
+    ctx.dispose()
+  }
+
+  /* ---- 场景 10：设置页样式表延迟安装 ----------
+     15 KB 的设置页 CSS 只在设置页打开时才需要。启动路径插它 = 白解析一次。 */
+  {
+    const dom = createFakeDom()
+    const theme = createFakeTheme()
+    const ctx = createFakeCtx({ services: { theme }, props: { theme } })
+    const exports = loadPlugin(dom)
+    exports.apply(ctx)
+
+    const pageSheetId = exports.__test.SHEET_ID
+    check(typeof pageSheetId === 'string' && pageSheetId.length > 0, 'SHEET_ID 已导出', pageSheetId)
+    const pageSheets = dom.created.filter(
+      (node) => node.dataset && node.dataset.pluginCss === pageSheetId,
+    )
+    check(
+      pageSheets.length === 0,
+      '启动时不插设置页样式表（延迟到设置页渲染）',
+      String(pageSheets.length) + ' 个已插入',
+    )
+    /* 但设置页组件一渲染，样式表必须到位。 */
+    const page = exports.__test.MarianaSettingsPage
+    if (typeof page === 'function') {
+      page()
+      const after = dom.created.filter(
+        (node) => node.dataset && node.dataset.pluginCss === pageSheetId,
+      )
+      check(after.length === 1, '设置页渲染后样式表装上（且只一份）', String(after.length) + ' 份')
+      page()
+      const twice = dom.created.filter(
+        (node) => node.dataset && node.dataset.pluginCss === pageSheetId,
+      )
+      check(twice.length === 1, '重复渲染不堆叠', String(twice.length) + ' 份')
+    } else {
+      check(false, '设置页组件已导出（供延迟安装测试）')
+    }
     ctx.dispose()
   }
 
