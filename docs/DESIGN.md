@@ -215,13 +215,11 @@ hex 每补全一次合法值就触发，全走这条路就是"输入一个字母
 
 ---
 
-## LaTeX 代码块的命令色
+## 代码高亮：为什么跟 Sublime 有差
 
-**为什么 LaTeX 的高亮跟 Sublime 不一样。**
-
-两边用的是**同一套 scope 命名**（TextMate 风格）—— Sublime 的
-`LaTeX.sublime-syntax` 和 Shiki 的 `latex` 语法都把 `\chapter` 标成
-`support.function.section.latex`。分类完全一致，**差别在配色规则**：
+**两边用的是同一套 scope 命名**（TextMate 风格）—— Sublime 的
+`LaTeX.sublime-syntax` / `Python.sublime-syntax` 和 Shiki 的 `latex` / `python`
+语法把同一批元素标成同样的 scope。分类完全一致，**差别在配色规则**：
 
 | scope | Sublime Mariana | Shiki `css-variables` |
 |---|---|---|
@@ -234,28 +232,66 @@ hex 每补全一次合法值就触发，全走这条路就是"输入一个字母
 但 Shiki 的 `css-variables` 主题把两者**合并成同一个 `function` 令牌** ——
 一个令牌只能一个颜色。
 
-后果：LaTeX 的命令（`\chapter` `\ket` `\frac`）在 Sublime 里是**蓝**的，
-在本插件里却是**青**的 —— 因为插件把 function 令牌取成了 `blue5`（青，
-对齐 JS/Python 的函数名）。
+后果：Python 内置函数（`print` `len` `open` `enumerate`）、LaTeX 命令
+（`\chapter` `\ket` `\frac`）在 Sublime 里是**蓝**的，在本插件里曾是**青**的
+—— 因为插件把 function 令牌取成了 `blue5`（青，对齐函数定义名）。
 
-（实测：以 Sublime Mariana 打开一份 LaTeX 文档，采样 `\chapter` / `\ket` 的
-像素色为 `#6699CC`，与方案文件里的 `var(blue)` 一致。）
+**取哪个**：函数**调用**比函数**定义**常见得多，Sublime 里最常看到的也是
+`support.function` 那个蓝。所以 function 令牌取 `var(blue)` `#6699CC`。
+代价是 JS/Python 的函数**定义名**也从青变蓝 —— 这是 Shiki 合并 scope 的
+固有代价，无法两全。
 
-**修法**：只给 LaTeX 代码块换掉 function 令牌的颜色，其它语言不动。
+> ⚠️ 取色时别被 ClearType 骗了：截图里采样的像素是**子像素渲染的混色**，
+> 一个青色的字会采出 `#5FB3B3`/`#4DB3B3` 两种值。要判断真实颜色得
+> **放大截图看**，或者直接读方案文件里的 `var()` 定义。
 
-1. **怎么认出 LaTeX 块**：宿主渲染的代码块是
-   `<pre class="shiki css-variables">`，**pre 上没有语言名**（Shiki 的
-   `codeToHtml` 只加 `class="shiki <themeName>"`；宿主也没把 lang 写进 DOM）。
-   所以看内容特征：`--shiki-token-function` 上色、且文本以 `\` 开头的 span ——
-   那正是 LaTeX 命令。JS 的函数名 / Python 的函数名都不以 `\` 开头。
-   要求这类 span 占 function span 的**多数**（`latexish * 2 >= total`），
-   避免 JS 里的 `\` 续行符误判整个块。
-2. **怎么改色**：CSS 变量在 `pre` 上重新定义会作用到全部后代，所以只需要
-   `pre.dmt-latex { --shiki-token-function: #6699CC }` 一条规则 —— Shiki 的
-   token span 用的是 `var(--shiki-token-function)`，自动取到新值。
-3. **动态渲染**：代码块是滚动时才插进 DOM 的，只在设置变更时扫一遍不够 ——
-   用 `MutationObserver`（只听 `childList`，不改 `attributes`，所以改 class
-   不会自激）触发重扫，合并到 120ms 的节流里。
+（实测：以 Sublime Mariana 打开 Python 文档，`print`/`len`/`enumerate`/`open`
+都是蓝色；`import`/`for` 是紫色（keyword）；`'Pages:'` 是绿色（string）。）
+
+---
+
+## Markdown 的细节着色
+
+宿主渲染 markdown 有两条路径：
+
+1. **行内 markdown**（对话正文）：marked + React renderer，输出
+   `<h1>` / `<strong>` / `<em>` / `<a>` / `<blockquote>` / `<li>` / `<code>`。
+   宿主的 renderer（`case "heading": return C.createElement('h'+e.depth, ...)`）
+   **不保留源码符号** —— `#`、`>` 在 DOM 里根本不存在，所以没法给它们上色。
+2. **代码块形式的 markdown**（```markdown 围栏）：走 Shiki。
+
+Shiki 的 `css-variables` 主题对 markdown 的映射：
+
+| 元素 | scope | → token |
+|---|---|---|
+| `#` 标题符号 | `punctuation.definition.heading.markdown` | **无规则** → 继承 |
+| 标题文字 | `entity.name.section.markdown` | **无规则** → 继承 |
+| `>` 引用符号 | `punctuation.definition.quote.begin.markdown` | **无规则** → 继承 |
+| 列表符号 | `beginning.punctuation.definition.list.markdown` | string（绿） |
+| 行内代码 | `markup.inline.raw.string.markdown` | string（绿） |
+| 链接 | `meta.link.inline.markdown` | link（蓝） |
+
+Sublime Mariana 的 `markup.*` 规则里，宿主**没有**而 Sublime**有**的三处：
+
+| 元素 | 宿主现状 | Sublime Mariana | 动作 |
+|---|---|---|---|
+| 列表符号 | `li::marker { color: var(--dsw-alias-label-secondary) }` 灰 | `var(green)` 绿 | 覆盖 |
+| 引用 | 只有左边框，文字是正文色 | `var(orange)` 橙 | 覆盖 |
+| 行内代码 | 无背景 | `markup.raw.inline` 蓝灰底 | 覆盖 |
+
+标题 h1-h6 已经是粗体 + 继承正文色 —— 与 Mariana 的 `markup.heading`
+（bold + 继承）一致，不动。
+
+**怎么覆盖**：三条规则挂在 `[class*="_markdown_"]` 容器下（前缀来自宿主源文件名，
+跨构建稳定 —— 与正文高亮同一套锚点），并排除紧凑变体
+（`:not([data-markdown-variant="compact"])`，那是宿主刻意压缩的摘要区）。
+
+**与正文高亮的关系**：正文高亮那套也会命中 `li::marker` / `blockquote` / `code`。
+两张表都挂在 `<head>`，后插入的赢 —— markdown 细节表在
+`syncMarkdownSheet` 里挂得比 prose 晚，所以细节色覆盖正文高亮的对应色。
+这是刻意的：正文高亮是「对话正文」的增强（可关），markdown 细节是
+「对齐 Sublime」的基础层（不该被前者盖掉）。而且 markdown 细节表
+**不随 prose 开关消失** —— 关掉正文高亮，预览 .md 文件的细节仍在。
 
 ---
 
@@ -294,7 +330,7 @@ node scripts/test-all.mjs --electron
 | 语法检查 ×2 | `index.js` / `client.js` 能被解析 |
 | `verify.mjs` | 令牌名合法性 / 值合法性 / 双值齐备 / WCAG 对比度 / 覆盖完整性 / **正文与过程行选择器、var() 兜底、注入防御** / **两类卡片的底色覆盖** |
 | `card.test.mjs` | 从**安装态 app.asar** 抠出宿主真实 CSS，验证**两类卡片组件**（`_card` / `_root`）都能被检出并生成覆盖规则 |
-| `latex.test.mjs` | LaTeX 代码块判定：LaTeX 块判中、JS/Python 块不判中、少数派 `\` 开头不误判、命令色 = `var(blue)` |
+| `latex.test.mjs` | 代码高亮的令牌映射：function = `var(blue)`、keyword/string/constant 不被误改、Markdown 三条规则存在且用稳定前缀锚点 |
 | `runtime.test.mjs` | 两条通道切换、`theme/change` 重算、浅色回退、开关、**正文与过程行样式表挂载/卸载**、`ctx.dispose` 无残留 |
 | `custom.test.mjs` | 自定义配色传导、非法输入防御、无死槽位、方案保存/载入/上限、对比度计算、**正文亮度三档与层次保持** |
 | `page.test.mjs` | 设置页渲染、控件数量、正文/过程行预览、槽位取色、勾选写盘、方案载入/删除、**亮度档位写盘** |
@@ -351,9 +387,13 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] 文件卡片颜色：挑色后「交付文件」卡片的**整张底色**也变成该颜色
 - [ ] 文件卡片颜色：鼠标悬停到这两种卡片上，底色朝白提亮一档
 - [ ] LaTeX 代码块：`\chapter` `\begin` `\frac` 是**蓝色** `#6699CC`（与 Sublime 一致）
-- [ ] LaTeX 代码块：`\label` `\zh` 是**青色** `#60B4B4`（Sublime 里 `support.function.label` 的色）
-- [ ] 其它语言的代码块：函数名仍是**青色** `#5FB3B3`（没被 LaTeX 规则误伤）
-- [ ] 滚动到旧消息里的 LaTeX 代码块，命令色也是蓝色的（动态渲染的块也被标记了）
+- [ ] Python 代码块：`print` `len` `enumerate` `open` 是**蓝色** `#6699CC`（与 Sublime 一致）
+- [ ] Python 代码块：`import` `for` 是**紫色** `#C594C5`（keyword）
+- [ ] Python 代码块：字符串是**绿色** `#99C794`
+- [ ] Markdown 预览：列表符号是**绿色**（Sublime 的 `var(green)`）
+- [ ] Markdown 预览：引用段落文字是**橙色**（Sublime 的 `var(orange)`）
+- [ ] Markdown 预览：行内代码有淡色底
+- [ ] 关掉「正文高亮」后，Markdown 细节仍在（列表符号/引用/行内代码底色没消失）
 - [ ] 配色方案：起名保存 → 列表出现带 5 个色点的条目 → 显示「使用中」
 - [ ] 配色方案：改几个颜色 → 点「载入」→ 一键切回
 - [ ] 配色方案：「恢复默认配色」后已保存的方案仍在
