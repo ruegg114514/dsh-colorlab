@@ -48,6 +48,7 @@
     "scripts/runtime.test.mjs",
     "scripts/custom.test.mjs",
     "scripts/page.test.mjs",
+    "scripts/card.test.mjs",
     "scripts/contract.test.mjs",
     "scripts/loader.test.mjs",
     "scripts/host.test.mjs",
