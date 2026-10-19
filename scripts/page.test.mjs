@@ -543,19 +543,19 @@ function main() {
            applyNow 走 teardown 不重建；关键承诺是"绝不因拖动重建 N 次"）。 */
         check(darkTheme3.overrideCalls <= applyBaseline + 1, '应用后重建次数 ≤1（拖动不放大重建）', `before=${applyBaseline} now=${darkTheme3.overrideCalls}`)
       }
-      /* ---- 卡片头部颜色：也走草稿，且空串 = 跟随默认 ---- */
+      /* ---- 卡片底色：也走草稿，且空串 = 跟随默认 ---- */
       {
         const treeC1 = expand({ type: page3, props: {}, children: [] })
         const cardInput = collect(treeC1)
           .filter((node) => node.props && node.props.className === 'dmt-colorInput')
-          .find((node) => node.props['aria-label'] === '文件卡片头部颜色')
-        check(cardInput !== undefined, '写盘场景：找到卡片头部颜色选择器')
+          .find((node) => node.props['aria-label'] === '文件卡片颜色')
+        check(cardInput !== undefined, '写盘场景：找到卡片颜色选择器')
         if (cardInput !== undefined) {
           const before = writes.length
           cardInput.props.onChange({ target: { value: '#3B454F' } })
           check(writes.length === before, '卡片颜色改动：零写盘（草稿）')
-          /* 预览容器应拿到 --changes-fill 草稿色（挂在 .dmt-cardPreview 上，
-             头部元素继承）。 */
+          /* 预览容器应拿到 --changes-fill / --deliverable-fill 草稿色
+             （挂在 .dmt-cardPreview 上，卡片元素继承）。 */
           const treeC2 = expand({ type: page3, props: {}, children: [] })
           const preview = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-cardPreview')
           check(preview !== undefined, '卡片预览容器存在')
@@ -565,9 +565,16 @@ function main() {
             '草稿色只进预览容器（--changes-fill）',
             style ? String(style['--changes-fill']) : 'n/a',
           )
-          /* 头部元素本身不带 style —— 颜色靠容器继承，全局一个字节不动。 */
+          check(
+            style !== undefined && style['--deliverable-fill'] === '#3B454F',
+            '草稿色也覆盖交付文件卡片（--deliverable-fill）',
+            style ? String(style['--deliverable-fill']) : 'n/a',
+          )
+          /* 两种卡片的预览结构都在（改动文件=横带，交付文件=整卡底色）。 */
           const head = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-cardDemoHead')
+          const deliver = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-deliverDemo')
           check(head !== undefined && head.props.style === undefined, '头部元素无内联样式（继承容器变量）')
+          check(deliver !== undefined, '交付文件卡片预览存在')
           /* 应用：写 cardColor。 */
           const barC = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-draftBar')
           check(barC !== undefined, '卡片颜色进草稿条')
