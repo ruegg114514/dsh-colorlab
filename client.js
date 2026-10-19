@@ -922,52 +922,82 @@ window.__ModuleLoader__.load({
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
 
     /**
-     * 生成文件卡片头部横带的覆盖规则。
+     * 文件卡片的两组目标。
      *
-     * 背景：「已编辑 N 个文件」卡片（ui-deliverables 的 ChangedFiles）的头部
-     * 横带不走 `--dsw-alias-*` 令牌，而是定义在**哈希类**（如 `kuvljq_card`）上的
-     * `--changes-fill` / `--changes-hover`，值来自宿主中性灰 —— 所以它是整张
-     * 卡片上唯一不跟主题的一块。类名前缀每次构建都变，不能写死，于是运行时
-     * 从 CSSOM 里按"哪条规则定义了 --changes-fill"把它找出来（detectCardClass）。
+     * 宿主里有两个**独立组件**都会渲染文件卡片，各自定义自己的底色变量：
      *
-     * 特异性：宿主有两条竞争规则 —— `.x_card{…}` (0,1,0) 和
-     * `body[data-ds-dark-theme] .x_card{…}` (0,2,1)。这里把类写三遍 (0,3,0)，
+     *   1. `ChangedFiles`（"已编辑 N 个文件"卡片）：在 `.<hash>_card` 上定义
+     *      `--changes-fill` / `--changes-hover`，由 `.<hash>_header` 消费 —— 表现为
+     *      卡片**头部横带**。
+     *   2. `Deliverables`（"交付文件"卡片）：在 `.<hash>_root` 上定义
+     *      `--deliverable-fill` / `--deliverable-hover`，由 `.<hash>_file` 消费 ——
+     *      表现为**整张卡片底色**（没有独立横带）。
+     *
+     * 两组的类名前缀每次构建都变，不能写死，所以运行时从 CSSOM 里找
+     * "哪条规则定义了这个变量"（detectCardTargets）。
+     */
+    const CARD_TARGETS = Object.freeze([
+      Object.freeze({ varName: '--changes-fill', hoverVar: '--changes-hover', defClass: '_card' }),
+      Object.freeze({ varName: '--deliverable-fill', hoverVar: '--deliverable-hover', defClass: '_root' }),
+    ])
+
+    /**
+     * 生成文件卡片底色的覆盖规则。
+     *
+     * 背景：文件卡片的底色不走 `--dsw-alias-*` 令牌，而是定义在**哈希类**上的
+     * 专属变量（`--changes-fill` / `--deliverable-fill`），值来自宿主中性灰 ——
+     * 所以它是整张卡片上唯一不跟主题的一块。
+     *
+     * 特异性：宿主有两条竞争规则 —— `.x{…}` (0,1,0) 和
+     * `body[data-ds-dark-theme] .x{…}` (0,2,1)。这里把类写三遍 (0,3,0)，
      * 两条都压过，且不用 `!important`（保留宿主以后加更具体规则时的退路）。
      *
      * @param {object} state - 已生效设置（不是草稿）。
-     * @param {string|null} cardClass - 检测到的卡片类名（含哈希前缀）。
+     * @param {Array<{defClass:string,varName:string,hoverVar:string}>} targets -
+     *   检测到的目标组；空数组表示还没检测到。
      * @returns {string} CSS 文本；未启用或没挑颜色时为空串。
      */
-    function buildCardSheet(state, cardClass) {
+    function buildCardSheet(state, targets) {
       const s = state || {}
-      if (typeof cardClass !== 'string' || cardClass === '') return ''
+      if (!Array.isArray(targets) || targets.length === 0) return ''
       /* 空串 = 跟随宿主（中性灰）；非法值同样视为未设置。 */
       if (typeof s.cardColor !== 'string' || !HEX_PATTERN.test(s.cardColor)) return ''
       const fill = s.cardColor
       /* 悬停色 = 朝白提亮一档，跟宿主"hover 更亮"的方向一致。 */
       const hover = lightenHex(fill, 0.12)
-      const triple = '.' + cardClass
-      return (
-        triple + ',' + triple + triple + triple + '{\n'
-        + '--changes-fill:' + fill + ';\n'
-        + '--changes-hover:' + hover + '\n}'
-      )
+      const chunks = []
+      for (const target of targets) {
+        if (!target || typeof target.defClass !== 'string' || target.defClass === '') continue
+        if (typeof target.varName !== 'string' || target.varName === '') continue
+        const hoverVar = typeof target.hoverVar === 'string' && target.hoverVar !== ''
+          ? target.hoverVar
+          : target.varName + '-hover'
+        const triple = '.' + target.defClass
+        chunks.push(
+          triple + ',' + triple + triple + triple + '{\n'
+          + target.varName + ':' + fill + ';\n'
+          + hoverVar + ':' + hover + '\n}',
+        )
+      }
+      return chunks.join('\n')
     }
 
     /**
-     * 运行时找出卡片类名：扫描所有样式表，找**内容里定义了 `--changes-fill`**
-     * 的那条规则，取它的类选择器（形如 `kuvljq_card`）。
+     * 运行时找出卡片的类名：扫描所有样式表，找**内容里定义了目标变量**
+     * 的那条规则，取它的类选择器。
      *
      * 不猜前缀、不写死哈希 —— 宿主重新构建哈希变了也能跟上。
      * 跨域样式表读 cssRules 会抛，逐个 try 跳过。
-     * @returns {string|null} 类名（不含点），找不到返回 null。
+     *
+     * @returns {Array<{defClass:string,varName:string,hoverVar:string}>} 检测到的目标组。
      */
-    function detectCardClass() {
-      if (typeof document === 'undefined') return null
+    function detectCardTargets() {
+      if (typeof document === 'undefined') return []
       /* CSSStyleSheet 是类数组（没有 Symbol.iterator），必须用下标遍历 ——
          for...of 在真实浏览器和测试替身里都会抛。 */
       const sheets = document.styleSheets
-      if (!sheets || typeof sheets.length !== 'number') return null
+      if (!sheets || typeof sheets.length !== 'number') return []
+      const found = []
       for (let s = 0; s < sheets.length; s += 1) {
         const sheet = sheets[s]
         if (!sheet) continue
@@ -982,12 +1012,20 @@ window.__ModuleLoader__.load({
           const rule = rules[r]
           if (!rule) continue
           const text = rule.cssText || ''
-          if (!text.includes('--changes-fill')) continue
-          const match = /\.([a-zA-Z0-9]+_card)\b/.exec(rule.selectorText || text)
-          if (match !== null) return match[1]
+          for (const target of CARD_TARGETS) {
+            if (found.some((entry) => entry.varName === target.varName)) continue
+            if (!text.includes(target.varName)) continue
+            /* 类名后缀是宿主 CSS Module 的约定（_card / _root），但前缀哈希每次构建都变。
+               所以只固定后缀，不固定前缀。 */
+            const suffix = target.defClass
+            const match = new RegExp('\\.([a-zA-Z0-9]+' + suffix + ')\\b').exec(rule.selectorText || text)
+            if (match !== null) {
+              found.push({ defClass: match[1], varName: target.varName, hoverVar: target.hoverVar })
+            }
+          }
         }
       }
-      return null
+      return found
     }
 
     /**
@@ -1267,6 +1305,13 @@ window.__ModuleLoader__.load({
 .dmt-cardPreview{display:flex;flex-direction:column;gap:8px}
 .dmt-cardDemo{border:.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-layer-1);overflow:hidden;min-width:0}
 .dmt-cardDemoHead{display:flex;align-items:center;gap:10px;padding:8px 10px;height:60px;box-sizing:border-box;background:var(--changes-fill,#212123);color:var(--dsw-alias-label-primary)}
+/* 交付文件卡片（宿主 Deliverables）：没有横带，整张卡片底色就是 --deliverable-fill。 */
+.dmt-deliverDemo{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--deliverable-fill,#212123);display:flex;align-items:center;gap:10px;padding:8px 10px;height:60px;box-sizing:border-box;min-width:0;color:var(--dsw-alias-label-primary)}
+.dmt-deliverDemoIcon{width:40px;height:40px;flex:none;border-radius:10px;border:.5px solid var(--dsw-alias-border-l1);background:color-mix(in srgb, var(--dsw-static-neutral-00) 5%, transparent);display:grid;place-items:center;font-size:18px}
+.dmt-deliverDemoBody{display:flex;flex-direction:column;flex:1;min-width:0}
+.dmt-deliverDemoName{font-size:13px;font-weight:500;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dmt-deliverDemoDesc{font-size:10px;line-height:16px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dmt-cardDemoLabel{font-size:11px;line-height:16px;color:var(--dsw-alias-label-caption)}
 .dmt-cardDemoTile{width:40px;height:40px;flex:none;border-radius:10px;border:.5px solid var(--dsw-alias-border-l1);background:color-mix(in srgb, var(--dsw-static-neutral-00) 5%, transparent);display:grid;place-items:center;font-size:18px}
 .dmt-cardDemoTitles{display:flex;flex-direction:column;flex:1;min-width:0}
 .dmt-cardDemoTitle{font-size:13px;font-weight:500;line-height:20px}
@@ -1458,7 +1503,7 @@ window.__ModuleLoader__.load({
 
     /** 卡片覆盖样式表元素 + 检测到的卡片类名（null = 还没检测到，稍后重试）。 */
     let cardEl = null
-    let cardClass = undefined
+    let cardTargets = undefined
     let cardRetryTimer = null
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
@@ -1471,8 +1516,8 @@ window.__ModuleLoader__.load({
      */
     function syncCardSheet() {
       if (typeof document === 'undefined') return
-      if (cardClass === undefined) cardClass = detectCardClass()
-      const css = buildCardSheet(state, cardClass)
+      if (cardTargets === undefined) cardTargets = detectCardTargets()
+      const css = buildCardSheet(state, cardTargets)
       const wanted = state.enabled !== 'off' && shouldApply() && css !== ''
       if (!wanted) {
         if (cardEl !== null) {
@@ -1485,14 +1530,15 @@ window.__ModuleLoader__.load({
         }
         /* 用户挑了色但类名还没检测到 = pending（下面安排重试），否则 = off。 */
         const pickedColor = HEX_PATTERN.test(state.cardColor)
-        diag.card = !pickedColor ? 'off' : cardClass === null ? 'pending' : 'off'
+        const detected = Array.isArray(cardTargets) && cardTargets.length > 0
+        diag.card = !pickedColor ? 'off' : !detected ? 'pending' : 'off'
         /* 检测成功过就清零计数（下次用户再挑色时重试预算是满的）。 */
-        if (typeof cardClass === 'string') cardRetryCount = 0
+        if (detected) cardRetryCount = 0
         if (diag.card === 'pending' && cardRetryTimer === null && !disposed && cardRetryCount < CARD_RETRY_MAX) {
           cardRetryTimer = setTimeout(() => {
             cardRetryTimer = null
             cardRetryCount += 1
-            cardClass = undefined /* 强制重新检测 */
+            cardTargets = undefined /* 强制重新检测 */
             applyNow()
           }, 1000)
           if (cardRetryTimer && typeof cardRetryTimer.unref === 'function') cardRetryTimer.unref()
@@ -2309,8 +2355,12 @@ window.__ModuleLoader__.load({
       /* 预览容器的**局部**变量：草稿色只盖在预览子树上，全局令牌一个字节不动。
          注入的样式表都写成 var(--dmt-*, 兜底)，所以容器内联变量天然优先。 */
       const previewVars = { '--dmt-row-color': snapshot.rowColor, '--dmt-summary-color': snapshot.summaryColor }
-      /* 卡片头部：挑了色才覆盖预览的 --changes-fill；空串保持宿主默认观感。 */
-      if (HEX_PATTERN.test(snapshot.cardColor)) previewVars['--changes-fill'] = snapshot.cardColor
+      /* 卡片底色：挑了色才覆盖预览的 --changes-fill / --deliverable-fill；
+         空串保持宿主默认观感。两种卡片共用同一个颜色。 */
+      if (HEX_PATTERN.test(snapshot.cardColor)) {
+        previewVars['--changes-fill'] = snapshot.cardColor
+        previewVars['--deliverable-fill'] = snapshot.cardColor
+      }
       for (const slot of PROSE_COLOR_SLOTS) previewVars[slot.token] = proseEffective[slot.token].dark
 
       /* 草稿条：snapshot.draftFields 由 publish 合并进快照。 */
@@ -2653,12 +2703,12 @@ window.__ModuleLoader__.load({
             onChange: (event) => updateDraft({ summaryColor: event.target.value }),
           }),
         ),
-        /* 文件卡片头部横带（「已编辑 N 个文件」那种卡）。空 = 跟随宿主中性灰。 */
+        /* 文件卡片底色（「已编辑 N 个文件」和「交付文件」两种卡）。空 = 跟随宿主中性灰。 */
         h(
           Row,
           {
-            title: '文件卡片头部颜色',
-            hint: '「已编辑 N 个文件」卡片的头部横带；默认跟随宿主中性灰，挑色后覆盖（悬停色自动提亮一档）',
+            title: '文件卡片颜色',
+            hint: '「已编辑 N 个文件」卡片的头部横带，以及「交付文件」卡片的整张底色；默认跟随宿主中性灰，挑色后覆盖（悬停色自动提亮一档）',
           },
           h(
             'span',
@@ -2667,7 +2717,7 @@ window.__ModuleLoader__.load({
               className: 'dmt-colorInput',
               type: 'color',
               value: HEX_PATTERN.test(snapshot.cardColor) ? snapshot.cardColor : (SURFACES[snapshot.surface] || SURFACES.standard).layer2,
-              'aria-label': '文件卡片头部颜色',
+              'aria-label': '文件卡片颜色',
               onChange: (event) => updateDraft({ cardColor: event.target.value }),
             }),
             HEX_PATTERN.test(snapshot.cardColor)
@@ -2677,7 +2727,7 @@ window.__ModuleLoader__.load({
                     type: 'button',
                     className: 'dmt-slotReset',
                     title: '恢复跟随默认',
-                    'aria-label': '重置文件卡片头部颜色',
+                    'aria-label': '重置文件卡片颜色',
                     onClick: () => updateDraft({ cardColor: '' }),
                   },
                   '↺',
@@ -2714,6 +2764,19 @@ window.__ModuleLoader__.load({
               { className: 'dmt-cardDemoRow' },
               h('span', { className: 'dmt-cardDemoPath' }, '~/.dsh/plugins/dsh-colorlab/client.js'),
               h('span', { className: 'dmt-cardDemoCounts' }, h('span', { className: 'dmt-cardDemoAdded' }, '+61 '), h('span', { className: 'dmt-cardDemoDeleted' }, '-12')),
+            ),
+          ),
+          /* 交付文件卡片：宿主 Deliverables 组件，没有横带，整张卡片底色就是 --deliverable-fill。 */
+          h('div', { className: 'dmt-cardDemoLabel' }, '交付文件'),
+          h(
+            'div',
+            { className: 'dmt-deliverDemo' },
+            h('span', { className: 'dmt-deliverDemoIcon' }, '📄'),
+            h(
+              'span',
+              { className: 'dmt-deliverDemoBody' },
+              h('span', { className: 'dmt-deliverDemoName' }, 'report.md'),
+              h('span', { className: 'dmt-deliverDemoDesc' }, 'Markdown · 12 KB'),
             ),
           ),
         ),
@@ -3208,7 +3271,9 @@ window.__ModuleLoader__.load({
         PROSE_COLOR_KEYS,
         parseProseColors,
         CARD_SHEET_ID,
+        CARD_TARGETS,
         buildCardSheet,
+        detectCardTargets,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
