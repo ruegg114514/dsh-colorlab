@@ -162,7 +162,7 @@ function main() {
 
   check(pageComponent !== null, '设置页组件已注册到 settings.section')
   check(created.length === 1 && created[0].id === 'mariana-theme', '设置页 id = mariana-theme', created[0] ? created[0].id : 'n/a')
-  check(created[0] && created[0].label === 'Mariana 主题', '设置页 label = Mariana 主题')
+  check(created[0] && created[0].label === 'ColorLab', '设置页 label = ColorLab', created[0] ? created[0].label : 'n/a')
   check(created[0] && typeof created[0].order === 'number', '设置页有排序值', created[0] ? String(created[0].order) : 'n/a')
 
   if (pageComponent === null) {
@@ -196,7 +196,7 @@ function main() {
 
   check(nodes.length > 30, '渲染出足够多的节点', String(nodes.length))
   check((byClass.get('dmt-root') || 0) === 1, '根节点 .dmt-root 存在')
-  /* 五个区块标题：Mariana 配色方案 / 正文颜色 / 过程行高亮 / 自定义配色 / 配色方案 */
+  /* 五个区块标题：ColorLab 配色方案 / 正文颜色 / 过程行高亮 / 自定义配色 / 配色方案 */
   check((byClass.get('dmt-title') || 0) === 5, '五个区块标题', String(byClass.get('dmt-title') || 0))
   check((byClass.get('dmt-status') || 0) === 1, '状态条存在')
   check((byClass.get('dmt-chip') || 0) >= 4, '状态芯片 ≥ 4 个', String(byClass.get('dmt-chip') || 0))
