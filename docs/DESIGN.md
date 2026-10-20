@@ -431,10 +431,21 @@ arrows / delimiters）里抽出 **240 个**命令名进了 `MATH_BUILTINS`。表
 数学里只剩块级令牌覆盖，整片紫（而花括号是独立 span，所以它反而是对的，
 表现为「有的好了、只有 `$` 里全紫」）。
 
-反斜杠和名字挤在同一个文本节点里，CSS 没法只染前一个字符，所以额外挂一个
-`dmt-tx-lead` 类，用 **`::first-letter`** 单独把反斜杠染青 —— 这条规则依赖
-`display:inline-block`（`::first-letter` 只对块容器生效）。inline-block 元素内部
-仍可正常换行，不会撑破布局。
+### 两处**做不到**的（已试过并回退，别再试）
+
+**① 反斜杠没法单独染青。** 它和命令名在同一个文本节点里，CSS 没有「只染第一个
+字符」的选择器。试过 `::first-letter` + `display:inline-block`：**CSS 规范里
+`::first-letter` 包含「第一个字母**及其前面的标点**」**，而 `\chapter` 里 `c` 才是
+字母、`\` 是它前面的标点 → 实际染成 `\c` 两个字符，看起来比不做更怪。已回退。
+
+**② 自定义宏后面的 `{` 没法染青。** 真机实测：`\begin{` 是 `\begin` + `{` **两个**
+span（所以那个 `{` 是青的），但 `\zh{` 被 Shiki 合成**一个** token —— `{` 在 DOM 里
+根本不存在，无从上色。Sublime 里所有 `{` 都是 `punctuation.definition` → 青，这里
+只能跟随命令色。
+
+**要彻底解决只剩一条路**：改写 Shiki 生成的 DOM（把一个 token 拆成两个 span）。
+但那会动到 React 管理的文本节点 —— React 更新时对文本节点写 `nodeValue`，
+我们拆开之后它的引用就失效，**流式输出时正文会不更新**。风险远大于收益，不做。
 
 **为什么要守卫、为什么用「探针」而不是签名**：Shiki 换主题或 React 重渲染会换掉
 整棵子树，class 全丢。为了不每次 DOM 变动都遍历整块，需要一个「还贴着吗」的判断。
@@ -756,7 +767,8 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] **控制台干净**：重启后 F12 打开 Console，没有 `[dsh-colorlab]` 开头的报错
       （尤其不能有 `RangeError: Maximum call stack size exceeded` —— 那是 `applyNow`
       与 `theme/change` 互相递归的信号，见上文防重入那一节）
-- [ ] **LaTeX 对标 Sublime**：`\` 反斜杠是**青**、命令名是**蓝**（`\begin`/`\label` 是紫）
-- [ ] **LaTeX 对标 Sublime**：`{` `}` 与 `$` 是**青**
-- [ ] **LaTeX 对标 Sublime**：数学命令 `\hbar` `\nu` `\oint` 是**紫**，自定义宏 `\dd` 是**蓝**
-- [ ] **LaTeX 对标 Sublime**：数学数字是**橙**、`=` `+` 是**橙红**、标识符 `E` `h` 是**白斜体**
+- [ ] **LaTeX 对标 Sublime**：`{}` 是**青**（`\begin{`/`\section{` 这种独立 span 的花括号）
+- [ ] **LaTeX 对标 Sublime**：数学命令 `\hbar` `\nu` `\oint` 是**紫**，自定义宏 `\cH` `\dd` 是**蓝**
+- [ ] **LaTeX 对标 Sublime**：数学 `$` 是**青**、数字是**橙**、`=` `+` 是**橙红**、标识符 `E` `h` 是**白斜体**
+- [ ] **已知做不到**：命令的反斜杠跟随命令色（Shiki 把 `\` 和名字合成一个 token）；
+      `\zh{` 这种自定义宏的花括号同理（也合成了一个 token）。这两处不是 bug，见上文「两处做不到的」
