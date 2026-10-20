@@ -329,171 +329,91 @@ hex 每补全一次合法值就触发，全走这条路就是"输入一个字母
 （实测：以 Sublime Mariana 打开 Python 文档，`print`/`len`/`enumerate`/`open`
 都是蓝色；`import`/`for` 是紫色（keyword）；`'Pages:'` 是绿色（string）。）
 
-### LaTeX：把两边的 scope 表拉平对照
+### LaTeX：**整份移植 Sublime 的语法**，不再自己猜规则
 
-**不要再靠截图猜颜色。** 正确做法是把「Sublime 语法给的 scope → Mariana 的色」
-和「Shiki 语法给的 scope → 令牌」两张表并排对出来。下面是照这样得到的表
-（数据源：`LaTeX.sublime-syntax`、`TeX.sublime-syntax`、
-`Mariana.sublime-color-scheme`、Shiki 的 `latex-B2nUCzCX.js` 语法 + 主题 19 条规则）。
+前面几轮走过弯路，教训值得留着：**不要靠"按 token 猜颜色"去逼近 Sublime**。
+宿主用的 Shiki 主题会把 scope 归并成 9 个令牌，插件只能改令牌的**值**、
+改不了**映射**；更要命的是 **Shiki 会按"解析后的颜色"合并相邻 token** ——
+数学里大量 scope 在主题里没有规则 → 全落到同一个 `var(--shiki-foreground)`
+→ **整段数学糊成一个 span**。在那上面怎么做都不可能对。
 
-| LaTeX 构造 | Sublime scope | Mariana 色 | Shiki scope | Shiki 令牌 |
-|---|---|---|---|---|
-| `\bi` `\zh` 命令名 | `support.function.general.latex` | 蓝 `#6699CC` | 同 | `function` ✓ |
-| `\section` `\chapter` | `support.function.section.latex` | 蓝 | 同 | `function` ✓ |
-| `\begin` `\label` `\ref` | `keyword.control.*.latex` | 紫 | 同 | `keyword` ✓ |
-| **`\` 反斜杠** | `punctuation.definition.backslash` | **青 `#5FB4B4`** | `punctuation.definition.function.tex` | **无规则 → 继承** ✗ |
-| **`{` `}`** | `punctuation.definition.arguments` | **青** | `punctuation.definition.arguments.*` | `punctuation`（灰） ✗ |
-| **`$` 数学分隔符** | `punctuation.definition.string.begin/end` | **青** | `punctuation.section.embedded.*.math` | **无规则 → 继承** ✗ |
-| **数学命令 `\nu` `\hbar`** | `keyword.other.math.greek/symbol/large-operator` | **紫 `#C695C6`** | `constant.character.math.tex` | **无规则 → 继承** ✗ |
-| 数学数字 | `constant.numeric` | 橙 | `constant.numeric.math.tex` | `constant` ✓ |
-| 数学标识符 `E` `h` `p` | `variable.other.math` | 无色（正文色） | 无规则 | 继承 ✓ |
-
-**发现两处结构性偏差：**
-
-1. **整个 `$…$` 块被染成橙**。Shiki 的 LaTeX 语法给数学块套了
-   `support.class.math.block.latex` 这个 meta scope，而主题里第 8 条规则是
-   `["constant.numeric", …, "support"] → token-constant` —— `support` 一个前缀
-   就把**块内所有 token** 归到了 `constant`（橙）。Sublime 则是块内逐 token 上色
-   （紫命令、白标识符、橙数字）。
-2. **括号 / 反斜杠 / `$` 落到灰或无色**。它们本该是 `punctuation.definition`（青），
-   但 Shiki 的主题只把 `punctuation.definition.arguments` / `.dict` / `separator`
-   归到 `punctuation`，其余 `punctuation.definition.*` 与
-   `punctuation.section.embedded.*` **没有任何规则** → 继承正文色。
-
-**修法：只对 LaTeX 块覆盖两个令牌。**
-
-```css
-pre.dmt-latex{
-  --shiki-token-constant:#D8DEE9;    /* 糊成一段的数学内容落「正文色」，见下 */
-  --shiki-token-punctuation:#5FB4B4; /* punctuation.definition → 青 */
-}
-```
-
-CSS 自定义属性会沿 DOM 继承，Shiki 的 token span 用的是
-`color: var(--shiki-token-*)`，所以在 `pre` 上重定义就能只影响这一块。
-
-**为什么必须按块、不能全局**：全局把 `constant` 改掉，会让 Python / JS 的数字
-也跟着变，而 Sublime 里 `constant.numeric` 是橙。只有 LaTeX 需要这个偏移。
-
-### ⚠️ 最关键的机制：Shiki 按「解析后的颜色」合并 token
-
-这条决定了这个插件能做到什么、做不到什么，**别再按「按 token 上色」的思路往上加**：
-
-> 相邻 token 如果最终颜色（`color: var(--shiki-token-*)` 字符串）相同，
-> Shiki 会把它们**合并成一个 span**。
-
-数学里大量 scope（`constant.character.math.tex`、`constant.other.math.tex`、
-`punctuation.math.*` …）在主题的 19 条规则里**都没有对应项** → 全部落到同一个
-`var(--shiki-foreground)` → **整段数学被合成一个 span**。
-
-真机实测的三个后果：
-
-- `\hH` 能单独成段（`support.function` → 蓝，颜色不同）
-- 内置命令能单独成段（`keyword` → 紫，颜色不同）
-- **`=-\frac{\hbar^2}{2m}\lap-\frac{e^2}{r}` 是同一个 span** —— 里面数字、运算符、
-  括号全糊在一起，span 级判类无从下手
-
-而主题的 **scope→令牌映射在宿主手里**（宿主建 highlighter 时写死
-`theme: 'css-variables'`），插件只能覆盖**令牌的值**，改不了**映射**。
-所以**拆不开** —— 这不是没写对，是架构限制。
-
-既然糊成一段的那部分在 Sublime 里主要是**白色标识符/正文**
-（`variable.other.math` 无匹配规则 → 全局前景），把 `constant` 取成前景色
-比取紫色接近得多：内置命令仍紫、自定义宏仍蓝、其余落白。裸数字/运算符/括号
-**能**单独成段的，由 span 级类覆盖成橙/橙红/青。
-
-**块怎么认出来**：宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，
-**pre 上没有语言名**（`codeToHtml` 只加 `class="shiki <themeName>"`；宿主也没把
-lang 写进 DOM）。所以按内容特征判：`\begin{env}` / `\end{env}` /
-`\documentclass|usepackage|section|label|ref|cite` / `$…\cmd…$` /
-至少两个 `\cmd{`。代码块是滚动时才渲染的，所以用 `MutationObserver`
-（只听 `childList`，改 class 不会自激）合帧重扫。
-
-**仍然做不到的**（令牌模型的天花板）：`\` 反斜杠、`$` 分隔符在 Shiki 的主题里
-**没有任何规则**（继承正文色）；数学块内「标识符（白）／运算符（橙红）／命令（紫）」
-被归成同一个令牌。改 CSS 变量到不了这些地方。
-
-### span 级后处理：把令牌模型盖不到的部分补上
-
-所以在令牌覆盖之外，LaTeX 块还会走一遍**span 级后处理**：按文档顺序遍历 Shiki
-生成的叶子 span，维护「是否在数学模式」（`$` 开关，`\$` 转义不切换），按文本判类
-并打 class；CSS 用 `!important` 盖过 Shiki 写在内联 `style` 上的
-`color: var(--shiki-token-*)`（**内联样式优先于普通类选择器，不加 `!important`
-会被无视** —— 这是这一步唯一必须用 `!important` 的地方）。
-
-判类规则与对应的 Mariana 色（全部取自方案文件，含此前手抄误差的修正：
-`hsl(180,36%,54%)` 精确是 `#5FB4B4`，不是 `#5FB3B3`）：
-
-| span 文本 | Sublime scope | class | 颜色 |
-|---|---|---|---|
-| `\` | `punctuation.definition.backslash` | `dmt-tx-bs` | `#5FB4B4` |
-| `{` `}` | `punctuation.definition.arguments` | `dmt-tx-brace` | `#5FB4B4` |
-| `$` | `punctuation.definition.string` | `dmt-tx-mdelim` | `#5FB4B4` |
-| `\hbar` `\nu`（数学内置） | `keyword.other.math.*` | `dmt-tx-mcmd` | `#C695C6` |
-| `\begin` `\label`（文本关键字） | `keyword.control.*` | `dmt-tx-kwcmd` | `#C695C6` |
-| `\dd`（自定义数学宏） | `support.function.math` | `dmt-tx-mcustom` | `#6699CC` |
-| 数字 | `constant.numeric` | `dmt-tx-num` | `#F9AE58` |
-| `=` `<` `+` `-` | `keyword.operator` | `dmt-tx-op` | `#F97B58` |
-| `_` `^` | `punctuation.separator` | `dmt-tx-sep` | `#A6ACB9` |
-| `(` `)` `[` `]` | `punctuation.section` | `dmt-tx-paren` | `#FFFFFF` |
-| `E` `h` `p` | `variable.other.math` | `dmt-tx-id` | `#D8DEE9` + 斜体 |
-
-**「数学内置命令」是查表判定的**：从 `TeX.sublime-syntax` 的九个变量
-（greeks / mathfun / relations / largeops / binops / symbols / accents /
-arrows / delimiters）里抽出 **240 个**命令名进了 `MATH_BUILTINS`。表内的走紫
-（`keyword.other.math.*`），表外的（用户自定义宏如 `\dd`）走蓝
-（`support.function.math`）—— 这个区分做不了只能靠名单。
-
-**⚠️ Shiki 把反斜杠和命令名合成了同一个 span。** 真机把 DOM 打出来才看清：
+所以 LaTeX 走独立通道：**照抄 Sublime 的语法与配色，自己分词、自己上色。**
 
 ```
-0  "\chapter"   cls=-      rgb(102,153,204)  color:var(--shiki-token-function)
-1  "{"          cls=dmt-tx-brace  rgb(95,180,180)  color:var(--shiki-token-punctuation)
-4  "\label"     cls=-      rgb(197,148,197)  color:var(--shiki-token-keyword)
-21 "\ket{\psi}" cls=-      rgb(198,148,198)  color:var(--shiki-token-constant)
+LaTeX.sublime-syntax ─┐
+                      ├─ tools/build-tex-grammar.py ─→ tools/tex-grammar.json
+TeX.sublime-syntax ───┘        （变量替换 / extends 合并 / Oniguruma→JS）
+
+Mariana.sublime-color-scheme ─ tools/build-mariana-colors.py ─→ tools/mariana-colors.json
+
+tools/tex-tokenizer.mjs  ← mini TextMate 引擎，跑上面那份语法
+tools/tex-colors.mjs     ← 选择器匹配（`,` 并列 / 空格后代 / `-` 排除 / `|` 或）
+        └─ tools/embed-tex-assets.mjs ─→ 注入 client.js 的生成区
 ```
 
-`\chapter` 是**一个** token（不是 `\` + `chapter` 两段）。所以判命令必须按**前缀**
-`^\\[A-Za-z@]`，不能等「前一段是反斜杠」—— 第一版按后者写，结果**所有命令都判不到**，
-数学里只剩块级令牌覆盖，整片紫（而花括号是独立 span，所以它反而是对的，
-表现为「有的好了、只有 `$` 里全紫」）。
+**`tools/` 是唯一真源，`client.js` 里的那段是生成物。** 改了 tools/ 要跑
+`node tools/embed-tex-assets.mjs`；测试会核对生成区与真源一致，忘了重新生成会红。
 
-### 两处**做不到**的（已试过并回退，别再试）
+编译期要处理的几件事（都有专门的注释）：
 
-**① 反斜杠没法单独染青。** 它和命令名在同一个文本节点里，CSS 没有「只染第一个
-字符」的选择器。试过 `::first-letter` + `display:inline-block`：**CSS 规范里
-`::first-letter` 包含「第一个字母**及其前面的标点**」**，而 `\chapter` 里 `c` 才是
-字母、`\` 是它前面的标点 → 实际染成 `\c` 两个字符，看起来比不做更怪。已回退。
+| 事项 | 说明 |
+|---|---|
+| 变量替换 | LaTeX `extends` TeX，所以**变量也要继承**（`{{letter}}`/`{{cmdname}}` 定义在 TeX 侧） |
+| `meta_prepend` / `meta_append` | context 首项是这两个指令时，表示**前置/追加**到继承来的同名 context，而不是覆盖。丢掉它会让 LaTeX 的 `math-content` 整个替换掉 TeX 的 → **数学着色规则一条不剩**，`$` 也匹配不上 |
+| Oniguruma → JS 正则 | `(?x)` 扩展模式、POSIX 字符类 `[[:alpha:]]`、原子组、占有量词 |
+| 正则标志 | `d`（拿捕获组精确下标）、`y`（锚定 lastIndex）、**`m`（`^` 按行 —— Sublime 的 `^` 就是行首）** |
 
-**② 自定义宏后面的 `{` 没法染青。** 真机实测：`\begin{` 是 `\begin` + `{` **两个**
-span（所以那个 `{` 是青的），但 `\zh{` 被 Shiki 合成**一个** token —— `{` 在 DOM 里
-根本不存在，无从上色。Sublime 里所有 `{` 都是 `punctuation.definition` → 青，这里
-只能跟随命令色。
+引擎侧踩过的坑：
 
-**要彻底解决只剩一条路**：改写 Shiki 生成的 DOM（把一个 token 拆成两个 span）。
-但那会动到 React 管理的文本节点 —— React 更新时对文本节点写 `nodeValue`，
-我们拆开之后它的引用就失效，**流式输出时正文会不更新**。风险远大于收益，不做。
+- `m.indices[i]` 是**绝对**下标，不是相对匹配起点 —— 当成相对用会"pos=0 时对、
+  往后每段都错位"。
+- 捕获组会**嵌套**：`sections` 规则里捕获 2（反斜杠 `\`）嵌在捕获 1（`\chapter`）
+  内部。顺序输出会让内层和外层重叠，**反斜杠被打印两遍**。正确做法是按边界切段、
+  每段取"覆盖它的所有捕获组"，外层在前内层在后。
+- 颜色特异性：**先看命中位置在 scope 栈里的深度**，再看选择器长度，都相同才轮到
+  "后写者胜"。这是反斜杠能单独取到青色的原因 —— 它的栈是
+  `[… support.function.general.latex, punctuation.definition.backslash.latex]`，
+  两条规则的路径长度都是 1，但 `punctuation.definition` 命中更深的那层。
 
-**为什么要守卫、为什么用「探针」而不是签名**：Shiki 换主题或 React 重渲染会换掉
-整棵子树，class 全丢。为了不每次 DOM 变动都遍历整块，需要一个「还贴着吗」的判断。
+**于是这些以前做不到的现在都对了**（都有测试锁着）：
 
-第一版用「子元素数 + 文本长度」当签名 —— **这是错的**：重渲染之后这两个数**都不变**，
-于是永远判定「没变、跳过」，类再也补不回来。真机表现就是**同一份文档里
-「有的花括号是青的、有的是白的」**（渲染早的块类还在、晚的块丢了）。
+| 元素 | 结果 |
+|---|---|
+| 反斜杠 | 独立成段 → **青** `#5FB4B4` |
+| 命令名 | `support.function.*` → **蓝斜**；`\begin`/`\label` 等 `keyword.*` → **紫** |
+| **所有花括号** | `punctuation.definition.group.brace.*` → **青**（`\zh{` 这种自定义宏也不例外） |
+| `$` | `punctuation.definition.string.*` → **青** |
+| 数学内置命令 | `keyword.other.math.*` → **紫** |
+| 自定义数学宏 | `support.function.math` → **蓝斜** |
+| 数字 | `constant.numeric.value` → **橙** |
+| `=` `+` `-` | `keyword.operator.*` → **橙红** `#F97B58` |
+| 标识符 | `variable.other.math` → **正文色 + 斜体** |
+| 注释 | `comment.line.percentage` → blue6 灰 |
 
-现在改用**探针**：记住第一个被打类的 span 及其文本；下次扫描时只有
-「探针还连着 + `className` 里还有我们的类 + 文本没变」才认为整块仍然贴好，
-否则整块重跑。重渲染把旧节点摘掉（`isConnected` 变 false）或换掉类，都会让探针失效。
+### 渲染：**一个宿主的节点都不动**
 
-**已知残留**（Sublime 有、这里没做）：`\begin{equation}` 这类**环境形式的数学**
-不切换数学模式（只认 `$`），所以环境体内的标识符不会被当数学处理。
+宿主的代码块有两条渲染路径：
 
-> ⚠️ **两次踩同一个坑的教训**：截图取色不能用「最饱和像素」—— ClearType
-> 子像素渲染会给蓝字配红/绿边纹，采出来是青的。要用**众数**（笔画主体色），
-> 或者干脆**别取色，去读语法与配色方案的 scope 表**。`\bi` 实际是
-> 「`\` 青 + `bi` 蓝」两段拼的，任何整体取色都会误导。
+1. **流式**：React 自己管 `<pre><code>`，它持有 text 节点的引用；
+2. **静态**：`<div dangerouslySetInnerHTML={{__html: Shiki输出}}>`（文件预览走这条）。
 
----
+第 1 条里改写 DOM 会让 React 更新到已脱离的节点上，**流式输出直接卡住**。
+所以做法是「兄弟层」：
+
+```
+<pre class="shiki dmt-latex">        ← 只加一个类
+  <code class="dmt-tex-hidden">…</code>   ← 宿主原本的，display:none，React 照常更新它
+  <code class="dmt-tex-layer">…</code>    ← 我们渲染的，正常流布局，占同样的位置
+</pre>
+```
+
+- 宿主节点**原封不动**（测试断言其 `textContent` 不变）；
+- 我们的层是**新加的兄弟**，React 不管它，所以可以放心 `innerHTML`；
+- 行号是 `.line` 上的 CSS 计数器画的，所以我们的层同样按
+  `<span class="line">` 分行、行间放换行文本节点；
+- 宿主内容一变（流式追加/换主题重渲染），观察器发现原文变了就重画我们的层。
+  **判据用"原文内容"** —— 早先用"子元素数 + 文本长度"，重渲染后这两个数不变，
+  于是永远跳过、样式补不回来（表现为"有的正常、有的是白的"）。
 
 ## Markdown 的细节着色
 
@@ -794,8 +714,9 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] **控制台干净**：重启后 F12 打开 Console，没有 `[dsh-colorlab]` 开头的报错
       （尤其不能有 `RangeError: Maximum call stack size exceeded` —— 那是 `applyNow`
       与 `theme/change` 互相递归的信号，见上文防重入那一节）
-- [ ] **LaTeX 对标 Sublime**：`{}` 是**青**（`\begin{`/`\section{` 这种独立 span 的花括号）
-- [ ] **LaTeX 对标 Sublime**：数学命令 `\hbar` `\nu` `\oint` 是**紫**，自定义宏 `\cH` `\dd` 是**蓝**
-- [ ] **LaTeX 对标 Sublime**：数学 `$` 是**青**、数字是**橙**、`=` `+` 是**橙红**、标识符 `E` `h` 是**白斜体**
-- [ ] **已知做不到**：命令的反斜杠跟随命令色（Shiki 把 `\` 和名字合成一个 token）；
-      `\zh{` 这种自定义宏的花括号同理（也合成了一个 token）。这两处不是 bug，见上文「两处做不到的」
+- [ ] **LaTeX 对标 Sublime（整份语法移植，逐字符核对）**：
+      - [ ] `\` 反斜杠**独立成青**，命令名蓝（`\begin`/`\label` 紫）
+      - [ ] `{}` **全部**青，包括 `\zh{` 这种自定义宏（以前这里会白掉）
+      - [ ] `$` 青、数学内置命令（`\hbar` `\nu` `\oint`）紫、自定义宏（`\cH` `\dd`）蓝斜
+      - [ ] 数字橙、`=` `+` `-` 橙红、标识符白斜体、注释灰
+      - [ ] 行号、横向滚动、复制按钮仍正常（渲染层是兄弟节点，宿主的 DOM 一个没动）
