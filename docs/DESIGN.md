@@ -85,15 +85,37 @@ Shiki 的 `css-variables` 主题还引用 `--shiki-token-inserted` / `-deleted` 
 Host 半体（`index.js`）在 `webserver/index-inject` 里补一条：
 
 ```css
-body[data-ds-dark-theme]{background-color:#343D46;--dsh-boot-bg:#343D46}
+html:not([data-dsh-colorlab-off]) body[data-ds-dark-theme]{
+  background-color:#343D46;--dsh-boot-bg:#343D46
+}
 ```
 
-特异性（0,1,1）压过宿主的 `body`（0,0,1），所以不依赖注入顺序；
+特异性压过宿主的 `body`（0,0,1），所以不依赖注入顺序；
 且只在深色外观下命中，用户停在浅色时这条样式完全不生效。
 
 **为什么要 Host 侧做**：首屏那段 CSS 由 `@deepseek-ai/dsh-client-ui-theme` 的 Host 半体
 注入（`{prepend:true}`），浏览器插件那时还没加载，拿不到这段时机。
 不用 `!important` —— 提高特异性就够了，也避免压掉后续客户端写下的 inline 值。
+
+### 为什么外面套着 `html:not([data-dsh-colorlab-off])`
+
+**这是一个真实 bug 的修复**：用户把「启用」关掉后，高亮消失了，但**界面底色没回来**
+（深浅两种外观都遇到）。
+
+根因：这条样式是经 `webserver/index-inject` **烤进 HTML** 的，页面加载后**撤不掉** ——
+而「启用」是客户端运行时的开关，改完并不刷新页面。所以关掉开关后，客户端自己的四张
+样式表和令牌叠层都撤干净了，`body` 的画布色却仍然是 Mariana 的 `#343D46`。
+
+**修法：给这条烤死的样式配一个总闸。**
+
+- 规则外面套 `html:not([data-dsh-colorlab-off])`；
+- 页面刚加载时 `html` 上**没有**这个属性 → 首屏色照常生效（不闪黑）；
+- 客户端 `syncDisabledMarker()` 在每次 `applyNow()` 里维护它：关掉「启用」就补上属性
+  （规则立刻失效），重新打开就摘掉；
+- 插件**卸载**时也在清理块里补上属性 —— 那之后客户端不再运行，只能在这里关。
+
+两个半体跑在不同运行时、不能互相 import，所以属性名在 `index.js`（`DISABLED_ATTR`）
+和 `client.js`（同名常量）各写一份，两边都有测试盯着字面量一致。
 
 ## 对比度
 
@@ -390,6 +412,50 @@ if (!text.includes(target.varName)) continue
 **右端**元素（数量不多），再沿祖先链检查属性，代价是可控的。若要进一步优化，
 可以像 `detectCardTargets` 那样在运行时解析出真实哈希类再拼精确选择器 ——
 但那会让"宿主换模块名就失效"的风险回来，暂不做。
+
+### 五、profile 的 lockfile 不同步（实测 **~30 秒**，比前四条都大）
+
+**这是最容易被忽略的一条，而且不在插件代码里。**
+
+DSH 启动时会跑 pnpm 来对齐 profile 的依赖（`dsh-app-boot` 里的
+`reconcileProfilePlugins`，注释写着 "inventory captured **before pnpm**"）。
+只要 profile 的 `package.json` 比 `pnpm-lock.yaml` 新，pnpm 就会**重新解析整棵依赖树**
+—— 包括 `github:` 形式的 tarball 依赖，都要联网取元数据。网络一慢，启动就多等半分钟。
+
+装/改插件恰好会让两者不同步（往 `dependencies` 里加了一条）。判据很好拿：
+
+```sh
+node <runtime>/dependencies/pnpm/bin/pnpm.mjs install --frozen-lockfile --offline
+```
+
+不同步时它会明确报出来：
+
+```
+[ERR_PNPM_OUTDATED_LOCKFILE] pnpm-lock.yaml is not up to date with package.json
+  Failure reason:
+  specifiers in the lockfile don't match specifiers in package.json:
+* 1 dependencies were added: dsh-colorlab@link:C:/Users/15623/.dsh/plugins/dsh-colorlab
+```
+
+**修法**：让 lockfile 与 package.json 对齐。`link:` 依赖在 lockfile 里**只需要一条
+importer 记录**（不进 `packages`/`snapshots`，和已有的三个 link 依赖同形）：
+
+```yaml
+      dsh-colorlab:
+        specifier: link:C:/Users/15623/.dsh/plugins/dsh-colorlab
+        version: link:../../plugins/dsh-colorlab
+```
+
+对齐之后同样的命令变成：
+
+```
+Lockfile is up to date, resolution step is skipped
+Already up to date
+Done in 772ms
+```
+
+**给用户的提示**：用 `dsh plugin add` 安装不会踩这个坑（安装器会一起更新 lockfile）；
+手工把依赖写进 profile 的 `package.json` 时，记得跟一次 `pnpm install`。
 
 ---
 
