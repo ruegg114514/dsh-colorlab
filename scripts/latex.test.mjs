@@ -260,7 +260,7 @@ console.log('  C. 应用后的 DOM 效果')
 
 console.log('  D. span 级后处理（补齐令牌模型盖不到的部分）')
 
-const { TX_CLASS, applyLatexSpans, MATH_BUILTINS, TEXT_KEYWORD_COMMANDS, LATEX_COLORS } = test
+const { TX_CLASS, applyLatexSpans, latexSpansIntact, MATH_BUILTINS, TEXT_KEYWORD_COMMANDS, LATEX_COLORS } = test
 
 check(MATH_BUILTINS.has('hbar') && MATH_BUILTINS.has('nu') && MATH_BUILTINS.has('oint'),
   '数学内置表含 hbar / nu / oint', String(MATH_BUILTINS.size) + ' 项')
@@ -355,6 +355,48 @@ check(LATEX_COLORS.operatorRed === '#F97B58', '运算符红 = #F97B58（var(red2
 const classRules = buildLatexSheet().split('\n').slice(1)
 check(classRules.length >= 8, '样式表含 8 组以上的类规则', String(classRules.length) + ' 组')
 check(classRules.every((r) => r.includes('!important')), '每组类规则都带 !important')
+
+/* ---- 重渲染：类被抹掉后必须能补回来（真机上「有的正常、有的是白的」就是这个）---- */
+{
+  const { pre, spans } = makeBlock(['\\', 'bi', '{', 'x', '}', '$', 'E', '$'])
+  /* 给叶子 span 补上真实 DOM 会有的成员，让探针能判定 */
+  for (const s of spans) {
+    s.isConnected = true
+    s.parentNode = pre
+    let cn = ''
+    Object.defineProperty(s, 'className', {
+      get() {
+        return [...s._classes].join(' ')
+      },
+      set(v) {
+        cn = v
+      },
+    })
+  }
+  const n1 = applyLatexSpans(pre)
+  check(n1 > 0, '首次遍历打上类', String(n1) + ' 个')
+  check(latexSpansIntact(pre) === true, '打完之后探针判定「仍然有效」')
+
+  /* 模拟 Shiki 重渲染：旧子树被摘掉（isConnected=false / parentNode=null），
+     换一批全新的 span，类全没了（但文本长度一模一样）。 */
+  for (const s of spans) {
+    s.isConnected = false
+    s.parentNode = null
+  }
+  const fresh = makeBlock(['\\', 'bi', '{', 'x', '}', '$', 'E', '$'])
+  for (const s of fresh.spans) {
+    s.isConnected = true
+    s.parentNode = fresh.pre
+    Object.defineProperty(s, 'className', { get: () => [...s._classes].join(' '), set: () => {} })
+  }
+  pre.querySelectorAll = (sel) => (sel === 'span' ? fresh.spans : [])
+  check(latexSpansIntact(pre) === false, '重渲染后（旧探针已脱离）判定「需要重跑」')
+  const n2 = applyLatexSpans(pre)
+  check(n2 > 0, '重跑后类补回来了', String(n2) + ' 个')
+  check(fresh.spans[0]._classes.has(TX_CLASS.backslash), '重跑后反斜杠又是青的')
+  check(fresh.spans[2]._classes.has(TX_CLASS.brace), '重跑后花括号又是青的')
+  check(fresh.spans[6]._classes.has(TX_CLASS.ident), '重跑后数学标识符被重新判类')
+}
 
 console.log('')
 if (failures > 0) {
