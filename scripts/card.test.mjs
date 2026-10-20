@@ -83,10 +83,17 @@ function extractModuleCss(source, moduleName) {
 const asarText = readFileSync(asarPath, 'latin1')
 const changedFilesCss = extractModuleCss(asarText, 'ChangedFiles.module.css')
 const deliverablesCss = extractModuleCss(asarText, 'Deliverables.module.css')
+/* 「计划」卡片（ui-plan）—— 它有自己的 `--plan-card-fill`，早先漏掉了它，
+   于是「计划」卡片一直是宿主的中性灰。 */
+const planPreviewCss = extractModuleCss(asarText, 'PlanPreview.module.css')
+const scheduleCardCss = extractModuleCss(asarText, 'ScheduleCreateCard.module.css')
 
 check(changedFilesCss !== null, '从 app.asar 抠出 ChangedFiles.module.css')
 check(deliverablesCss !== null, '从 app.asar 抠出 Deliverables.module.css')
-if (changedFilesCss === null || deliverablesCss === null) {
+check(planPreviewCss !== null, '从 app.asar 抠出 PlanPreview.module.css')
+check(scheduleCardCss !== null, '从 app.asar 抠出 ScheduleCreateCard.module.css')
+if (changedFilesCss === null || deliverablesCss === null
+  || planPreviewCss === null || scheduleCardCss === null) {
   process.exit(1)
 }
 
@@ -134,6 +141,8 @@ function toCssomRules(cssText) {
 const sheets = [
   { cssRules: toCssomRules(changedFilesCss) },
   { cssRules: toCssomRules(deliverablesCss) },
+  { cssRules: toCssomRules(planPreviewCss) },
+  { cssRules: toCssomRules(scheduleCardCss) },
 ]
 
 /* ------------------------------------------------------------------ *
@@ -183,13 +192,15 @@ if (test === undefined) process.exit(1)
 const { detectCardTargets, CARD_TARGETS, buildCardSheet } = test
 
 check(typeof detectCardTargets === 'function', 'detectCardTargets 已导出')
-check(Array.isArray(CARD_TARGETS) && CARD_TARGETS.length === 2, 'CARD_TARGETS 覆盖两种卡片组件', String(CARD_TARGETS && CARD_TARGETS.length))
+check(Array.isArray(CARD_TARGETS) && CARD_TARGETS.length === 4,
+  'CARD_TARGETS 覆盖四种卡片组件（改动文件 / 交付文件 / 计划 / 排程）',
+  String(CARD_TARGETS && CARD_TARGETS.length))
 
 /* document 替身已在加载时挂上（闭包捕获的是加载时的 document）。 */
 const found = detectCardTargets()
 
 console.log('  · 检测到：', JSON.stringify(found))
-check(found.length === 2, '同时检测到两种卡片组件', `${found.length} 个`)
+check(found.length === 4, '四种卡片组件的变量都检测到了', `${found.length} 个`)
 
 const changesHit = found.find((entry) => entry.varName === '--changes-fill')
 const deliverHit = found.find((entry) => entry.varName === '--deliverable-fill')
