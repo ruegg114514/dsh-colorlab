@@ -993,9 +993,16 @@ window.__ModuleLoader__.load({
 
     /** LaTeX 块内要覆盖的令牌 → Mariana 对应色。 */
     const LATEX_TOKEN_OVERRIDES = Object.freeze({
-      /* 整个 `$…$` 块被 Shiki 的 `support.class.math.block` meta scope 归到 constant，
-         这里改成紫 —— 块内数学命令占多数，更接近 Sublime 的 keyword.other.math.* */
-      '--shiki-token-constant': LATEX_COLORS.keywordPink,
+      /* Shiki 会按「解析后的颜色」合并相邻 token：数学里大量 scope 在主题里没有
+         规则 → 全落到同一个 `--shiki-foreground` → **整段数学糊成一个 span**，
+         插件改不了主题的 scope→令牌映射，所以拆不开。
+
+         糊成一段的那部分，在 Sublime 里主要是**白色标识符 / 白色正文**
+         （`variable.other.math` 无匹配规则 → 全局前景），只有裸数字是橙、
+         运算符是橙红。所以这里取前景色：内置命令仍是紫（`keyword`）、
+         自定义宏仍是蓝（`support.function`），其余落白 —— 比原来的「糊成紫」
+         接近 Sublime 得多。能单独成段的数字/运算符/括号由 span 级类覆盖。 */
+      '--shiki-token-constant': LATEX_COLORS.foreground,
       /* punctuation.definition.arguments（花括号等）在 Mariana 里是青 */
       '--shiki-token-punctuation': LATEX_COLORS.teal,
     })
