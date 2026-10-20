@@ -1899,9 +1899,21 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 重新计算并应用一次。
-     * 幂等：重复调用只是替换同一来源的叠加层（overrideTokens 对同 source 是整层替换）。
+     * `applyNow` 的重入标记。
+     *
+     * ⚠️ **这不是防御性代码，是修一个真实爆栈**（真机控制台抓到的）：
+     *
+     *   applyNow → overrideTokens → 宿主 publish() → **同步** emit `theme/change`
+     *   → 我们的监听器 → applyNow → overrideTokens → …… 无限递归，
+     *   最终在 `JSON.stringify(tokens)` 处 `RangeError: Maximum call stack size exceeded`。
+     *
+     * 注意「内容签名」那条守卫**救不了**：签名是在 `overrideTokens` **返回之后**才赋值的，
+     * 而 emit 发生在它**内部**，所以重入时的比对永远拿不到新签名。
+     *
+     * 正确做法是直接拒绝重入 —— 自己刚推的层不需要再响应一次自己触发的事件。
      */
+    let applying = false
+
     /**
      * 重新计算并应用一次。
      * 幂等：重复调用只是替换同一来源的叠加层（overrideTokens 对同 source 是整层替换）。
@@ -1910,6 +1922,17 @@ window.__ModuleLoader__.load({
      * （正文 + 过程行）。之前每个 return 前各调一次，加分支就会漏一次。
      */
     function applyNow() {
+      if (applying) return
+      applying = true
+      try {
+        applyNowOnce()
+      } finally {
+        applying = false
+      }
+    }
+
+    /** `applyNow` 的实际工作体（外层只负责防重入）。 */
+    function applyNowOnce() {
       const tokens = resolveTokens(state)
       diag.scheme = resolvedScheme()
       /* 总闸：先把"关掉了没"反映到 html 属性上，Host 半体注入的首屏底色才知道要不要让位。 */
