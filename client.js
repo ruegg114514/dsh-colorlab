@@ -1087,9 +1087,6 @@ window.__ModuleLoader__.load({
       paren: 'dmt-tx-paren', /* ( ) [ ]      → 白 punctuation.section */
       ident: 'dmt-tx-id', /* E h p        → 白斜体 variable.other.math */
       kwCmd: 'dmt-tx-kwcmd', /* \begin \end  → 紫 keyword.control.* */
-      /* 以反斜杠开头的命令段（`\chapter` 这种「反斜杠+名字」挤在一起的 token）。
-         只用来挂 `::first-letter`，把反斜杠单独染青。 */
-      lead: 'dmt-tx-lead',
     })
 
     /**
@@ -1138,8 +1135,6 @@ window.__ModuleLoader__.load({
         if (cls === undefined || cls === null || typeof cls.add !== 'function') continue
 
         let kind = null
-        /** 这一段是否**以反斜杠开头**（用于单独给反斜杠上色，见下）。 */
-        let hasLeadBackslash = false
 
         /* ---- 与模式无关的标点 ---- */
         if (t === '\\') {
@@ -1156,7 +1151,6 @@ window.__ModuleLoader__.load({
              所以判命令必须按**前缀**，不能等 `prevBackslash` —— 早期版本就是
              因此对所有命令都不生效，数学里只剩块级令牌覆盖，整片紫。 */
           const name = (/^\\([A-Za-z@]+)/.exec(t) || [null, ''])[1]
-          hasLeadBackslash = name !== ''
           if (inMath) {
             kind = MATH_BUILTINS.has(name) ? TX_CLASS.mathCmd : TX_CLASS.mathCustom
           } else {
@@ -1178,13 +1172,9 @@ window.__ModuleLoader__.load({
           else if (/^[A-Za-z]+$/.test(t)) kind = TX_CLASS.ident
         }
 
-        if (kind !== null || hasLeadBackslash) {
+        if (kind !== null) {
           try {
-            if (kind !== null) cls.add(kind)
-            /* 反斜杠和命令名挤在同一个文本节点里，CSS 没法只染前一个字符，
-               所以额外挂一个类，用 `::first-letter` 单独把反斜杠染青
-               （那条规则依赖 `display:inline-block`，见 buildLatexSheet）。 */
-            if (hasLeadBackslash) cls.add(TX_CLASS.lead)
+            cls.add(kind)
             touched += 1
             /* 探针：只记第一个。文本也存下来，用来发现内容被原地更新。 */
             if (touched === 1) {
@@ -1252,12 +1242,6 @@ window.__ModuleLoader__.load({
         /* span 级：数学标识符 → variable.other.math → 正文色 + 斜体 */
         scope + ' .' + TX_CLASS.ident + '{color:' + LATEX_COLORS.foreground
           + '!important;font-style:italic!important}',
-        /* span 级：命令段开头的那个反斜杠单独染青。
-           Shiki 把 `\` 和命令名放在同一个文本节点里，CSS 没法只染前一个字符，
-           所以用 `::first-letter` —— 它只对**块容器**生效，因此要配
-           `display:inline-block`。inline-block 内部仍可正常换行，不会撑破布局。 */
-        scope + ' .' + TX_CLASS.lead + '{display:inline-block}',
-        scope + ' .' + TX_CLASS.lead + '::first-letter{color:' + LATEX_COLORS.teal + '!important}',
       ]
       return rules.join('\n')
     }
