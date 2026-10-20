@@ -459,7 +459,7 @@ if (failures.length === 0) {
   expect(typeof buildCardSheet === 'function', 'buildCardSheet 已导出')
   expect(typeof detectCardTargets === 'function', 'detectCardTargets 已导出')
   expect(typeof CARD_SHEET_ID === 'string' && CARD_SHEET_ID.length > 0, 'CARD_SHEET_ID 已声明')
-  expect(Array.isArray(CARD_TARGETS) && CARD_TARGETS.length === 2, 'CARD_TARGETS 覆盖两种卡片组件', String(CARD_TARGETS && CARD_TARGETS.length))
+  expect(Array.isArray(CARD_TARGETS) && CARD_TARGETS.length === 4, 'CARD_TARGETS 覆盖四种卡片组件', String(CARD_TARGETS && CARD_TARGETS.length))
 
   /* 目标组：改动文件卡片（_card / --changes-fill）+ 交付文件卡片（_root / --deliverable-fill）。 */
   const changesTarget = { defClass: 'kuvljq_card', varName: '--changes-fill', hoverVar: '--changes-hover' }
