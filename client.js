@@ -1796,6 +1796,12 @@ function makeColorizer(scheme) {
     const CARD_TARGETS = Object.freeze([
       Object.freeze({ varName: '--changes-fill', hoverVar: '--changes-hover', defClass: '_card' }),
       Object.freeze({ varName: '--deliverable-fill', hoverVar: '--deliverable-hover', defClass: '_root' }),
+      /* ui-plan 的「计划」卡片（`PlanPreview.module.css`）。它有自己的变量名，
+         而且**变量与背景在同一个类上**（不像 Deliverables 是 root 定义、file 消费）。
+         早先只覆盖前两种，于是「计划」卡片一直是宿主的中性灰。 */
+      Object.freeze({ varName: '--plan-card-fill', hoverVar: '--plan-card-hover', defClass: '_card' }),
+      /* ui-schedule 的排程卡片（`ScheduleCreateCard.module.css`），同样是卡片底色语义。 */
+      Object.freeze({ varName: '--card-fill', hoverVar: '--card-hover', defClass: '_card' }),
     ])
 
     /**
@@ -2699,18 +2705,21 @@ function makeColorizer(scheme) {
           }
           cardEl = null
         }
-        /* 用户挑了色但类名还没**找齐** = pending（下面安排重试），否则 = off。 */
+        /* 用户挑了色但一组类名都还没找到 = pending（下面安排重试），否则 = off。 */
         const pickedColor = HEX_PATTERN.test(state.cardColor)
-        const detected = cardTargetsComplete(cardTargets)
-        diag.card = !pickedColor ? 'off' : !detected ? 'pending' : 'off'
+        const applied = Array.isArray(cardTargets) && cardTargets.length > 0
+        diag.card = !pickedColor ? 'off' : applied ? 'off' : 'pending'
         /* 找齐了就清零计数（下次用户再挑色时重试预算是满的）。 */
-        if (detected) cardRetryCount = 0
-        if (pickedColor && !detected && cardRetryTimer === null && !disposed && cardRetryCount < CARD_RETRY_MAX) {
+        if (cardTargetsComplete(cardTargets)) cardRetryCount = 0
+        /* 还没找齐就继续找 —— 宿主的部分组件样式表是**懒注入**的（用到才加载），
+           所以「没找齐」是常态，重试只是兜底。
+           注意**不强制重扫**：`applyNow` 里的扫描只在「样式表张数变了」时才会真的跑，
+           所以空转的重试几乎不花钱，不会每秒扫一遍两千条规则。 */
+        if (pickedColor && !cardTargetsComplete(cardTargets)
+          && cardRetryTimer === null && !disposed && cardRetryCount < CARD_RETRY_MAX) {
           cardRetryTimer = setTimeout(() => {
             cardRetryTimer = null
             cardRetryCount += 1
-            /* 逼下一轮重扫。**不要清 cardTargets** —— 那会把已找到的丢掉。 */
-            cardScanSheetCount = -1
             applyNow()
           }, 1000)
           if (cardRetryTimer && typeof cardRetryTimer.unref === 'function') cardRetryTimer.unref()
@@ -3924,7 +3933,9 @@ function makeColorizer(scheme) {
           Row,
           {
             title: '文件卡片颜色',
-            hint: '「已编辑 N 个文件」卡片的头部横带，以及「交付文件」卡片的整张底色；默认跟随宿主中性灰，挑色后覆盖（悬停色自动提亮一档）',
+            /* 卡片底色（「已编辑 N 个文件」的头部横带 + 「交付文件」「计划」「排程」三种卡片的整张底色）。
+           空 = 跟随宿主中性灰。 */
+        hint: '「已编辑 N 个文件」卡片的头部横带，以及「交付文件」「计划」「排程」卡片的整张底色；默认跟随宿主中性灰，挑色后覆盖（悬停色自动提亮一档）',
           },
           h(
             'span',
