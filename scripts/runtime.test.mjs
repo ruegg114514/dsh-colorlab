@@ -139,6 +139,8 @@ function createFakeTheme(options = {}) {
   let scheme = options.scheme || 'dark'
   /** overrideTokens 被真正调用的次数（启动优化的回归锁）。 */
   let overrideCalls = 0
+  /** theme/change 监听器抛错的次数 —— 重入爆栈会记在这里。 */
+  let listenerErrors = 0
   const snapshot = () => ({ preference: scheme, active: { id: scheme, colorScheme: scheme, tokens: {} }, revision: 1 })
   /* theme/change 需要真的能 emit —— 插件用它触发 applyNow。 */
   const themeListeners = new Map()
@@ -166,6 +168,19 @@ function createFakeTheme(options = {}) {
       const record = { tokens, alive: true }
       layers.set(source, record)
       if (options.supportsOverride === false) throw new Error('not supported')
+      /* ⚠️ 还原真机行为：宿主的 overrideTokens 内部会**同步** publish()，而 publish
+         会 emit `theme/change` —— 插件自己的监听器因此在 overrideTokens 还没返回时
+         就被回调。这正是「applyNow → overrideTokens → theme/change → applyNow」
+         无限递归（真机 `RangeError: Maximum call stack size exceeded`）的来源。
+         替身不还原这一点，这类爆栈就永远测不出来。 */
+      for (const handler of [...(themeListeners.get('theme/change') || [])]) {
+        try {
+          handler()
+        } catch (error) {
+          listenerErrors += 1
+          console.log('  (theme/change 监听器抛错: ' + (error && error.message) + ')')
+        }
+      }
       return () => {
         record.alive = false
         if (layers.get(source) === record) layers.delete(source)
@@ -175,6 +190,7 @@ function createFakeTheme(options = {}) {
     _layers: layers,
     _scheme: () => scheme,
     _overrideCalls: () => overrideCalls,
+    _listenerErrors: () => listenerErrors,
   }
   return theme
 }
@@ -577,6 +593,13 @@ function main() {
       theme._overrideCalls() === callsAfterApply,
       '状态未变时 20 次 theme/change 不再重推令牌（省掉宿主整表重算）',
       `${callsAfterApply} → ${theme._overrideCalls()}`,
+    )
+    /* ⚠️ 真机上这条会以 `RangeError: Maximum call stack size exceeded` 的形式炸掉：
+       宿主在 overrideTokens 内部同步 emit theme/change，回调又进 applyNow，无防护就无限递归。 */
+    check(
+      theme._listenerErrors() === 0,
+      'overrideTokens 内部同步 emit 不自激（防重入生效，无爆栈）',
+      String(theme._listenerErrors()) + ' 次监听器抛错',
     )
     check(
       dom.counters.styleWrites === writesAfterApply,
