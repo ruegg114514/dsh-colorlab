@@ -110,6 +110,14 @@ async function main() {
     const row = table[0]
     check(row && row.kind === 'style', '注入的是 style 行', row ? row.kind : 'n/a')
     check(row && typeof row.text === 'string' && row.text.includes('body[data-ds-dark-theme]{'), '选择器 = body[data-ds-dark-theme]')
+    /* 总闸：这条样式是烤进 HTML 的，运行时撤不掉，所以必须带一个能被客户端关掉的条件。
+       少了它，用户关掉插件后界面底色会留在 Mariana。 */
+    check(
+      row && typeof row.text === 'string' && row.text.includes(`html:not([${mod.DISABLED_ATTR}])`),
+      `总闸条件 html:not([${mod.DISABLED_ATTR}]) 存在`,
+      mod.DISABLED_ATTR,
+    )
+    check(mod.DISABLED_ATTR === 'data-dsh-colorlab-off', '总闸属性名与客户端约定一致', mod.DISABLED_ATTR)
     check(row && row.text.includes('background-color:#343D46'), '画布色 = #343D46')
     check(row && row.text.includes('--dsh-boot-bg:#343D46'), '同步设置 --dsh-boot-bg')
     check(row && !row.text.includes('!important'), '不使用 !important（避免压掉客户端 inline 值）')
