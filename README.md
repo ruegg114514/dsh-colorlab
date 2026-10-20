@@ -79,10 +79,20 @@ Settings → **ColorLab**:
 | **Custom colours** | 18 slots (8 surfaces / 3 text / 7 syntax), each adjustable |
 | **Presets** | Save the current palette and load it back later, up to 12 |
 
-LaTeX code blocks and Python built-ins (`print`, `len`, `open`) get Mariana's
-`var(blue)` (`#6699CC`) — the colour Sublime's Mariana gives `support.function`.
-Shiki merges that scope with `entity.name.function` into a single token, so
-function *calls* and LaTeX commands match Sublime, while function *definition
+**LaTeX gets a dedicated highlighter.** Sublime's own
+`LaTeX.sublime-syntax` + `TeX.sublime-syntax` are ported wholesale and run
+through a small TextMate engine, then coloured with the rules from
+`Mariana.sublime-color-scheme` — so LaTeX matches Sublime character for
+character rather than approximately: the backslash is teal on its own, every
+brace is teal (including after user macros like `\zh{`), math builtins are
+purple while custom macros are blue, digits orange, `=` `+` `-` orange-red,
+identifiers white italic. See `docs/DESIGN.md` for why guessing at Shiki's
+tokens could never get there.
+
+Everything else keeps Shiki's tokens. Python built-ins (`print`, `len`,
+`open`) get Mariana's `var(blue)` (`#6699CC`) — the colour Sublime gives
+`support.function`. Shiki merges that scope with `entity.name.function` into a
+single token, so function *calls* match Sublime while function *definition
 names* are blue there too.
 
 Markdown gets Sublime's `markup.*` details: list markers in `var(green)`,
@@ -299,10 +309,18 @@ Mariana 是 Sublime Text 3.0（2017）起及 Sublime Text 4 的默认配色，
 | **自定义配色** | 18 个槽位（界面底色 8 / 文字 3 / 语法色 7），逐个调 |
 | **配色方案** | 把当前配色存成方案，随时载入，最多 12 套 |
 
-LaTeX 命令和 Python 内置函数（`print` `len` `open`）用 Mariana 的
+**LaTeX 走专门的高亮通道。** 直接把 Sublime 的 `LaTeX.sublime-syntax` 与
+`TeX.sublime-syntax` **整份移植**过来，用一个小型 TextMate 引擎跑分词，
+再套 `Mariana.sublime-color-scheme` 的规则上色 —— 所以 LaTeX 是**逐字符**
+对齐 Sublime，而不是"近似"：反斜杠单独是青色、**所有**花括号都是青色
+（`\zh{` 这类自定义宏后面也是）、数学内置命令紫而自定义宏蓝、数字橙、
+`=` `+` `-` 橙红、标识符白斜体。为什么"猜 Shiki 的令牌"永远到不了这一步，
+见 `docs/DESIGN.md`。
+
+其余语言仍走 Shiki 的令牌。Python 内置函数（`print` `len` `open`）用 Mariana 的
 `var(blue)`（`#6699CC`），与 Sublime 里 `support.function` 的颜色一致 ——
 Shiki 把 `support.function` 和 `entity.name.function` 合并成同一个令牌，
-所以函数**调用**和 LaTeX 命令与 Sublime 一致，函数**定义名**则也是蓝色。
+所以函数**调用**与 Sublime 一致，函数**定义名**则也是蓝色。
 
 Markdown 会补上 Sublime 的 `markup.*` 细节：列表符号 `var(green)` 绿、
 引用正文 `var(orange)` 橙、行内代码加淡色底。
