@@ -203,15 +203,32 @@ function buildConfig() {
 
 const Config = buildConfig()
 
-export { Config, SETTINGS_ENTRY, FIELD_DEFAULTS, BOOT_BACKGROUND }
+/**
+ * 「插件已关闭」的总闸属性。
+ *
+ * 客户端半体在 `syncDisabledMarker()` 里维护它（两个半体跑在不同运行时、
+ * 不能互相 import，所以这个字面量两边各写一份，改的时候要一起改）。
+ */
+const DISABLED_ATTR = 'data-dsh-colorlab-off'
+
+export { Config, SETTINGS_ENTRY, FIELD_DEFAULTS, BOOT_BACKGROUND, DISABLED_ATTR }
 
 /**
  * 首屏样式：只在外观解析为深色时命中，压过宿主 ui-theme 的默认 `body` 画布色。
  * 不用 `!important` —— 提高特异性就够了，也避免压掉后续客户端写下的 inline 值。
+ *
+ * ⚠️ **为什么外面套一层 `html:not([data-dsh-colorlab-off])`**：
+ * 这条样式是经 `webserver/index-inject` **烤进 HTML** 的，页面加载后**撤不掉**。
+ * 而「启用」是客户端运行时的开关（改完不刷新页面），所以以前用户把插件关掉后，
+ * `body` 的画布色仍然是 Mariana 的 `#343D46` —— 表现就是"高亮没了，底色却不回"。
+ *
+ * 加一个属性选择器当**总闸**：页面刚加载时 `html` 上没有这个属性 → 首屏色照常
+ * 生效（不闪黑）；客户端一旦看到「启用」被关掉，就往 `html` 上打这个属性 →
+ * 这条规则立刻失效，底色回到宿主默认。
  */
 function bootStyle() {
   return [
-    `body[data-ds-dark-theme]{`,
+    `html:not([${DISABLED_ATTR}]) body[data-ds-dark-theme]{`,
     `background-color:${BOOT_BACKGROUND};`,
     `--dsh-boot-bg:${BOOT_BACKGROUND}`,
     `}`,
