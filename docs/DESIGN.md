@@ -329,6 +329,74 @@ hex 每补全一次合法值就触发，全走这条路就是"输入一个字母
 （实测：以 Sublime Mariana 打开 Python 文档，`print`/`len`/`enumerate`/`open`
 都是蓝色；`import`/`for` 是紫色（keyword）；`'Pages:'` 是绿色（string）。）
 
+### LaTeX：把两边的 scope 表拉平对照
+
+**不要再靠截图猜颜色。** 正确做法是把「Sublime 语法给的 scope → Mariana 的色」
+和「Shiki 语法给的 scope → 令牌」两张表并排对出来。下面是照这样得到的表
+（数据源：`LaTeX.sublime-syntax`、`TeX.sublime-syntax`、
+`Mariana.sublime-color-scheme`、Shiki 的 `latex-B2nUCzCX.js` 语法 + 主题 19 条规则）。
+
+| LaTeX 构造 | Sublime scope | Mariana 色 | Shiki scope | Shiki 令牌 |
+|---|---|---|---|---|
+| `\bi` `\zh` 命令名 | `support.function.general.latex` | 蓝 `#6699CC` | 同 | `function` ✓ |
+| `\section` `\chapter` | `support.function.section.latex` | 蓝 | 同 | `function` ✓ |
+| `\begin` `\label` `\ref` | `keyword.control.*.latex` | 紫 | 同 | `keyword` ✓ |
+| **`\` 反斜杠** | `punctuation.definition.backslash` | **青 `#5FB4B4`** | `punctuation.definition.function.tex` | **无规则 → 继承** ✗ |
+| **`{` `}`** | `punctuation.definition.arguments` | **青** | `punctuation.definition.arguments.*` | `punctuation`（灰） ✗ |
+| **`$` 数学分隔符** | `punctuation.definition.string.begin/end` | **青** | `punctuation.section.embedded.*.math` | **无规则 → 继承** ✗ |
+| **数学命令 `\nu` `\hbar`** | `keyword.other.math.greek/symbol/large-operator` | **紫 `#C695C6`** | `constant.character.math.tex` | **无规则 → 继承** ✗ |
+| 数学数字 | `constant.numeric` | 橙 | `constant.numeric.math.tex` | `constant` ✓ |
+| 数学标识符 `E` `h` `p` | `variable.other.math` | 无色（正文色） | 无规则 | 继承 ✓ |
+
+**发现两处结构性偏差：**
+
+1. **整个 `$…$` 块被染成橙**。Shiki 的 LaTeX 语法给数学块套了
+   `support.class.math.block.latex` 这个 meta scope，而主题里第 8 条规则是
+   `["constant.numeric", …, "support"] → token-constant` —— `support` 一个前缀
+   就把**块内所有 token** 归到了 `constant`（橙）。Sublime 则是块内逐 token 上色
+   （紫命令、白标识符、橙数字）。
+2. **括号 / 反斜杠 / `$` 落到灰或无色**。它们本该是 `punctuation.definition`（青），
+   但 Shiki 的主题只把 `punctuation.definition.arguments` / `.dict` / `separator`
+   归到 `punctuation`，其余 `punctuation.definition.*` 与
+   `punctuation.section.embedded.*` **没有任何规则** → 继承正文色。
+
+**修法：只对 LaTeX 块覆盖两个令牌。**
+
+```css
+pre.dmt-latex{
+  --shiki-token-constant:#C695C6;    /* 数学命令 → 紫（压过数学数字的橙，命令远比裸数字常见） */
+  --shiki-token-punctuation:#5FB4B4; /* punctuation.definition → 青 */
+}
+```
+
+CSS 自定义属性会沿 DOM 继承，Shiki 的 token span 用的是
+`color: var(--shiki-token-*)`，所以在 `pre` 上重定义就能只影响这一块。
+
+**为什么必须按块、不能全局**：全局把 `constant` 改成紫，会让 Python / JS 的数字
+也变紫，而 Sublime 里 `constant.numeric` 是橙。只有 LaTeX 需要这个偏移。
+
+**块怎么认出来**：宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，
+**pre 上没有语言名**（`codeToHtml` 只加 `class="shiki <themeName>"`；宿主也没把
+lang 写进 DOM）。所以按内容特征判：`\begin{env}` / `\end{env}` /
+`\documentclass|usepackage|section|label|ref|cite` / `$…\cmd…$` /
+至少两个 `\cmd{`。代码块是滚动时才渲染的，所以用 `MutationObserver`
+（只听 `childList`，改 class 不会自激）合帧重扫。
+
+**仍然做不到的**（令牌模型的天花板）：
+
+- `\` 反斜杠与 `$` 分隔符在 Shiki 里**没有任何令牌**（继承正文色），改 CSS 变量
+  无从下手 —— 只能是正文色，而 Sublime 是青。
+- 数学块内「标识符（白）／运算符（紫）」无法区分：Shiki 把整个块归成一个令牌。
+  现在的取法是紫（命令与运算符合计占多数），代价是裸标识符也变紫。
+
+要 100% 还原，只能做**span 级后处理**（遍历 Shiki 生成的 span，按文本内容
+重新打 class + `!important` 覆盖），那是另一个量级的复杂度，暂不做。
+
+> ⚠️ **两次踩同一个坑的教训**：截图取色不能用「最饱和像素」—— ClearType
+> 子像素渲染会给蓝字配红/绿边纹，采出来是青的。要用**众数**（笔画主体色），
+> 或者干脆**别取色，去读语法与配色方案的 scope 表**。`\bi` 实际是
+> 「`\` 青 + `bi` 蓝」两段拼的，任何整体取色都会误导。
+
 ---
 
 ## Markdown 的细节着色
