@@ -971,286 +971,638 @@ window.__ModuleLoader__.load({
      * ====================================================================== */
 
     /** LaTeX 代码块的标记类名（运行时打在 `<pre class="shiki">` 上）。 */
+    /** LaTeX 代码块的标记类名（运行时打在 `<pre class="shiki">` 上）。 */
     const LATEX_BLOCK_CLASS = 'dmt-latex'
 
     /**
-     * LaTeX 用到的 Mariana 精确色。
+     * 我们自己的渲染层类名。
      *
-     * 直接写方案里的值，**不走 `PALETTE_BASE`** —— 那边有几个是早年手抄的近似值
-     * （例如 `teal: '#5FB3B3'`，而方案里 `hsl(180,36%,54%)` 精确是 `#5FB4B4`）。
-     * 对标就要对到字节。
+     * 为什么用「兄弟层」而不是直接改写宿主的 DOM：宿主的代码块有两条渲染路径 ——
+     *   流式：React 自己管 `<pre><code>`
+     *   静态：`<div dangerouslySetInnerHTML={{__html: Shiki输出}}>`（文件预览走这条）
+     * 前一条里 React 持有 text 节点引用，改写会让它更新到已脱离的节点上、
+     * 流式输出就卡住。所以**一行不动宿主的节点**：把它 `display:none`，
+     * 在同一个 `<pre>` 里追加我们自己的 `<code>`。宿主照常更新它的隐藏副本，
+     * 我们靠观察器发现内容变了就重画。
      */
-    const LATEX_COLORS = Object.freeze({
-      teal: '#5FB4B4', /* var(blue5)：punctuation.definition */
-      keywordPink: '#C695C6', /* var(pink)：keyword */
-      functionBlue: '#6699CC', /* var(blue)：support.function */
-      numberOrange: '#F9AE58', /* var(orange)：constant.numeric */
-      operatorRed: '#F97B58', /* var(red2)：keyword.operator */
-      separatorGrey: '#A6ACB9', /* var(blue6)：punctuation.separator */
-      white: '#FFFFFF', /* var(white)：punctuation.section */
-      foreground: '#D8DEE9', /* var(white3)：全局前景 */
-    })
+    const TEX_LAYER_CLASS = 'dmt-tex-layer'
 
-    /** LaTeX 块内要覆盖的令牌 → Mariana 对应色。 */
-    const LATEX_TOKEN_OVERRIDES = Object.freeze({
-      /* Shiki 会按「解析后的颜色」合并相邻 token：数学里大量 scope 在主题里没有
-         规则 → 全落到同一个 `--shiki-foreground` → **整段数学糊成一个 span**，
-         插件改不了主题的 scope→令牌映射，所以拆不开。
+    /** 被隐藏的宿主 `<code>` 挂的类。 */
+    const TEX_HIDDEN_CLASS = 'dmt-tex-hidden'
 
-         糊成一段的那部分，在 Sublime 里主要是**白色标识符 / 白色正文**
-         （`variable.other.math` 无匹配规则 → 全局前景），只有裸数字是橙、
-         运算符是橙红。所以这里取前景色：内置命令仍是紫（`keyword`）、
-         自定义宏仍是蓝（`support.function`），其余落白 —— 比原来的「糊成紫」
-         接近 Sublime 得多。能单独成段的数字/运算符/括号由 span 级类覆盖。 */
-      '--shiki-token-constant': LATEX_COLORS.foreground,
-      /* punctuation.definition.arguments（花括号等）在 Mariana 里是青 */
-      '--shiki-token-punctuation': LATEX_COLORS.teal,
-    })
+    /* @dsh-tex-assets:start —— 由 tools/embed-tex-assets.mjs 生成，请勿手改。
+     改动请改 tools/ 下的真源，然后重新运行：node tools/embed-tex-assets.mjs */
+
+    /* Sublime LaTeX/TeX 语法（编译自 LaTeX.sublime-syntax + TeX.sublime-syntax）。
+       体积较大，所以放在工厂函数末尾，不占前面的可读性。 */
+    const TEX_GRAMMAR = {"scope":"text.tex.latex","extends":"text.tex","contexts":{"prototype":[{"include":"comments"}],"main":[{"include":"latex"},{"include":"packages"},{"include":"macros"},{"include":"controls"},{"include":"character-codes"},{"include":"braces"},{"include":"boxes"},{"include":"block-math"},{"include":"inline-math"},{"include":"registers"},{"include":"tex-constants"},{"include":"general-constants"},{"include":"general-commands"}],"comments":[{"match":"%.*$\\n?","scope":"comment.line.percentage.tex"},{"include":"merge-conflict-markers"}],"merge-conflict-markers":[{"match":"^(<{7})(?:\\s+(\\S.*?))?$\\n?","scope":"meta.block.conflict.begin.diff","captures":{"1":"punctuation.section.block.begin.diff","2":"entity.name.section.diff"}},{"match":"^(>{7})(?:\\s+(\\S.*?))?$\\n?","scope":"meta.block.conflict.end.diff","captures":{"1":"punctuation.section.block.end.diff","2":"entity.name.section.diff"}},{"match":"^(\\|{7}|={7})(?:\\s+(\\S.*?))?$\\n?","scope":"meta.block.conflict.separator.diff","captures":{"1":"punctuation.section.block.diff","2":"entity.name.section.diff"}}],"braces":[{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","push":"brace-group-body"}],"brace-group-begin":[{"meta_include_prototype":false},{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","pop":1}],"brace-group-body":[{"meta_scope":"meta.group.brace.tex"},{"include":"brace-group-end"},{"include":"main"}],"brace-group-end":[{"match":"\\}","scope":"punctuation.definition.group.brace.end.tex","pop":1}],"boxes":[{"match":"((\\\\)[hvmf]box)\\s*(\\{)","captures":{"1":"support.function.box.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.function.box.latex'}","{'include': 'brace-group-end'}","{'include': 'main'}"]},{"match":"((\\\\)(?:framebox|makebox))\\b","captures":{"1":"support.function.box.latex","2":"punctuation.definition.backslash.latex"},"push":["box-meta","argument","optional-arguments"]},{"match":"((\\\\)parbox)\\b","captures":{"1":"support.function.box.latex","2":"punctuation.definition.backslash.latex"},"push":["box-meta","argument","argument","optional-arguments"]},{"match":"((\\\\)raisebox)\\b","captures":{"1":"support.function.box.latex","2":"punctuation.definition.backslash.latex"},"push":["box-meta","argument","optional-arguments"]}],"box-body":[{"meta_scope":"meta.function.box.tex"},{"include":"brace-group-end"},{"include":"main"}],"character-codes":[{"match":"(\\\\)(?:cat|math|uc|lc|del|sf)code(?![A-Za-z@])","scope":"keyword.control.character-code.tex","captures":{"1":"punctuation.definition.backslash.tex"},"push":["character-code-meta","character-code-value","tex-assignment","character-code-number"]}],"character-code-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.character-code.tex"},{"include":"immediately-pop"}],"character-code-number":[{"include":"tex-simple-integer"},{"include":"else-pop"},{"include":"paragraph-pop"}],"character-code-assignment":[{"match":"=","scope":"keyword.operator.assignment.tex","pop":1},{"include":"else-pop"},{"include":"paragraph-pop"}],"character-code-value":[{"include":"tex-simple-integer"},{"include":"else-pop"},{"include":"paragraph-pop"}],"controls":[{"match":"(\\\\)ifcase(?![A-Za-z@])","scope":"keyword.control.conditional.switch.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)or(?![A-Za-z@])","scope":"keyword.control.conditional.case.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)loop(?![A-Za-z@])","scope":"keyword.control.loop.do-while.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)repeat(?![A-Za-z@])","scope":"keyword.control.loop.end.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)expandafter(?![A-Za-z@])","scope":"keyword.control.flow.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)if(?:cat|dim|eof|false|hbox|hmode|inner|mmode|num|odd|true|undefined|vbox|vmode|void|x)?(?![A-Za-z@])","scope":"keyword.control.conditional.if.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)else(?![A-Za-z@])","scope":"keyword.control.conditional.else.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)fi(?![A-Za-z@])","scope":"keyword.control.conditional.end.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)input(?![A-Za-z@])","scope":"meta.function.input.tex keyword.control.input.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)relax(?![A-Za-z@])","scope":"keyword.control.flow.relax.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"general-commands":[{"include":"begin-end-commands"},{"match":"(\\\\)[A-Za-z@]+","scope":"support.function.general.latex","captures":{"1":"punctuation.definition.backslash.latex"}}],"general-constants":[{"match":"(\\\\\\\\)(?:(\\[)\\s*-?((?:[0-9]|\\.)*)\\s*(\\w*)\\s*(\\]))?","captures":{"1":"constant.character.newline.latex","2":"punctuation.definition.group.bracket.begin.newline.latex","3":"constant.numeric.newline.latex","4":"keyword.other.newline.latex","5":"punctuation.definition.group.bracket.begin.newline.latex"}},{"match":"\\\\\\\\","scope":"constant.character.newline.tex"},{"match":"&","scope":"constant.character.ampersand.tex"},{"match":"~","scope":"constant.character.space.tex"},{"include":"escaped-character"}],"escaped-character":[{"match":"(\\\\)[^A-Za-z@]","scope":"constant.character.escape.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"tex-constants":[{"match":"(\\\\)(?:(?:pre)?tolerance|[hv]badness|(?:doublehyphen|finalhyphen|adj)demerits|looseness|pausing|holdinginserts|language|uchyph|lefthyphenmin|righthyphenmin|globaldefs|maxdeadcycles|hangafter|fam|mag|(?:escape|defaulthyphen|defaultskew|endline|newline)char|delimiterfactor|time|day|month|year|showboxbreadth|showboxdepth|errorcontextlines|[hv]fuzz|overfullrule|[hv]size|maxdepth|splitmaxdepth|boxmaxdepth|lineskiplimit|delimitershortfall|nulldelimiterspace|scriptspace|mathsurround|predisplaysize|displaywidth|displayindent|parindent|hangindent|[hv]offset|(?:small|med|big)skipamount|normallineskiplimit|jot|(?:baseline|line|par|(?:above|below)display(?:short)?|left|right|top|splittop|tab|space|xspace|parfill|(?:thin|med|thick)mu|normalbaseline|normalline|hide)skip|tracing(?:online|macros|stats|paragraphs|pages|output|lostchars|commands|restores)|(?:line|hyphen|exhyphen|binop|rel|club|widow|displaywidow|broken|predisplay|postdisplay|interline|floating|output|inter(?:display|footnote)line)penalty|maxdimen|centering|p@|z@|z@skip|voidb@x|magstephalf|magstep\\d|@ne|tw@|thr@@|sixt@@n|@cclv|@cclvi|@m|@M|@MM|m@ne|count@|dimen@|dimen@i|dimen@ii|skip@|toks@|insc@unt|allocationnumber)(?![A-Za-z@])","scope":"support.function.tex","captures":{"1":"punctuation.definition.backslash.tex"},"push":["tex-dimension-value","tex-assignment"]},{"match":"(\\\\)(?:(?:thin|negthin|en)space|enskip|q?quad|(?:small|med|big)skip|[lr]q|[lr]brack|space|empty|null)(?![A-Za-z@])","scope":"support.function.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"registers":[{"include":"register-allocations"},{"include":"register-definitions"}],"register-allocations":[{"match":"(\\\\)new(?:box|count|dimen|muskip|skip|toks)(?![A-Za-z@])","scope":"keyword.declaration.register.tex storage.modifier.register.tex","captures":{"1":"punctuation.definition.backslash.tex"},"push":"register-allocation-identifier"}],"register-allocation-identifier":[{"meta_scope":"meta.register.tex"},{"match":"(?=\\{)","set":["register-allocation-wrapped-identifier","brace-group-begin"]},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"entity.name.constant.tex","captures":{"1":"punctuation.definition.backslash.tex"},"pop":1},{"include":"paragraph-pop"},{"include":"else-pop"}],"register-allocation-wrapped-identifier":[{"meta_scope":"meta.register.tex meta.group.brace.tex"},{"include":"brace-group-end"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"entity.name.constant.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"register-definitions":[{"match":"(\\\\)((?:box|count|dimen|muskip|skip|toks))(?![A-Za-z@])","captures":{"1":"punctuation.definition.backslash.tex","2":"storage.type.tex"},"push":["tex-dimension-value","tex-assignment","register-definition-identifier"]}],"register-definition-identifier":[{"meta_scope":"meta.register.tex"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"support.function.general.tex","captures":{"1":"punctuation.definition.backslash.tex"},"pop":1},{"include":"tex-simple-integer"},{"include":"paragraph-pop"},{"include":"else-pop"}],"tex-simple-integer":[{"match":"([+-]?)\\s*\\d+","scope":"meta.number.integer.decimal.tex constant.numeric.value.tex","captures":{"1":"keyword.operator.arithmetic.tex"},"pop":1},{"match":"([+-]?)\\s*\"(?:[0-9A-F])+","scope":"meta.number.integer.hexadecimal.tex constant.numeric.value.tex","captures":{"1":"keyword.operator.arithmetic.tex"},"pop":1},{"match":"([+-]?)\\s*'[0-7]+","scope":"meta.number.integer.octal.tex constant.numeric.value.tex","captures":{"1":"keyword.operator.arithmetic.tex"},"pop":1},{"match":"([+-]?)\\s*(`)(\\\\)?((?:\\^\\^(?:(?:[0-9a-f])(?:[0-9a-f])|.))|.)","scope":"meta.number.integer.tex constant.numeric.value.tex","captures":{"1":"keyword.operator.arithmetic.tex","2":"keyword.operator.tex","3":"punctuation.definition.backslash.tex","4":"constant.character.tex"},"pop":1}],"tex-assignment":[{"match":"=","scope":"keyword.operator.assignment.tex","pop":1},{"include":"else-pop"},{"include":"paragraph-pop"}],"tex-dimension-value":[{"match":"(-?)(?:\\d+(\\.)\\d*|(\\.)\\d+)","scope":"constant.numeric.value.tex","captures":{"1":"keyword.operator.arithmetic.tex","2":"punctuation.separator.decimal.tex","3":"punctuation.separator.decimal.tex"},"set":["tex-dimension-glue","tex-dimension-decimal-float"]},{"match":"(-?)\\d+","scope":"constant.numeric.value.tex","captures":{"1":"keyword.operator.arithmetic.tex"},"set":["tex-dimension-glue","tex-dimension-decimal-integer"]},{"match":"(`)(\\\\)?((?:\\^\\^(?:(?:[0-9a-f])(?:[0-9a-f])|.))|.)","captures":{"1":"keyword.operator.tex","2":"punctuation.definition.backslash.tex","3":"constant.character.tex"},"set":["tex-dimension-glue","tex-dimension-decimal-integer"]},{"include":"else-pop"},{"include":"paragraph-pop"}],"tex-dimension-glue":[{"match":"(?:plus|minus)(?![A-Za-z@])","scope":"keyword.operator.arithmetic.tex","set":"tex-dimension-value"},{"include":"else-pop"},{"include":"paragraph-pop"}],"tex-dimension-decimal-float":[{"meta_scope":"meta.number.float.decimal.tex"},{"include":"tex-dimension-suffix"}],"tex-dimension-decimal-integer":[{"meta_scope":"meta.number.integer.decimal.tex"},{"include":"tex-dimension-suffix"}],"tex-dimension-suffix":[{"match":"(?:pt|pc|bp|in|cm|mm|dd|cc|sp|ex|em|fil|fill|filll|mu)","scope":"constant.numeric.suffix.tex","pop":1},{"include":"else-pop"},{"include":"paragraph-pop"}],"macros":[{"match":"(\\\\)[gex]?def(?![A-Za-z@])","scope":"keyword.declaration.function.tex storage.modifier.definition.tex","captures":{"1":"punctuation.definition.backslash.tex"},"push":"def-function-expect-identifier"},{"match":"(\\\\)(?:outer|long|global)(?![A-Za-z@])","scope":"storage.modifier.definition.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"include":"latex-newcommand-macros"},{"include":"xparse-newcommand-macros"}],"def-function-expect-identifier":[{"meta_scope":"meta.function.tex"},{"match":"(?=\\\\)","set":"def-function-identifier"},{"include":"paragraph-pop"},{"include":"else-pop"}],"def-function-identifier":[{"meta_scope":"meta.function.identifier.tex"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"entity.name.definition.tex","captures":{"1":"punctuation.definition.backslash.tex"},"set":"def-function-parameters"},{"include":"paragraph-pop"},{"include":"else-pop"}],"def-function-parameters":[{"meta_content_scope":"meta.function.parameters.tex"},{"match":"(?=\\{)","set":["def-function-body-meta","macro-braces-begin"]},{"match":"(\\#)[0-9]","scope":"variable.parameter.tex","captures":{"1":"punctuation.definition.variable.tex"}},{"include":"escaped-character"},{"include":"paragraph-pop"}],"def-function-body-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.body.tex"},{"include":"immediately-pop"}],"macro-braces":[{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","push":"macro-braces-body"}],"macro-braces-begin":[{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","set":"macro-braces-body"}],"macro-braces-end":[{"match":"\\}","scope":"punctuation.definition.group.brace.end.tex","pop":1}],"macro-braces-body":[{"meta_scope":"meta.group.brace.tex"},{"include":"macro-braces-end"},{"include":"macro-braces-content"}],"macro-braces-content":[{"include":"macro-braces"},{"include":"macro-placeholders"},{"include":"controls"},{"include":"registers"},{"include":"math-builtin"},{"include":"tex-constants"},{"include":"general-constants"},{"include":"general-commands"}],"macro-placeholders":[{"match":"(#+)(\\d)","scope":"variable.parameter.tex","captures":{"1":"punctuation.definition.placeholder.tex","2":"meta.number.integer.decimal.tex constant.numeric.value.tex"}}],"inline-math":[{"match":"\\$","scope":"string.other.math.tex punctuation.definition.string.begin.tex","push":"inline-math-dollar-body"},{"include":"inline-math-parens"},{"include":"inline-math-ensuremath"}],"inline-math-dollar-body":[{"meta_scope":"meta.environment.math.inline.dollar.tex"},{"meta_content_scope":"markup.math.inline"},{"include":"inline-math-dollar-end"},{"include":"math-content"}],"inline-math-dollar-end":[{"match":"\\$","scope":"string.other.math.tex punctuation.definition.string.end.tex","pop":1}],"block-math":[{"match":"\\$\\$","scope":"string.other.math.tex punctuation.definition.string.begin.tex","push":"block-math-dollar-body"},{"include":"block-math-brackets"},{"include":"block-math-begin-end-command"}],"block-math-dollar-body":[{"meta_scope":"meta.environment.math.block.dollar.tex"},{"meta_content_scope":"markup.math.block"},{"include":"block-math-dollar-end"},{"include":"math-content"}],"block-math-dollar-end":[{"match":"\\$\\$","scope":"string.other.math.tex punctuation.definition.string.end.tex","pop":1}],"math-content":[{"match":"(?=\\})","pop":1},{"include":"verb"},{"include":"text-decorators"},{"include":"references"},{"include":"begin-end-commands"},{"include":"math-builtin"},{"include":"math-brackets"},{"include":"math-braces"},{"include":"boxes"},{"include":"math-commands"},{"include":"math-operators"},{"include":"math-variables"},{"include":"math-numbers"},{"include":"general-constants"}],"math-builtin":[{"include":"math-greeks"},{"include":"math-functions"},{"include":"math-relations"},{"include":"math-largeops"},{"include":"math-binops"},{"include":"math-symbols"},{"include":"math-accents"},{"include":"math-arrows"},{"include":"math-delimiters"}],"math-greeks":[{"match":"(\\\\)(?:alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|o|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega)(?![A-Za-z@])","scope":"keyword.other.math.greek.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-functions":[{"match":"(\\\\)(?:arccos|cos|csc|exp|ker|limsup|min|sinh|arcsin|cosh|deg|gcd|lg|ln|Pr|sup|arctan|cot|det|hom|lim|log|sec|tan|arg|coth|dim|inf|liminf|max|sin|tan|pmod|bmod)(?![A-Za-z@])","scope":"keyword.other.math.function.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-relations":[{"match":"(\\\\)(?:leq|lq|geq|ge|equiv|prec|succ|sim|preceq|succeq|simeq|ll|gg|subset|supset|approx|subseteq|supseteq|cong|sqsubseteq|sqsupseteq|bowtie|in|notin|ne|ni|owns|vdash|dashv|models|smile|mid|doteq|frown|parallel|perp|propto)(?![A-Za-z@])","scope":"keyword.other.math.relation.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-largeops":[{"match":"(\\\\)(?:sum|prod|coprod|int|oint|bigcap|bigcup|bigsqcup|bigvee|bigwedge|bigodot|bigotimes|bigoplus|biguplus)(?![A-Za-z@])","scope":"keyword.other.math.large-operator.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-binops":[{"match":"(\\\\)(?:pm|mp|setminus|cdot|times|ast|star|diamond|circ|bullet|div|cap|cup|uplus|sqcap|sqcup|triangleleft|triangleright|wr|bigcirc|bigtriangleup|bigtriangledown|vee|lor|wedge|land|oplus|ominus|otimes|oslash|odot|dagger|ddagger|amalg)(?![A-Za-z@])","scope":"keyword.other.math.binary-operator.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-symbols":[{"match":"(\\\\)(?:aleph|hbar|imath|jmath|ell|wp|Re|Im|partial|infty|prime|emptyset|nabla|surd|top|bot|\\||angle|triangle|backslash|forall|exists|neg|lnot|flat|natural|sharp|clubsuit|diamondsuit|heartsuit|spadesuit)(?![A-Za-z@])","scope":"keyword.other.math.symbol.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-accents":[{"match":"(\\\\)(?:hat|widehat|check|tilde|widetilde|acute|grave|dot|ddot|breve|bar|vec)(?![A-Za-z@])","scope":"keyword.other.math.accent.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-arrows":[{"match":"(\\\\)(?:leftarrow|gets|longleftarrow|Leftarrow|Longleftarrow|rightarrow|to|longrightarrow|Rightarrow|Longrightarrow|leftrightarrow|longleftrightarrow|Leftrightarrow|Longleftrightarrow|mapsto|longmapsto|hookleftarrow|hookrightarrow|uparrow|Uparrow|downarrow|Downarrow|updownarrow|Updownarrow|nearrow|searrow|nwarrow|swarrow)(?![A-Za-z@])","scope":"keyword.other.math.arrow.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-delimiters":[{"match":"(\\\\)(?:lbrack|lbrace|langle|rbrack|rbrace|rangle|vert|lfloor|lceil|Vert|rfloor|rceil)(?![A-Za-z@])","scope":"keyword.other.math.delimiter.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-commands":[{"match":"(\\\\)[A-Za-z@]+","scope":"support.function.math.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-operators":[{"match":"[<>]=?|=","scope":"keyword.operator.comparison.tex"},{"match":"[-+*/!]","scope":"keyword.operator.arithmetic.tex"},{"match":"_","scope":"punctuation.separator.subscript.tex"},{"match":"\\^","scope":"punctuation.separator.superscript.tex"}],"math-braces":[{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","push":"math-brace-group-body"}],"math-brace-group-body":[{"meta_scope":"meta.group.brace.tex"},{"include":"brace-group-end"},{"include":"math-content"}],"math-brackets":[{"match":"\\(","scope":"punctuation.section.parens.begin.tex"},{"match":"\\)","scope":"punctuation.section.parens.end.tex"},{"match":"\\[","scope":"punctuation.section.brackets.begin.tex"},{"match":"\\]","scope":"punctuation.section.brackets.end.tex"},{"match":"(\\\\){","scope":"punctuation.section.braces.begin.tex constant.character.escape.tex","captures":{"1":"punctuation.definition.backslash.tex"}},{"match":"(\\\\)}","scope":"punctuation.section.braces.end.tex constant.character.escape.tex","captures":{"1":"punctuation.definition.backslash.tex"}}],"math-numbers":[{"match":"\\d*(\\.)\\d+","scope":"meta.number.float.decimal.tex constant.numeric.value.tex","captures":{"1":"punctuation.separator.decimal.tex"}},{"match":"\\d+","scope":"meta.number.integer.decimal.tex constant.numeric.value.tex"}],"math-variables":[{"match":"[A-Za-z]+","scope":"variable.other.math.tex markup.italic.math.tex"}],"else-pop":[{"match":"(?=\\S)","pop":1}],"immediately-pop":[{"match":"","pop":1}],"paragraph-pop":[{"match":"^(?=\\s*$)","pop":1}],"unmatched-brace-pop":[{"match":"(?=})","pop":1}],"latex":[{"include":"preamble"},{"include":"structure"},{"include":"includes"},{"include":"sections"},{"include":"text-decorators"},{"include":"footnote"},{"include":"references"},{"include":"verbatim"},{"include":"verb"},{"include":"url"},{"include":"graphics"},{"include":"lists"}],"general-optional-arguments":[{"match":"\\[","scope":"punctuation.definition.group.bracket.begin.latex","push":["{'meta_scope': 'meta.group.bracket.latex'}","{'match': '\\\\]', 'scope': 'punctuation.definition.group.bracket.end.latex', 'pop': 1}","{'include': 'general-constants'}","{'include': 'general-commands'}","{'include': 'braces'}","{'match': '[A-Za-z[:digit:]-]*(?=\\\\s*\\\\=)', 'scope': 'variable.parameter.bracket.latex'}"]}],"argument-brace":[{"meta_scope":"meta.group.brace.tex"},{"match":"\\}","scope":"punctuation.definition.group.brace.end.tex","pop":1},{"include":"main"}],"argument":[{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","set":"argument-brace"},{"include":"else-pop"}],"optional-arguments":[{"include":"general-optional-arguments"},{"include":"else-pop"}],"latex-newcommand-macros":[{"match":"(\\\\)(?:new|renew|provide)command(?:\\*|(?![A-Za-z@]))","scope":"keyword.declaration.function.latex storage.modifier.newcommand.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["latex-newcommand-definition","latex-newcommand-optarg","latex-newcommand-argspec","latex-newcommand-commandname"]},{"match":"(\\\\)DeclareMathOperator(?:\\*|(?![A-Za-z@]))","scope":"support.function.declare-math-operator.latex storage.modifier.newcommand.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["latex-newcommand-definition","latex-newcommand-commandname"]}],"latex-newcommand-argspec":[{"match":"\\[","scope":"punctuation.definition.group.bracket.begin.latex","push":"latex-newcommand-argspec-body"},{"include":"paragraph-pop"},{"include":"else-pop"}],"latex-newcommand-argspec-body":[{"clear_scopes":1},{"meta_scope":"meta.function.parameters.latex"},{"match":"\\]","scope":"punctuation.definition.group.bracket.end.latex","pop":2},{"match":"\\d+\\b","scope":"meta.number.integer.decimal.latex constant.numeric.value.latex"},{"include":"general-constants"},{"include":"general-commands"},{"include":"macro-braces"}],"latex-newcommand-optarg":[{"match":"\\[","scope":"punctuation.definition.group.bracket.begin.latex","push":"latex-newcommand-optarg-body"},{"include":"paragraph-pop"},{"include":"else-pop"}],"latex-newcommand-optarg-body":[{"clear_scopes":1},{"meta_scope":"meta.function.parameters.default-value.latex"},{"match":"\\]","scope":"punctuation.definition.group.bracket.end.latex","pop":2},{"include":"general-constants"},{"include":"general-commands"},{"include":"macro-braces"}],"latex-newcommand-commandname":[{"match":"(?=\\{)","set":["latex-newcommand-wrapped-commandname","brace-group-begin"]},{"match":"(?=\\\\)","set":"latex-newcommand-bare-commandname"},{"include":"paragraph-pop"},{"include":"else-pop"}],"latex-newcommand-bare-commandname":[{"clear_scopes":1},{"meta_scope":"meta.function.identifier.latex"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"entity.name.newcommand.latex","captures":{"1":"punctuation.definition.backslash.latex"},"pop":1},{"include":"paragraph-pop"},{"include":"else-pop"}],"latex-newcommand-wrapped-commandname":[{"clear_scopes":1},{"meta_scope":"meta.function.identifier.latex"},{"include":"brace-group-end"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"entity.name.newcommand.latex","captures":{"1":"punctuation.definition.backslash.latex"}}],"latex-newcommand-definition":[{"meta_scope":"meta.function.latex"},{"match":"(?=\\{)","set":["def-function-body-meta","macro-braces-begin"]},{"match":"(?=\\\\)","set":"latex-newcommand-expression"},{"include":"paragraph-pop"},{"include":"else-pop"}],"latex-newcommand-expression":[{"meta_scope":"meta.function.body.latex"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])","scope":"support.function.general.latex","captures":{"1":"punctuation.definition.backslash.latex"},"pop":1},{"match":"\\S\\b","scope":"constant.character.escape.latex","captures":{"1":"punctuation.definition.backslash.latex"},"pop":1},{"include":"paragraph-pop"},{"include":"else-pop"}],"xparse-newcommand-macros":[{"match":"(\\\\)(?:(?:New|Renew|Provide|Declare)(:?Expandable)?DocumentCommand)(?![A-Za-z@])","scope":"keyword.declaration.function.latex storage.modifier.newcommand.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["latex-newcommand-definition","xparse-newcommand-argspec","latex-newcommand-commandname"]}],"xparse-newcommand-argspec":[{"match":"(?=\\{)","set":["xparse-newcommand-argspec-body","brace-group-begin"]},{"include":"paragraph-pop"},{"include":"else-pop"}],"xparse-newcommand-argspec-body":[{"clear_scopes":1},{"meta_scope":"meta.function.parameters.latex"},{"include":"brace-group-end"},{"include":"macro-braces"},{"include":"xparse-newcommand-single-argspec"},{"include":"general-constants"},{"include":"general-commands"},{"include":"paragraph-pop"}],"xparse-newcommand-single-argspec":[{"match":"[+!]","scope":"storage.modifier.latex"},{"match":"[movsb]","scope":"storage.type.latex"},{"match":"t","scope":"storage.type.latex","push":"xparse-newcommand-args-token"},{"match":"[rd]","scope":"storage.type.latex","push":["xparse-newcommand-args-token","xparse-newcommand-args-token"]},{"match":"[RD]","scope":"storage.type.latex","push":["xparse-newcommand-optarg-value","xparse-newcommand-args-token","xparse-newcommand-args-token"]},{"match":"O","scope":"storage.type.latex","push":"xparse-newcommand-optarg-value"},{"match":"e","scope":"storage.type.latex","push":"xparse-newcommand-args-token"},{"match":"E","scope":"storage.type.latex","push":["xparse-newcommand-optarg-value","xparse-newcommand-args-token"]},{"match":">","scope":"storage.modifier.latex"}],"xparse-newcommand-args-token":[{"meta_include_prototype":false},{"include":"unmatched-brace-pop"},{"match":"(?=\\{)","set":["xparse-newcommand-args-wrapped-token","brace-group-begin"]},{"match":"(?=\\S)","set":"xparse-newcommand-args-bare-token"},{"include":"paragraph-pop"}],"xparse-newcommand-args-bare-token":[{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])(?![A-Za-z@])","scope":"constant.other.token.latex","captures":{"1":"punctuation.definition.backslash.latex"},"pop":1},{"match":"\\S","scope":"constant.character.latex constant.other.token.latex","pop":1},{"include":"paragraph-pop"}],"xparse-newcommand-args-wrapped-token":[{"meta_scope":"meta.group.brace.tex"},{"include":"brace-group-end"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])(?![A-Za-z@])","scope":"constant.other.token.latex","captures":{"1":"punctuation.definition.backslash.latex"}},{"match":"\\S","scope":"constant.character.latex constant.other.token.latex"}],"xparse-newcommand-optarg-value":[{"meta_include_prototype":false},{"include":"unmatched-brace-pop"},{"match":"(?=\\{)","set":["xparse-newcommand-optarg-wrapped-value","brace-group-begin"]},{"match":"(?=\\S)","set":"xparse-newcommand-optarg-bare-value"},{"include":"paragraph-pop"}],"xparse-newcommand-optarg-bare-value":[{"clear_scopes":1},{"meta_scope":"meta.function.parameters.default-value.latex"},{"match":"(\\\\)(?:[A-Za-z@]+|[^A-Za-z@])(?![A-Za-z@])","scope":"support.function.latex","captures":{"1":"punctuation.definition.backslash.latex"},"pop":1},{"match":"\\S","pop":1},{"include":"paragraph-pop"}],"xparse-newcommand-optarg-wrapped-value":[{"clear_scopes":1},{"meta_scope":"meta.function.parameters.default-value.latex meta.group.brace.tex"},{"include":"brace-group-end"},{"include":"macro-braces-content"}],"box-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.box.latex"},{"include":"immediately-pop"}],"preamble":[{"match":"(\\\\)documentclass\\b","scope":"meta.preamble.documentclass.latex keyword.control.preamble.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["{'meta_content_scope': 'meta.preamble.documentclass.latex'}","{'include': 'general-optional-arguments'}","{'match': '\\\\{', 'scope': 'punctuation.definition.group.brace.begin.tex', 'set': [{'meta_scope': 'meta.preamble.documentclass.latex meta.group.brace.tex'}, {'include': 'brace-group-end'}, {'match': '[A-Za-z[:digit:]-]', 'scope': 'support.class.latex'}]}","{'include': 'immediately-pop'}"]},{"match":"(\\\\)usepackage\\b","scope":"meta.preamble.usepackage.latex keyword.control.preamble.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["{'meta_content_scope': 'meta.preamble.usepackage.latex'}","{'include': 'general-optional-arguments'}","{'match': '\\\\{', 'scope': 'punctuation.definition.group.brace.begin.tex', 'set': [{'meta_scope': 'meta.preamble.usepackage.latex meta.group.brace.tex'}, {'include': 'brace-group-end'}, {'match': '[A-Za-z[:digit:]-]*', 'scope': 'support.class.latex'}]}","{'include': 'immediately-pop'}"]}],"includes":[{"match":"((\\\\)(?:include|includeonly))(\\{)","scope":"meta.function.include.latex","captures":{"1":"keyword.control.include.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.include.latex'}","{'include': 'brace-group-end'}"]}],"sections":[{"match":"((\\\\)(?:(?:sub){0,2}section|(?:sub)?paragraph|chapter|part|addpart|addchap|addsec|minisec)(?:\\*)?)(?:(\\[)([^\\[]*?)(\\]))?(\\{)","captures":{"1":"support.function.section.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"entity.name.section.latex","5":"punctuation.definition.group.brace.end.tex","6":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.section.latex'}","{'meta_content_scope': 'entity.name.section.latex'}","{'include': 'brace-group-end'}","{'include': 'main'}"]}],"structure":[{"match":"((\\\\)(?:frontmatter|mainmatter|backmatter|appendix|printindex))\\b","captures":{"1":"keyword.control.latex","2":"punctuation.definition.backslash.latex"}}],"verbatim":[{"match":"((\\\\)begin)(\\{)\\s*((?:[vV]erbatim|alltt)\\*?)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_include_prototype': False}","{'meta_scope': 'meta.environment.verbatim.verbatim.latex'}","{'meta_content_scope': 'markup.raw.verbatim.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)\\\\s*(\\\\4)\\\\s*(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.begin.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}"]}],"lists":[{"match":"((\\\\)begin)(\\{)\\s*(itemize\\*?)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_scope': 'meta.environment.list.itemize.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)\\\\s*(\\\\4)\\\\s*(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.begin.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'main'}"]},{"match":"((\\\\)begin)(\\{)\\s*(enumerate\\*?)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_scope': 'meta.environment.list.enumerate.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)\\\\s*(\\\\4)\\\\s*(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.begin.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'main'}"]},{"match":"((\\\\)begin)(\\{)\\s*(list\\*?)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_scope': 'meta.environment.list.list.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)\\\\s*(\\\\4)\\\\s*(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.begin.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'main'}"]},{"match":"((\\\\)begin)(\\{)\\s*(description\\*?)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_scope': 'meta.environment.list.description.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)\\\\s*(\\\\4)\\\\s*(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.begin.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'main'}"]}],"inline-math-ensuremath":[{"match":"(\\\\)ensuremath(?![A-Za-z@])","scope":"meta.function.ensuremath.latex support.function.ensuremath.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":"inline-math-ensuremath-begin"}],"inline-math-ensuremath-begin":[{"meta_content_scope":"meta.function.ensuremath.latex"},{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","set":"inline-math-ensuremath-body"},{"include":"paragraph-pop"}],"inline-math-ensuremath-body":[{"meta_scope":"meta.function.ensuremath.latex meta.group.brace.tex"},{"meta_content_scope":"meta.environment.math.inline.ensuremath.latex markup.math.inline"},{"include":"brace-group-end"},{"include":"math-content"}],"inline-math-parens":[{"match":"\\\\\\(","scope":"string.other.math.latex punctuation.definition.string.begin.latex","push":"inline-math-parens-body"}],"inline-math-parens-body":[{"meta_scope":"meta.environment.math.inline.paren.latex"},{"meta_content_scope":"markup.math.inline"},{"include":"inline-math-parens-end"},{"include":"math-content"}],"inline-math-parens-end":[{"match":"\\\\\\)","scope":"string.other.math.latex punctuation.definition.string.end.latex","pop":1}],"block-math-begin-end-command":[{"match":"((\\\\)begin)(\\{)\\s*((?:align|alignat|aligned|alignedat|displaymath|eqnarray|equation|flalign|gather|gathered|math|multline|x?xalignat|split|dmath|dseries|dgroup|darray|dsuspend)\\*?)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":"block-math-begin-end-command-body"},{"match":"((\\\\)begin)\\s*(\\{)\\s*(IEEEeqnarray\\*?)\\s*(\\})(?:\\s*(\\{)\\s*([A-Za-z@]+)\\s*(\\}))?","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex","6":"punctuation.definition.group.brace.begin.tex","7":"variable.parameter.function.latex","8":"punctuation.definition.group.brace.end.tex"},"push":"block-math-begin-end-command-body"}],"block-math-begin-end-command-body":[{"meta_content_scope":"meta.environment.math.block.latex markup.math.block"},{"include":"block-math-begin-end-command-end"},{"include":"math-content"}],"block-math-begin-end-command-end":[{"match":"((\\\\)end)(\\{)\\s*(\\4)\\s*(\\})","captures":{"1":"support.function.end.latex keyword.control.flow.end.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"pop":1}],"block-math-brackets":[{"match":"\\\\\\[","scope":"string.other.math.latex punctuation.definition.string.begin.latex","push":"block-math-brackets-body"}],"block-math-brackets-body":[{"meta_scope":"meta.environment.math.block.bracket.latex"},{"meta_content_scope":"markup.math.block"},{"include":"block-math-brackets-end"},{"include":"math-content"}],"block-math-brackets-end":[{"match":"\\\\\\]","scope":"string.other.math.latex punctuation.definition.string.end.latex","pop":1}],"graphics":[{"match":"((\\\\)includegraphics)\\b","captures":{"1":"support.function.includegraphics.latex","2":"punctuation.definition.backslash.latex"},"push":["includegraphics-meta","argument","optional-arguments"]}],"includegraphics-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.includegraphics.latex"},{"include":"immediately-pop"}],"url":[{"match":"((\\\\)(?:url|href|path))(\\{)([^}]*)(\\})","scope":"meta.function.link.url.latex","captures":{"1":"support.function.url.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"markup.underline.link.latex","5":"punctuation.definition.group.brace.end.tex"}}],"verb":[{"match":"((\\\\)verb)(\\W)","captures":{"1":"support.function.verb.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.verb.latex"},"push":["{'meta_include_prototype': False}","{'meta_scope': 'meta.environment.verbatim.verb.latex'}","{'meta_content_scope': 'markup.raw.verb.latex'}","{'match': '\\\\3', 'scope': 'punctuation.definition.verb.latex', 'pop': 1}"]}],"text-decorators":[{"include":"text-normal-select-font-family"},{"include":"text-normal-select-font-shape"},{"include":"text-normal-select-font-weight"},{"match":"(\\\\)textnormal(?![A-Za-z@])","scope":"support.function.textnormal.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textnormal-meta","text-normal-body","expect-text-markup-open-brace"]},{"match":"((\\\\)text)(\\{)","captures":{"1":"support.function.text.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex"},"push":"text-body"},{"match":"((\\\\)underline)(\\{)","captures":{"1":"support.function.text.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex"},"push":"text-underline-body"}],"text-body":[{"meta_scope":"meta.function.text.latex"},{"include":"brace-group-end"},{"include":"main"}],"text-underline-body":[{"meta_scope":"meta.function.underline.latex"},{"meta_content_scope":"markup.underline.other.latex"},{"include":"brace-group-end"},{"include":"main"}],"text-normal-select-font-family":[{"match":"(\\\\)textrm(?![A-Za-z@])","scope":"support.function.textrm.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textrm-meta","text-normal-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsf(?![A-Za-z@])","scope":"support.function.textsf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsf-meta","text-normal-body","expect-text-markup-open-brace"]},{"match":"(\\\\)texttt(?![A-Za-z@])","scope":"support.function.texttt.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["texttt-meta","texttt-body","expect-text-markup-open-brace"]}],"text-normal-select-font-shape":[{"match":"(\\\\)textup(?![A-Za-z@])","scope":"support.function.textup.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textup-meta","text-normal-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textit(?![A-Za-z@])","scope":"support.function.textit.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textit-meta","text-italic-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsl(?![A-Za-z@])","scope":"support.function.textsl.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsl-meta","text-italic-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsc(?![A-Za-z@])","scope":"support.function.textsc.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsc-meta","texttt-body","expect-text-markup-open-brace"]},{"match":"(\\\\)emph(?![A-Za-z@])","scope":"support.function.emph.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["emph-meta","text-italic-body","expect-text-markup-open-brace"]}],"text-normal-select-font-weight":[{"match":"(\\\\)textbf(?![A-Za-z@])","scope":"support.function.textbf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textbf-meta","text-bold-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textmd(?![A-Za-z@])","scope":"support.function.textmd.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textmd-meta","text-normal-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textlf(?![A-Za-z@])","scope":"support.function.textlf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textlf-meta","text-normal-body","expect-text-markup-open-brace"]}],"text-normal-body":[{"include":"brace-group-end"},{"include":"main"}],"text-bold-body":[{"include":"brace-group-end"},{"include":"text-bold-select-font-family"},{"include":"text-bold-select-font-shape"},{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","push":"text-bold-brace-group-body"},{"include":"main"},{"match":".[^\\\\{}%$~&#_^]*","scope":"markup.bold.latex"}],"text-bold-select-font-family":[{"match":"(\\\\)textrm(?![A-Za-z@])","scope":"support.function.textrm.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textrm-meta","text-bold-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsf(?![A-Za-z@])","scope":"support.function.textsf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsf-meta","text-bold-body","expect-text-markup-open-brace"]},{"match":"(\\\\)texttt(?![A-Za-z@])","scope":"support.function.texttt.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["texttt-meta","texttt-body","expect-text-markup-open-brace"]}],"text-bold-select-font-shape":[{"match":"(\\\\)textup(?![A-Za-z@])","scope":"support.function.textup.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textup-meta","text-bold-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textit(?![A-Za-z@])","scope":"support.function.textit.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textit-meta","text-it-and-bf-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsl(?![A-Za-z@])","scope":"support.function.textsl.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsl-meta","text-it-and-bf-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsc(?![A-Za-z@])","scope":"support.function.textsc.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsc-meta","texttt-body","expect-text-markup-open-brace"]},{"match":"(\\\\)emph(?![A-Za-z@])","scope":"support.function.emph.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["emph-meta","text-it-and-bf-body","expect-text-markup-open-brace"]}],"text-bold-brace-group-body":[{"meta_scope":"meta.group.brace.tex"},{"include":"brace-group-end"},{"include":"text-bold-body"}],"text-italic-body":[{"include":"brace-group-end"},{"include":"text-italic-select-font-family"},{"include":"text-italic-select-font-weight"},{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","push":"text-italic-brace-group-body"},{"match":"(\\\\)emph(?![A-Za-z@])","scope":"support.function.emph.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["emph-meta","text-normal-body","brace-group-begin"]},{"include":"main"},{"match":".[^\\\\{}%$~&#_^]*","scope":"markup.italic.latex"}],"text-italic-select-font-family":[{"match":"(\\\\)textrm(?![A-Za-z@])","scope":"support.function.textrm.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textrm-meta","text-italic-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textsf(?![A-Za-z@])","scope":"support.function.textsf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textsf-meta","text-italic-body","expect-text-markup-open-brace"]},{"match":"(\\\\)texttt(?![A-Za-z@])","scope":"support.function.texttt.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["texttt-meta","texttt-body","expect-text-markup-open-brace"]}],"text-italic-select-font-weight":[{"match":"(\\\\)textbf(?![A-Za-z@])","scope":"support.function.textbf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textbf-meta","text-it-and-bf-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textmd(?![A-Za-z@])","scope":"support.function.textmd.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textmd-meta","text-italic-body","expect-text-markup-open-brace"]},{"match":"(\\\\)textlf(?![A-Za-z@])","scope":"support.function.textlf.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["textlf-meta","text-italic-body","expect-text-markup-open-brace"]}],"text-italic-brace-group-body":[{"meta_scope":"meta.group.brace.tex"},{"include":"brace-group-end"},{"include":"text-italic-body"}],"text-it-and-bf-body":[{"include":"brace-group-end"},{"include":"main"},{"match":".[^\\\\{}%$~&#_^]*","scope":"markup.bold.latex markup.italic.latex"}],"texttt-body":[{"include":"brace-group-end"},{"include":"main"},{"match":".[^\\\\{}%$~&#_^]*","scope":"markup.raw.inline.latex"}],"expect-text-markup-open-brace":[{"include":"brace-group-begin"},{"match":"(?=\\S)","pop":3}],"textnormal-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textnormal.latex"},{"include":"immediately-pop"}],"textbf-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textbf.latex"},{"include":"immediately-pop"}],"textmd-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textmd.latex"},{"include":"immediately-pop"}],"textlf-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textlf.latex"},{"include":"immediately-pop"}],"textsf-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textsf.latex"},{"include":"immediately-pop"}],"textup-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textup.latex"},{"include":"immediately-pop"}],"textsc-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textsc.latex"},{"include":"immediately-pop"}],"textrm-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textrm.latex"},{"include":"immediately-pop"}],"textit-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textit.latex"},{"include":"immediately-pop"}],"texttt-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.texttt.latex"},{"include":"immediately-pop"}],"textsl-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.textsl.latex"},{"include":"immediately-pop"}],"emph-meta":[{"meta_include_prototype":false},{"meta_scope":"meta.function.emph.latex"},{"include":"immediately-pop"}],"footnote":[{"match":"((\\\\)footnote(?:text)?)\\b","captures":{"1":"support.function.footnote.latex","2":"punctuation.definition.backslash.latex"},"push":["{'meta_scope': 'meta.function.footnote.latex'}","{'include': 'general-optional-arguments'}","{'match': '\\\\{', 'scope': 'punctuation.definition.group.brace.begin.tex', 'set': [{'meta_scope': 'meta.function.footnote.latex meta.group.brace.tex'}, {'meta_content_scope': 'markup.italic.footnote.latex'}, {'include': 'brace-group-end'}, {'include': 'main'}]}","{'match': '(?=\\\\S)', 'pop': 1}"]},{"match":"((\\\\)footnotemark)\\b","captures":{"1":"support.function.footnote.latex","2":"punctuation.definition.backslash.latex"},"push":"optional-arguments"}],"references":[{"match":"(\\\\)(?:(?:[aA]uto|foot|[pP]aren|[sS]mart|super|[tT]ext)cites?|[Cc]ites?|footcitetexts?|[cC]ite(?:author)|cite(?:title|year|date)|citeurl|(?:[aA]|no|full|footfull)cites?|[vV]olcites?|(?:[pPfFsStTaA]|ft)volcites?|(?:[pPf]?n|N)otecite|[aA]cite|[cC]ite(?:t|p|alt|alp|text|yearpar))\\b\\*?","scope":"support.function.cite.latex keyword.other.cite.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["{'meta_scope': 'meta.function.citation.latex'}","{'include': 'general-optional-arguments'}","{'match': '\\\\{', 'scope': 'punctuation.definition.group.brace.begin.tex', 'push': [{'meta_scope': 'meta.group.brace.tex'}, {'match': '[a-zA-Z0-9\\\\.:/*!^_-]+', 'scope': 'constant.other.citation.latex'}, {'include': 'brace-group-end'}]}","{'match': '', 'pop': 1}"]},{"match":"((\\\\)(?:eq|c?page|[vV]|auto|name|[cC])?ref\\*?)\\b","captures":{"1":"support.function.reference.latex keyword.other.reference.latex","2":"punctuation.definition.backslash.latex"},"push":["{'meta_scope': 'meta.function.reference.latex'}","{'include': 'general-optional-arguments'}","{'match': '\\\\{', 'scope': 'punctuation.definition.group.brace.begin.tex', 'set': [{'meta_scope': 'meta.function.reference.latex meta.group.brace.tex'}, {'match': '[a-zA-Z0-9\\\\.:/*!^_-]+', 'scope': 'constant.other.reference.latex'}, {'include': 'brace-group-end'}]}","{'match': '', 'pop': 1}"]},{"match":"((\\\\)label)(\\{)","captures":{"1":"support.function.label.latex storage.type.label.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.function.label.latex'}","{'match': '[a-zA-Z0-9\\\\.:/*!^_-]+', 'scope': 'entity.name.label.latex'}","{'include': 'brace-group-end'}"]}],"begin-end-commands":[{"match":"((\\\\)begin)(\\{)\\s*(\\w*)\\*?\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'include': 'general-optional-arguments'}","{'match': '', 'pop': 1}"]},{"match":"((\\\\)end)(\\{)\\s*(\\w*)\\*?\\s*(\\})","captures":{"1":"support.function.end.latex keyword.control.flow.end.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"}}],"packages":[{"include":"pkglistings"},{"include":"minted"},{"include":"pkgcomment"},{"include":"beamer"},{"include":"pkgarray"}],"pkglistings":[{"match":"(\\\\)lstinline\\b","scope":"meta.environment.verbatim.lstinline.latex support.function.lstinline.latex","captures":{"1":"punctuation.definition.backslash.latex"},"push":["{'meta_include_prototype': False}","{'meta_content_scope': 'meta.environment.verbatim.lstinline.latex'}","{'include': 'general-optional-arguments'}","{'match': '\\\\{', 'scope': 'punctuation.definition.group.brace.begin.tex', 'set': [{'meta_include_prototype': False}, {'meta_scope': 'meta.environment.verbatim.lstinline.latex meta.group.brace.tex'}, {'meta_content_scope': 'markup.raw.verb.latex'}, {'include': 'brace-group-end'}]}","{'match': '(\\\\W)', 'scope': 'punctuation.definition.verb.latex', 'set': [{'meta_include_prototype': False}, {'meta_scope': 'meta.environment.verbatim.lstinline.latex'}, {'meta_content_scope': 'markup.raw.verb.latex'}, {'match': '\\\\1', 'scope': 'punctuation.definition.verb.latex', 'pop': 1}]}"]},{"match":"((\\\\)begin)(\\{)(lstlisting)(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_include_prototype': False}","{'meta_scope': 'meta.environment.verbatim.lstlisting.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)(lstlisting)(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.end.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'general-optional-arguments'}","{'match': '.*(%\\\\s*(?i:c))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.c', 'embed_scope': 'meta.environment.embedded.c.latex source.c.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:cpp|c\\\\+\\\\+))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.c++', 'embed_scope': 'meta.environment.embedded.c++.latex source.c++.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:haskell|hs))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.haskell', 'embed_scope': 'meta.environment.embedded.haskell.latex source.haskell.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:java))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.java', 'embed_scope': 'meta.environment.embedded.java.latex source.java.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:html))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:text.html.basic', 'embed_scope': 'meta.environment.embedded.html.latex source.html.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:tex|latex))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:text.tex.latex', 'embed_scope': 'meta.environment.embedded.latex.latex source.latex.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:lisp))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.lisp', 'embed_scope': 'meta.environment.embedded.lisp.latex source.lisp.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:lua))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.lua', 'embed_scope': 'meta.environment.embedded.lua.latex source.lua.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:perl))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.perl', 'embed_scope': 'meta.environment.embedded.perl.latex source.perl.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:php))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.php', 'embed_scope': 'meta.environment.embedded.php.latex source.php.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:python|py))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.python', 'embed_scope': 'meta.environment.embedded.python.latex source.python.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:r))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.r', 'embed_scope': 'meta.environment.embedded.r.latex source.r.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:ruby))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.ruby', 'embed_scope': 'meta.environment.embedded.ruby.latex source.ruby.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:sh|shell|bash ))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.shell', 'embed_scope': 'meta.environment.embedded.shell.latex source.shell.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:sql|mysql|ddl|dml))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.sql', 'embed_scope': 'meta.environment.embedded.sql.latex source.sql.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:xml))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:text.xml', 'embed_scope': 'meta.environment.embedded.xml.latex source.xml.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '.*(%\\\\s*(?i:yaml))$', 'captures': {1: 'comment.line.percentage.latex'}, 'embed': 'scope:source.yaml', 'embed_scope': 'meta.environment.embedded.yaml.latex source.yaml.embedded', 'escape': '(?=\\\\\\\\end\\\\{lstlisting\\\\})'}","{'match': '', 'push': [{'meta_scope': 'meta.environment.embedded.generic.latex markup.raw.verb.latex'}, {'match': '(?=\\\\\\\\end\\\\{lstlisting\\\\})', 'pop': 1}]}"]}],"minted":[{"include":"minted-env"},{"include":"mint"}],"minted-env":[{"match":"((\\\\)begin)(\\{)(minted)(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_include_prototype': False}","{'meta_scope': 'meta.environment.verbatim.minted.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)(minted)(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.end.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'general-optional-arguments'}","{'match': '(\\\\{)(c)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.c', 'embed_scope': 'meta.environment.embedded.c.latex source.c.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(cpp|c\\\\+\\\\+)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.c++', 'embed_scope': 'meta.environment.embedded.c++.latex source.c++.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(diff)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.diff', 'embed_scope': 'meta.environment.embedded.diff.latex source.diff.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(go|golang)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.go', 'embed_scope': 'meta.environment.embedded.go.latex source.go.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(haskell|hs)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.haskell', 'embed_scope': 'meta.environment.embedded.haskell.latex source.haskell.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(html)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:text.html.basic', 'embed_scope': 'meta.environment.embedded.html.latex text.html.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(java)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.java', 'embed_scope': 'meta.environment.embedded.java.latex source.java.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(javascript|js)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.js', 'embed_scope': 'meta.environment.embedded.js.latex source.js.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(json)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.json', 'embed_scope': 'meta.environment.embedded.json.latex source.json.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(tex|latex)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:text.tex.latex', 'embed_scope': 'meta.environment.embedded.latex.latex text.tex.latex.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(lisp)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.lisp', 'embed_scope': 'meta.environment.embedded.lisp.latex source.lisp.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(lua)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.lua', 'embed_scope': 'meta.environment.embedded.lua.latex source.lua.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(obj(?:ective\\\\-|)c)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.objc', 'embed_scope': 'meta.environment.embedded.objc.latex source.objc.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(obj(?:ective\\\\-|)c\\\\+\\\\+)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.objc++', 'embed_scope': 'meta.environment.embedded.objc++.latex source.objc++.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(perl)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.perl', 'embed_scope': 'meta.environment.embedded.perl.latex source.perl.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(php)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.php', 'embed_scope': 'meta.environment.embedded.php.latex source.php.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(python|py)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.python', 'embed_scope': 'meta.environment.embedded.python.latex source.python.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(r)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.r', 'embed_scope': 'meta.environment.embedded.r.latex source.r.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(ruby)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.ruby', 'embed_scope': 'meta.environment.embedded.ruby.latex source.ruby.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(sh|shell|bash )(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.shell', 'embed_scope': 'meta.environment.embedded.shell.latex source.shell.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(sql|mysql|ddl|dml)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.sql', 'embed_scope': 'meta.environment.embedded.sql.latex source.sql.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(xml)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:text.xml', 'embed_scope': 'meta.environment.embedded.xml.latex text.xml.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '(\\\\{)(yaml)(\\\\})', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex'}, 'embed': 'scope:source.yaml', 'embed_scope': 'meta.environment.embedded.yaml.latex source.yaml.embedded', 'escape': '(?=\\\\\\\\end\\\\{minted\\\\})'}","{'match': '', 'push': [{'meta_scope': 'meta.environment.embedded.generic.latex markup.raw.verb.latex'}, {'match': '(?=\\\\\\\\end\\\\{minted\\\\})', 'pop': 1}]}"]}],"mint":[{"match":"((\\\\)mint)\\b|((\\\\)mintinline)\\b","captures":{"1":"support.function.mint.latex","2":"punctuation.definition.backslash.latex","3":"support.function.mintinline.latex","4":"punctuation.definition.backslash.latex"},"push":["{'meta_scope': 'meta.environment.verbatim.minted.latex'}","{'include': 'general-optional-arguments'}","{'match': '(\\\\{)(c)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.c', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.c.latex source.c.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(cpp|c\\\\+\\\\+)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.c++', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.c++.latex source.c++.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(diff)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.diff', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.diff.latex source.diff.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(go|golang)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.go', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.go.latex source.go.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(haskell|hs)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.haskell', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.haskell.latex source.haskell.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(html)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:text.html.basic', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.html.latex text.html.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(java)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.java', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.java.latex source.java.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(javascript|js)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.js', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.js.latex source.js.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(json)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.json', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.json.latex source.json.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(tex|latex)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:text.tex.latex', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.latex.latex text.tex.latex.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(lisp)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.lisp', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.lisp.latex source.lisp.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(lua)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.lua', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.lua.latex source.lua.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(obj(?:ective\\\\-|)c)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.objc', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.objc.latex source.objc.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(obj(?:ective\\\\-|)c\\\\+\\\\+)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.objc++', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.objc++.latex source.objc++.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(perl)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.perl', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.perl.latex source.perl.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(php)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.php', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.php.latex source.php.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(python|py)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.python', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.python.latex source.python.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(r)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.r', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.r.latex source.r.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(ruby)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.ruby', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.ruby.latex source.ruby.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(sh|shell|bash )(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.shell', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.shell.latex source.shell.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(sql|mysql|ddl|dml)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.sql', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.sql.latex source.sql.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(xml)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:text.xml', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.xml.latex text.xml.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '(\\\\{)(yaml)(\\\\})((\\\\{)|(\\\\W))', 'scope': 'meta.environment.verbatim.minted.latex', 'captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'variable.parameter.function.latex', 3: 'punctuation.definition.group.brace.end.tex', 5: 'punctuation.definition.group.brace.begin.tex', 6: 'punctuation.definition.verb.latex'}, 'embed': 'scope:source.yaml', 'embed_scope': 'meta.environment.verbatim.minted.latex meta.environment.embedded.yaml.latex source.yaml.embedded', 'escape': '(\\\\})|(\\\\4)', 'escape_captures': {1: 'punctuation.definition.group.brace.begin.tex', 2: 'punctuation.definition.verb.latex'}}","{'match': '', 'pop': 1}"]}],"pkgcomment":[{"match":"^(\\\\)comment\\b","captures":{"0":"punctuation.definition.comment.start.latex","1":"punctuation.definition.backslash.latex"},"push":["{'meta_scope': 'meta.environment.comment.latex comment.block.command.comment.latex'}","{'match': '^(\\\\\\\\)endcomment\\\\b', 'captures': {0: 'punctuation.definition.comment.end.latex', 1: 'punctuation.definition.backslash.latex'}, 'pop': 1}"]},{"match":"((\\\\)begin)(\\{)\\s*(comment)\\s*(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_scope': 'meta.environment.comment.latex'}","{'meta_content_scope': 'comment.block.environment.comment.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)\\\\s*(comment)\\\\s*(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.end.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}"]}],"beamer":[{"match":"((\\\\)begin)(\\{)(frame)(\\})","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex"},"push":["{'meta_scope': 'meta.environment.frame.latex'}","{'match': '((\\\\\\\\)end)(\\\\{)(frame)(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.end.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}","{'include': 'frametitles'}","{'include': 'main'}"]}],"frametitles":[{"match":"((\\\\)frametitle)(\\{)(.*)(\\})","scope":"meta.function.frametitle.latex","captures":{"1":"support.function.frametitle.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"entity.name.function.frame.latex","5":"punctuation.definition.group.brace.end.tex"}}],"pkgarray":[{"match":"((\\\\)newcolumntype)(?:(\\{)((?:\\\\[A-Za-z@]+)|(?:[A-Za-z@]))(\\}))(?:(\\[)(?:[^\\]]*)(\\]))*(\\{)","captures":{"1":"support.function.newcolumntype.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"support.function.latex entity.name.newcolumntype.latex","5":"punctuation.definition.group.brace.end.tex","6":"punctuation.definition.group.bracket.begin.latex","7":"punctuation.definition.group.bracket.end.latex","8":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_include_prototype': False}","{'meta_scope': 'meta.function.newcolumntype.latex'}","{'include': 'brace-group-end'}","{'include': 'array-preamble'}"]},{"match":"((\\\\)begin)(\\{)(tabular)(\\})(?:(\\[)(?:b|c|t)(\\]))?(?=\\s*\\{)","captures":{"1":"support.function.begin.latex keyword.control.flow.begin.latex","2":"punctuation.definition.backslash.latex","3":"punctuation.definition.group.brace.begin.tex","4":"variable.parameter.function.latex","5":"punctuation.definition.group.brace.end.tex","6":"punctuation.definition.group.bracket.begin.latex","7":"punctuation.definition.group.bracket.end.latex"},"push":["{'meta_scope': 'meta.environment.tabular.latex'}","{'match': '\\\\{', 'scope': 'meta.function.column-spec.latex punctuation.definition.group.brace.begin.tex', 'set': [{'meta_content_scope': 'meta.environment.tabular.latex meta.function.column-spec.latex'}, {'include': 'array-preamble'}, {'match': '\\\\}', 'scope': 'meta.function.column-spec.latex punctuation.definition.group.brace.end.tex', 'set': [{'meta_scope': 'meta.environment.tabular.latex'}, {'match': '((\\\\\\\\)end)(\\\\{)(tabular)(\\\\})', 'captures': {1: 'support.function.end.latex keyword.control.flow.end.latex', 2: 'punctuation.definition.backslash.latex', 3: 'punctuation.definition.group.brace.begin.tex', 4: 'variable.parameter.function.latex', 5: 'punctuation.definition.group.brace.end.tex'}, 'pop': 1}, {'include': 'main'}]}]}"]}],"array-preamble":[{"match":"\\{","scope":"punctuation.definition.group.brace.begin.tex","push":["{'include': 'brace-group-end'}","{'include': 'general-constants'}","{'include': 'general-commands'}","{'include': 'array-preamble'}"]},{"match":"l|r|c","scope":"keyword.other.column-type.latex"},{"match":"(?:p|m|b)(?=\\s*\\{)","scope":"support.function.parbox-column.latex","push":["[{'meta_scope': 'meta.function.parbox-column.latex'}, {'match': '', 'pop': 1}]","argument"]},{"match":"(>)\\s*(\\{)","captures":{"1":"support.function.insert-before-column.latex","2":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.function.before-column-decl.latex'}","{'include': 'brace-group-end'}","{'include': 'general-constants'}","{'include': 'general-commands'}","{'include': 'macro-braces'}"]},{"match":"(<)\\s*(\\{)","captures":{"1":"support.function.insert-after-column.latex","2":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.function.after-column-decl.latex'}","{'include': 'brace-group-end'}","{'include': 'general-constants'}","{'include': 'general-commands'}","{'include': 'macro-braces'}"]},{"match":"\\|","scope":"keyword.operator.inter-column-line.latex"},{"match":"(@)\\s*(\\{)","captures":{"1":"support.function.inter-column-nospace.latex","2":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.function.inter-column-decl.latex'}","{'include': 'brace-group-end'}","{'include': 'general-constants'}","{'include': 'general-commands'}","{'include': 'macro-braces'}"]},{"match":"(!)\\s*(\\{)","captures":{"1":"support.function.inter-column.latex","2":"punctuation.definition.group.brace.begin.tex"},"push":["{'meta_scope': 'meta.function.inter-column-decl.latex'}","{'include': 'brace-group-end'}","{'include': 'general-constants'}","{'include': 'general-commands'}","{'include': 'macro-braces'}"]},{"match":"(\\*)\\s*(\\{)","captures":{"1":"support.function.insert-repeated.latex","2":"meta.function.insert-repeated-count.latex punctuation.definition.group.brace.begin.tex"},"push":["{'meta_content_scope': 'meta.function.insert-repeated-count.latex'}","{'match': '\\\\d+', 'scope': 'constant.numeric.array-count.latex'}","{'include': 'general-commands'}","{'match': '\\\\}', 'scope': 'meta.function.insert-repeated-count.latex punctuation.definition.group.brace.end.tex', 'set': [{'match': '\\\\{', 'scope': 'meta.function.insert-repeated-content.latex punctuation.definition.group.brace.begin.tex', 'set': [{'meta_content_scope': 'meta.function.insert-repeated-content.latex'}, {'include': 'array-preamble'}, {'match': '\\\\}', 'scope': 'meta.function.insert-repeated-content.latex punctuation.definition.group.brace.end.tex', 'pop': 1}]}, {'match': '', 'pop': 1}]}"]}]}}
+
+    /* Mariana 的 scope → 颜色规则（编译自 Mariana.sublime-color-scheme）。 */
+    const TEX_COLORS = {"foreground":"#D8DEE9","background":"#303841","rules":[{"sel":[{"path":["comment"],"exclude":null},{"path":["punctuation.definition.comment"],"exclude":null}],"fg":"#A6ACB9"},{"sel":[{"path":["string"],"exclude":null}],"fg":"#99C794"},{"sel":[{"path":["meta.mapping.key","string"],"exclude":["meta.mapping.key","meta","meta","|","meta.mapping.key","meta.mapping.key","string"]}],"fg":"#5FB4B4"},{"sel":[{"path":["punctuation.definition"],"exclude":["punctuation.definition.numeric.base"]}],"fg":"#5FB4B4"},{"sel":[{"path":["constant.numeric"],"exclude":null}],"fg":"#F9AE58"},{"sel":[{"path":["storage.type.numeric"],"exclude":null}],"fg":"#C695C6","fs":"italic"},{"sel":[{"path":["constant.language"],"exclude":null}],"fg":"#EC5F66","fs":"italic"},{"sel":[{"path":["constant.character"],"exclude":null},{"path":["constant.other"],"exclude":null}],"fg":"#C695C6"},{"sel":[{"path":["variable.member"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["keyword"],"exclude":["keyword.operator"]},{"path":["keyword.operator.word"],"exclude":null}],"fg":"#C695C6"},{"sel":[{"path":["keyword.operator"],"exclude":null}],"fg":"#F97B58"},{"sel":[{"path":["punctuation.separator"],"exclude":null},{"path":["punctuation.terminator"],"exclude":null}],"fg":"#A6ACB9"},{"sel":[{"path":["punctuation.section"],"exclude":null}],"fg":"#FFFFFF"},{"sel":[{"path":["punctuation.accessor"],"exclude":null}],"fg":"#A6ACB9"},{"sel":[{"path":["punctuation.definition.annotation"],"exclude":null}],"fg":"#5FB4B4"},{"sel":[{"path":["variable.other.dollar.only.js"],"exclude":null},{"path":["variable.other.object.dollar.only.js"],"exclude":null},{"path":["variable.type.dollar.only.js"],"exclude":null},{"path":["support.class.dollar.only.js"],"exclude":null}],"fg":"#5FB4B4"},{"sel":[{"path":["storage"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["storage.type"],"exclude":null}],"fg":"#C695C6","fs":"italic"},{"sel":[{"path":["entity.name.function"],"exclude":null}],"fg":"#5FB4B4"},{"sel":[{"path":["entity.name"],"exclude":[["entity.name.section","entity.name.tag","entity.name.label"]]}],"fg":"#F9AE58"},{"sel":[{"path":["entity.other.inherited-class"],"exclude":null}],"fg":"#5FB4B4","fs":"italic"},{"sel":[{"path":["variable.parameter"],"exclude":null}],"fg":"#F9AE58"},{"sel":[{"path":["variable.language"],"exclude":null}],"fg":"#EC5F66","fs":"italic"},{"sel":[{"path":["entity.name.tag"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["entity.other.attribute-name"],"exclude":null}],"fg":"#C695C6"},{"sel":[{"path":["variable.function"],"exclude":null},{"path":["variable.annotation"],"exclude":null}],"fg":"#6699CC"},{"sel":[{"path":["support.function"],"exclude":null},{"path":["support.macro"],"exclude":null}],"fg":"#6699CC","fs":"italic"},{"sel":[{"path":["support.constant"],"exclude":null}],"fg":"#C695C6","fs":"italic"},{"sel":[{"path":["support.type"],"exclude":null},{"path":["support.class"],"exclude":null}],"fg":"#6699CC","fs":"italic"},{"sel":[{"path":["invalid"],"exclude":null}],"fg":"#F7F7F7","bg":"var(red)"},{"sel":[{"path":["invalid.deprecated"],"exclude":null}],"fg":"#F7F7F7","bg":"var(orange2)"},{"sel":[{"path":["entity.name.tag.yaml"],"exclude":null}],"fg":"#5FB4B4"},{"sel":[{"path":["source.yaml","string.unquoted"],"exclude":null}],"fg":"#D8DEE9"},{"sel":[{"path":["markup.heading"],"exclude":null}],"fs":"bold"},{"sel":[{"path":["markup.heading","punctuation.definition.heading"],"exclude":null}],"fg":"#F97B58"},{"sel":[{"path":["markup.heading.1","punctuation.definition.heading"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["string.other.link"],"exclude":null},{"path":["markup.underline.link"],"exclude":null}],"fg":"#6699CC"},{"sel":[{"path":["markup.bold"],"exclude":null}],"fs":"bold"},{"sel":[{"path":["markup.italic"],"exclude":null}],"fs":"italic"},{"sel":[{"path":["markup.underline"],"exclude":null}],"fs":"underline"},{"sel":[{"path":["markup.italic","markup.bold","|","markup.bold","markup.italic"],"exclude":null}],"fs":"bold italic"},{"sel":[{"path":["markup.underline","markup.bold","|","markup.bold","markup.underline"],"exclude":null}],"fs":"bold underline"},{"sel":[{"path":["markup.underline","markup.italic","|","markup.italic","markup.underline"],"exclude":null}],"fs":"italic underline"},{"sel":[{"path":["markup.bold","markup.italic","markup.underline","|","markup.bold","markup.underline","markup.italic","|","markup.italic","markup.bold","markup.underline","|","markup.italic","markup.underline","markup.bold","|","markup.underline","markup.bold","markup.italic","|","markup.underline","markup.italic","markup.bold"],"exclude":null}],"fs":"bold italic underline"},{"sel":[{"path":["punctuation.definition.thematic-break"],"exclude":null}],"fg":"#F9AE58"},{"sel":[{"path":["markup.list.numbered.bullet"],"exclude":null}],"fg":"#99C794"},{"sel":[{"path":["markup.quote","punctuation.definition.blockquote"],"exclude":null},{"path":["markup.list","punctuation.definition.list_item"],"exclude":null}],"fg":"#F9AE58"},{"sel":[{"path":["markup.raw"],"exclude":null}],"bg":"color(var(blue2) alpha(0.38))"},{"sel":[{"path":["markup.raw.inline"],"exclude":null}],"bg":"color(var(blue2) alpha(0.5))"},{"sel":[{"path":[["text punctuation.definition.italic","text punctuation.definition.bold"]],"exclude":null}],"fg":"#C695C6"},{"sel":[{"path":["meta.diff"],"exclude":null},{"path":["meta.diff.header"],"exclude":null}],"fg":"#C695C6"},{"sel":[{"path":["markup.deleted"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["markup.inserted"],"exclude":null}],"fg":"#99C794"},{"sel":[{"path":["markup.changed"],"exclude":null}],"fg":"#F9AE58"},{"sel":[{"path":["support.type.property-name"],"exclude":null}],"fg":"#D8DEE9"},{"sel":[{"path":["constant.numeric.line-number.match"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["message.error"],"exclude":null}],"fg":"#EC5F66"},{"sel":[{"path":["message.warning"],"exclude":null}],"fg":"#EE932B"},{"sel":[{"path":["message.info"],"exclude":null}],"fg":"#6699CC"},{"sel":[{"path":["diff.deleted"],"exclude":null}],"bg":"hsla(357, 45%, 60%, 0.15)"},{"sel":[{"path":["diff.deleted.char"],"exclude":null}],"bg":"hsla(357, 60%, 60%, 0.30)"},{"sel":[{"path":["diff.inserted"],"exclude":null}],"bg":"hsla(180, 45%, 60%, 0.15)"},{"sel":[{"path":["diff.inserted.char"],"exclude":null}],"bg":"hsla(180, 60%, 60%, 0.30)"}]}
+
+    /* ---- 分词器（真源：tools/tex-tokenizer.mjs）---- */
+
+/**
+ * mini TextMate 引擎 —— 直接跑编译好的 Sublime 语法，不自创任何规则。
+ *
+ * 支持 Sublime `.sublime-syntax` 里这套语法用到的全部要素：
+ *   match / captures / push / set / pop / include / meta_scope /
+ *   meta_content_scope / meta_include_prototype / clear_scopes / prototype
+ *
+ * 匹配语义按 TextMate：
+ *   - 当前 context 里的 pattern **按书写顺序**逐个试，第一个命中的胜出
+ *   - `include: X` 就地展开成 X 的 pattern 列表（懒展开，带深度上限防递归）
+ *   - 每个 context 末尾隐式带上 `prototype`（除非 meta_include_prototype: false）
+ *   - 整个匹配范围按 `captures` 的分组边界切开，各段附加各自的 scope
+ */
+
+const MAX_INCLUDE_DEPTH = 24
+
+/** 指令型条目：不是匹配器，只在进入 context 时读一次。 */
+const DIRECTIVE = new Set([
+  'meta_scope', 'meta_content_scope', 'meta_include_prototype',
+  'clear_scopes', 'apply_prototype', 'with_prototype',
+])
+
+const EMPTY = []
+
+/**
+ * 编译并缓存正则。语法里已经做过 Oniguruma→JS 的转换；
+ * 这里再兜一层：任何编译失败都退化成「永不匹配」，不让整块崩掉。
+ */
+function compile(grammar, pattern, cache, broken) {
+  let re = cache.get(pattern)
+  if (re !== undefined) return re
+  try {
+    /* `d` = hasIndices（拿到每个捕获组的精确 [start,end) 绝对下标）
+       `y` = 锚定在 lastIndex
+       `m` = `^`/`$` 按**行**匹配 —— Sublime 的 `^` 就是行首，少了它多行语法全废 */
+    re = new RegExp(pattern, 'dym')
+  } catch (error) {
+    try {
+      re = new RegExp(pattern, 'ym')
+    } catch (error2) {
+      broken.push({ pattern, message: String(error2 && error2.message) })
+      re = null
+    }
+  }
+  cache.set(pattern, re)
+  return re
+}
+
+/**
+ * 把一个 context 的「进入时指令」读出来（meta_scope / meta_content_scope /
+ * meta_include_prototype）。
+ */
+function readDirectives(list) {
+  let metaScope = null
+  let metaContentScope = null
+  let includePrototype = true
+  for (let i = 0; i < list.length; i += 1) {
+    const p = list[i]
+    if (p === null || typeof p !== 'object') continue
+    if (typeof p.meta_scope === 'string') metaScope = p.meta_scope
+    if (typeof p.meta_content_scope === 'string') metaContentScope = p.meta_content_scope
+    if (p.meta_include_prototype === false) includePrototype = false
+  }
+  return { metaScope, metaContentScope, includePrototype }
+}
+
+/**
+ * 分词。
+ *
+ * @param {string} text - 原文。
+ * @param {object} grammar - `{ contexts: {...} }`，编译产物。
+ * @returns {{tokens: Array, broken: Array}} tokens 为
+ *          `{ start, end, scopes: string[] }`，按位置升序、无重叠。
+ */
+function tokenize(text, grammar) {
+  const contexts = grammar.contexts || {}
+  const cache = new Map()
+  const broken = []
+  const tokens = []
+
+  /** 栈：每层 `{ name, scopes: string[] }`；scopes 是该层贡献的 scope。 */
+  const stack = []
+  const pushContext = (name, extraScopes) => {
+    const body = contexts[name]
+    if (!Array.isArray(body)) return false
+    const d = readDirectives(body)
+    const scopes = (extraScopes || []).slice()
+    if (d.metaScope !== null) scopes.push(d.metaScope)
+    if (d.metaContentScope !== null) scopes.push(d.metaContentScope)
+    stack.push({ name, scopes, includePrototype: d.includePrototype })
+    return true
+  }
+
+  if (!pushContext('main', null)) return { tokens, broken }
+
+  /** 当前累积的 scope 栈（自底向上拼接）。 */
+  const currentScopes = (extra) => {
+    const out = []
+    for (let i = 0; i < stack.length; i += 1) {
+      const s = stack[i].scopes
+      for (let j = 0; j < s.length; j += 1) out.push(s[j])
+    }
+    if (extra !== undefined && extra !== null) {
+      const parts = String(extra).split(/\s+/)
+      for (let k = 0; k < parts.length; k += 1) if (parts[k] !== '') out.push(parts[k])
+    }
+    return out
+  }
+
+  /**
+   * 在当前 context（递归含 include 与 prototype）里找第一个命中的 pattern。
+   * @returns {object|null} `{ pat, m }`。
+   */
+  const findMatch = (name, pos, depth) => {
+    if (depth > MAX_INCLUDE_DEPTH) return null
+    const body = contexts[name]
+    if (!Array.isArray(body)) return null
+    for (let i = 0; i < body.length; i += 1) {
+      const pat = body[i]
+      if (pat === null || typeof pat !== 'object') continue
+      if (typeof pat.include === 'string') {
+        const target = resolveInclude(pat.include)
+        if (target === null) continue
+        const hit = findMatch(target, pos, depth + 1)
+        if (hit !== null) return hit
+        continue
+      }
+      if (pat.match === undefined) continue
+      const re = compile(grammar, pat.match, cache, broken)
+      if (re === null) continue
+      re.lastIndex = pos
+      const m = re.exec(text)
+      if (m !== null && m.index === pos) return { pat, m }
+    }
+    return null
+  }
+
+  const resolveInclude = (spec) => {
+    if (spec.charCodeAt(0) === 35 /* # */) return spec.slice(1)
+    if (spec === '$self' || spec === '$base') return 'main'
+    if (spec.startsWith('scope:')) return null /* 跨语法，已合并，忽略 */
+    if (spec.startsWith('Packages/')) return null
+    return spec
+  }
+
+  /** 顶层查找：当前 context → 它的 prototype。 */
+  const findHere = (pos) => {
+    const top = stack[stack.length - 1]
+    if (top === undefined) return null
+    const hit = findMatch(top.name, pos, 0)
+    if (hit !== null) return hit
+    if (top.includePrototype && contexts.prototype !== undefined) {
+      return findMatch('prototype', pos, 0)
+    }
+    return null
+  }
+
+  const emit = (start, end, scopes) => {
+    if (end <= start) return
+    const last = tokens.length > 0 ? tokens[tokens.length - 1] : null
+    if (last !== null && last.end === start && sameScopes(last.scopes, scopes)) {
+      last.end = end /* 相邻同 scope 合并，token 数少很多 */
+      return
+    }
+    tokens.push({ start, end, scopes })
+  }
+
+  const sameScopes = (a, b) => {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false
+    return true
+  }
+
+  const applyActions = (pat, m) => {
+    /* pop / set 先执行（set = 弹掉当前再压入） */
+    if (pat.pop !== undefined) {
+      const n = pat.pop === true ? 1 : (typeof pat.pop === 'number' ? pat.pop : 1)
+      for (let i = 0; i < n && stack.length > 1; i += 1) stack.pop()
+    }
+    if (pat.set !== undefined) {
+      if (stack.length > 1) stack.pop()
+      const list = Array.isArray(pat.set) ? pat.set : [pat.set]
+      for (let i = 0; i < list.length; i += 1) pushContext(list[i], null)
+    }
+    if (pat.push !== undefined) {
+      const list = Array.isArray(pat.push) ? pat.push : [pat.push]
+      for (let i = 0; i < list.length; i += 1) pushContext(list[i], null)
+      void m
+    }
+  }
+
+  let pos = 0
+  let guard = 0
+  const guardMax = text.length * 8 + 4096
+
+  while (pos < text.length) {
+    guard += 1
+    if (guard > guardMax) break /* 异常语法导致的死循环，保命 */
+    const hit = findHere(pos)
+    if (hit === null) {
+      emit(pos, pos + 1, currentScopes(null))
+      pos += 1
+      continue
+    }
+    const { pat, m } = hit
+    const len = m[0].length
+    const base = currentScopes(pat.scope)
+
+    /* 按 captures 的分组边界切开，各段追加自己的 scope。
+       ⚠️ `m.indices[i]` 是**绝对**下标（不是相对 match 起点）。
+       ⚠️ 捕获组会**嵌套**：`sections` 规则里捕获 2（反斜杠 `\`）就在捕获 1
+          （`\chapter`）内部。所以不能简单排序后顺序输出 —— 那样内层会和外层
+          重叠，渲染时反斜杠会被输出两遍。正确做法是按边界切段，
+          每段取「覆盖它的所有捕获组」，外层在前、内层在后。 */
+    const caps = pat.captures
+    if (caps !== undefined && caps !== null && len > 0) {
+      const marks = []
+      const indices = m.indices
+      for (const key of Object.keys(caps)) {
+        const idx = Number(key)
+        if (!Number.isFinite(idx) || idx <= 0) continue
+        const span = indices === undefined ? undefined : indices[idx]
+        if (span === undefined || span === null) continue
+        if (span[1] <= span[0]) continue
+        marks.push({ from: span[0], to: span[1], scope: String(caps[key]) })
+      }
+      const end = pos + len
+      if (marks.length === 0) {
+        emit(pos, end, base)
+      } else {
+        const bounds = [pos, end]
+        for (const mk of marks) {
+          if (mk.from > pos && mk.from < end) bounds.push(mk.from)
+          if (mk.to > pos && mk.to < end) bounds.push(mk.to)
+        }
+        bounds.sort((a, b2) => a - b2)
+        const head = pat.scope === undefined ? '' : String(pat.scope) + ' '
+        for (let k = 0; k + 1 < bounds.length; k += 1) {
+          const a = bounds[k]
+          const b2 = bounds[k + 1]
+          if (b2 <= a) continue
+          /* 覆盖这一段的所有捕获组：外层先出、内层后出 */
+          const active = []
+          for (const mk of marks) {
+            if (mk.from <= a && mk.to >= b2) active.push(mk)
+          }
+          active.sort((x, y) => (y.to - x.to) || (x.from - y.from))
+          let extra = ''
+          for (const mk of active) extra += mk.scope + ' '
+          emit(a, b2, currentScopes(head + extra))
+        }
+      }
+    } else {
+      emit(pos, pos + len, base)
+    }
+
+    applyActions(pat, m)
+
+    if (len === 0) {
+      /* 零宽匹配：只要栈有变化就继续，否则前进一格防死循环 */
+      const before = stack.length
+      if (stack.length === before) {
+        emit(pos, pos + 1, currentScopes(null))
+        pos += 1
+      }
+      continue
+    }
+    pos += len
+  }
+  if (pos === text.length) {
+    /* 收尾：无需输出 */
+  }
+  return { tokens, broken }
+}
+
+    /* ---- 配色器（真源：tools/tex-colors.mjs）---- */
+
+/**
+ * scope → 颜色 —— 跑编译好的 Mariana 规则，语义照 TextMate/Sublime：
+ *
+ *   - 选择器的 `,` 是并列，空格是**后代匹配**（栈里后者更靠内）
+ *   - `-` 是排除：整条排除路径若在栈里匹配上，则这条规则不适用
+ *   - `|` 是或，`()` 是分组
+ *   - scope 名按**点边界前缀**匹配（`string` 命中 `string.other.math.tex`）
+ *   - 命中的规则里取**特异性最高**者；同分取**后写**者（规则顺序即优先级）
+ */
+
+/** 一个 scope 名是否命中一个选择器单元。单元是字符串或（`|` 的）单元数组。 */
+function matchUnit(unit, scope) {
+  if (Array.isArray(unit)) {
+    for (let i = 0; i < unit.length; i += 1) {
+      if (matchUnit(unit[i], scope)) return true
+    }
+    return false
+  }
+  const u = String(unit)
+  return scope === u || scope.startsWith(u + '.')
+}
+
+/**
+ * 一条路径（由单元组成的数组）是否在 scope 栈里按顺序匹配。
+ * 从栈顶往回走：路径最后一个单元要匹配栈里最靠内的位置，依次向前。
+ *
+ * @returns {number} 命中时返回**最后一个单元所在的栈下标**（越靠内越大），
+ *                   未命中返回 -1。这个深度就是特异性的第一判据 ——
+ *                   比如反斜杠的栈是
+ *                   `[… support.function.general.latex, punctuation.definition.backslash.latex]`，
+ *                   `punctuation.definition` 命中更深的那层（青），
+ *                   `support.function` 命中外层（蓝），Sublime 取前者。
+ */
+function matchPath(path, stack) {
+  if (!Array.isArray(path) || path.length === 0) return -1
+  let limit = stack.length - 1
+  let lastHit = -1
+  for (let p = path.length - 1; p >= 0; p -= 1) {
+    let found = -1
+    for (let k = limit; k >= 0; k -= 1) {
+      if (matchUnit(path[p], stack[k])) {
+        found = k
+        break
+      }
+    }
+    if (found === -1) return -1
+    if (p === path.length - 1) lastHit = found
+    limit = found - 1
+  }
+  return lastHit
+}
+
+/** 一条选择器分支（`{path, exclude}`）是否命中；命中返回深度，否则 -1。 */
+function matchExpr(expr, stack) {
+  const depth = matchPath(expr.path, stack)
+  if (depth < 0) return -1
+  if (expr.exclude !== null && expr.exclude !== undefined && matchPath(expr.exclude, stack) >= 0) return -1
+  return depth
+}
+
+/**
+ * 造一个「scope 栈 → 样式」的求值器。
+ *
+ * @param {object} scheme - `{ foreground, rules: [{ sel, fg, fs, bg }] }`
+ * @returns {(scopes: string[]) => {fg: string, fs: string, score: number, rule: number}}
+ */
+function makeColorizer(scheme) {
+  const rules = scheme.rules || []
+  const fallbackFg = scheme.foreground || '#D8DEE9'
+
+  return function styleOf(scopes) {
+    if (!Array.isArray(scopes) || scopes.length === 0) {
+      return { fg: fallbackFg, fs: '', score: 0, rule: -1 }
+    }
+    let bestFg = null
+    let bestFs = ''
+    let bestDepth = -1
+    let bestLen = -1
+    let bestRule = -1
+    for (let i = 0; i < rules.length; i += 1) {
+      const r = rules[i]
+      const alts = r.sel
+      if (!Array.isArray(alts)) continue
+      let hitDepth = -1
+      let hitLen = 0
+      for (let a = 0; a < alts.length; a += 1) {
+        const d = matchExpr(alts[a], scopes)
+        if (d >= 0) {
+          hitDepth = d
+          hitLen = alts[a].path.length
+          break
+        }
+      }
+      if (hitDepth < 0) continue
+      /* 特异性：**先看命中深度**（越靠内的 scope 越具体），再看选择器长度；
+         都相同才轮到「后写者胜」。这与 Sublime 的排名一致，也是反斜杠能
+         单独取到青色的原因。 */
+      let better = false
+      if (hitDepth > bestDepth) better = true
+      else if (hitDepth === bestDepth && hitLen > bestLen) better = true
+      else if (hitDepth === bestDepth && hitLen === bestLen && i > bestRule) better = true
+      if (!better) continue
+      if (r.fg !== undefined) {
+        bestFg = r.fg
+        bestFs = r.fs === undefined ? '' : r.fs
+        bestDepth = hitDepth
+        bestLen = hitLen
+        bestRule = i
+      } else if (r.fs !== undefined) {
+        /* 只给字体的规则（如 markup.italic）：有颜色时不动色，只记字体 */
+        bestFs = r.fs
+        bestDepth = hitDepth
+        bestLen = hitLen
+        bestRule = i
+      } else {
+        bestDepth = hitDepth
+        bestLen = hitLen
+        bestRule = i
+      }
+    }
+    return {
+      fg: bestFg === null ? fallbackFg : bestFg,
+      fs: bestFs,
+      score: bestDepth,
+      rule: bestRule,
+    }
+  }
+}
+
+    /* @dsh-tex-assets:end */
 
     /**
-     * 判定一个代码块是不是 LaTeX。
+     * 判定一段文本是不是 LaTeX。
      *
-     * 宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，**pre 上没有语言名**
-     * （`codeToHtml` 只加 `class="shiki <themeName>"`，宿主也没把 lang 写进 DOM）。
-     * 所以只能看内容特征。
+     * 宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，**pre 上没有语言名**，
+     * 所以只能看内容特征。用几个高区分度的模式，避免把 C/JS 里的 `\n`、
+     * 反斜杠续行误判成 LaTeX。
      *
-     * 判据：出现 LaTeX 特有的命令形状。用几个高区分度的模式，避免把 C/JS 里的
-     * `\n`、反斜杠续行误判成 LaTeX。
-     *
-     * @param {Element} pre - 代码块容器。
+     * @param {string|Element} target - 原文或元素。
      * @returns {boolean}
      */
-    function isLatexBlock(pre) {
-      if (!pre || typeof pre.textContent !== 'string') return false
-      const text = pre.textContent
+    function isLatexBlock(target) {
+      const text = typeof target === 'string'
+        ? target
+        : (target !== null && target !== undefined && typeof target.textContent === 'string'
+          ? target.textContent
+          : '')
       if (text.length === 0) return false
-      /* 高区分度：这些在别的语言里几乎不会出现 */
       if (/\\(?:begin|end)\s*\{[A-Za-z*]+\}/.test(text)) return true
       if (/\\(?:documentclass|usepackage|section|subsection|chapter|label|ref|cite)\b/.test(text)) return true
-      /* 数学 + 反斜杠命令（`$...\alpha...$`）：要求 $ 与 \cmd 同时出现 */
       if (/\$[^$]*\\[A-Za-z]+[^$]*\$/.test(text)) return true
-      /* 多个 `\cmd{` 形式（自定义宏，如 \bi \zh{...}） */
       const macroBraces = text.match(/\\[A-Za-z@]+\s*\{/g)
-      if (macroBraces !== null && macroBraces.length >= 2) return true
-      return false
+      return macroBraces !== null && macroBraces.length >= 2
+    }
+
+    /** 取「宿主原本的 `<code>`」的文本 —— 不能算上我们自己的渲染层。 */
+    function texSourceOf(pre) {
+      let code = null
+      const kids = pre.children
+      if (kids !== undefined && kids !== null) {
+        for (let i = 0; i < kids.length; i += 1) {
+          const el = kids[i]
+          if (el === null || el === undefined || el.tagName !== 'CODE') continue
+          if (el.classList !== undefined && el.classList !== null
+            && el.classList.contains(TEX_LAYER_CLASS)) continue
+          code = el
+          break
+        }
+      }
+      return (code === null ? pre : code).textContent
+    }
+
+    /* ---- 渲染：分词 → 配色 → HTML ---------------------------------------- */
+
+    /** 配色器（配色规则是个大对象，首次用到才建）。 */
+    let texStyleOf = null
+
+    /** scope 栈 → `{fg, fs}`。 */
+    function texStyleOfScopes(scopes) {
+      if (texStyleOf === null) texStyleOf = makeColorizer(TEX_COLORS)
+      return texStyleOf(scopes)
+    }
+
+    const TEX_ESCAPE = { '&': '&amp;', '<': '&lt;', '>': '&gt;' }
+
+    /** HTML 转义。 */
+    function escHtml(s) {
+      return s.replace(/[&<>]/g, (c) => TEX_ESCAPE[c])
+    }
+
+    /** Mariana 的 `font_style` → 内联 CSS 片段。 */
+    function fontStyleCss(fs) {
+      if (typeof fs !== 'string' || fs === '') return ''
+      const parts = fs.split(/\s+/)
+      let css = ''
+      if (parts.indexOf('italic') !== -1) css += ';font-style:italic'
+      if (parts.indexOf('bold') !== -1) css += ';font-weight:700'
+      if (parts.indexOf('underline') !== -1) css += ';text-decoration:underline'
+      return css
     }
 
     /**
-     * Sublime 认识的**数学内置命令**（从 `TeX.sublime-syntax` 的 greeks / mathfun /
-     * relations / largeops / binops / symbols / accents / arrows / delimiters
-     * 九个变量里抽出来的 240 个名字）。
+     * 把一段 LaTeX 渲染成 Shiki 那种结构的 HTML：
+     * 每个逻辑行一个 `<span class="line">`（宿主的行号是靠 `.line` 上的
+     * CSS 计数器画的，所以这个类名必须留着），行间用换行文本节点。
      *
-     * 用途：Sublime 里这些走 `keyword.other.math.*` → Mariana 的 `keyword` → **紫**；
-     * 而**不在表里的**（如用户自定义宏 `\dd`）走 `support.function.math.tex`
-     * → Mariana 的 `support.function` → **蓝**。要区分这两类只能靠名单。
+     * @param {string} text - 原文。
+     * @returns {string} HTML。
      */
-    const MATH_BUILTINS = new Set(
-      ('Delta Downarrow Gamma Im Lambda Leftarrow Leftrightarrow Longleftarrow '
-        + 'Longleftrightarrow Longrightarrow Omega Phi Pi Pr Psi Re Rightarrow Sigma Theta '
-        + 'Uparrow Updownarrow Upsilon Vert Xi acute aleph alpha amalg angle approx arccos '
-        + 'arcsin arctan arg ast backslash bar beta bigcap bigcirc bigcup bigodot bigoplus '
-        + 'bigotimes bigsqcup bigtriangledown bigtriangleup biguplus bigvee bigwedge bmod bot '
-        + 'bowtie breve bullet cap cdot check chi circ clubsuit cong coprod cos cosh cot coth '
-        + 'csc cup dagger dashv ddagger ddot deg delta det diamond diamondsuit dim div dot doteq '
-        + 'downarrow ell emptyset epsilon equiv eta exists exp flat forall frown gamma gcd ge geq '
-        + 'gets gg grave hat hbar heartsuit hom hookleftarrow hookrightarrow imath in inf infty '
-        + 'int iota jmath kappa ker lambda land langle lbrace lbrack lceil leftarrow '
-        + 'leftrightarrow leq lfloor lg lim liminf limsup ll ln lnot log longleftarrow '
-        + 'longleftrightarrow longmapsto longrightarrow lor lq mapsto max mid min models mp mu '
-        + 'nabla natural ne nearrow neg ni notin nu nwarrow odot oint omega ominus oplus oslash '
-        + 'otimes owns parallel partial perp phi pi pm pmod prec preceq prime prod propto psi '
-        + 'rangle rbrace rbrack rceil rfloor rho rightarrow searrow sec setminus sharp sigma sim '
-        + 'simeq sin sinh smile spadesuit sqcap sqcup sqsubseteq sqsupseteq star subset subseteq '
-        + 'succ succeq sum sup supset supseteq surd swarrow tan tau theta tilde times to top '
-        + 'triangle triangleleft triangleright uparrow updownarrow uplus upsilon varepsilon '
-        + 'varphi varpi varrho varsigma vartheta vdash vec vee vert wedge widehat widetilde wp '
-        + 'wr xi zeta').split(' '),
-    )
-
-    /**
-     * 文本模式下 Mariana 给**紫**的命令名（`keyword.*` / `storage.type.*`）。
-     *
-     * Shiki 的 LaTeX 语法对 `\begin`/`\end` 给的是 `support.function.be.latex`
-     * （→ function → 蓝），而 Sublime 给的是
-     * `support.function.begin.latex keyword.control.flow.begin.latex` ——
-     * 后者更具体，Mariana 按 `keyword` 上成紫。所以要单独点出来。
-     */
-    const TEXT_KEYWORD_COMMANDS = new Set([
-      'begin', 'end', 'label', 'ref', 'eqref', 'pageref', 'cite', 'item', 'include',
-      'usepackage', 'documentclass', 'hline', 'newcommand', 'renewcommand', 'def', 'let',
-      'footnote', 'caption',
-    ])
-
-    /** span 级后处理用到的类名（对应的 CSS 见 buildLatexSheet）。 */
-    const TX_CLASS = Object.freeze({
-      backslash: 'dmt-tx-bs', /* \            → 青 punctuation.definition */
-      brace: 'dmt-tx-brace', /* { }          → 青 punctuation.definition.arguments */
-      mathDelim: 'dmt-tx-mdelim', /* $ / $$       → 青 punctuation.definition.string */
-      mathCmd: 'dmt-tx-mcmd', /* \hbar 等内置 → 紫 keyword.other.math.* */
-      mathCustom: 'dmt-tx-mcustom', /* \dd 等自定义 → 蓝 support.function.math */
-      number: 'dmt-tx-num', /* 123 / 1.5    → 橙 constant.numeric */
-      operator: 'dmt-tx-op', /* = < > + - */ /* → 橙红 keyword.operator */
-      separator: 'dmt-tx-sep', /* _ ^          → 灰 punctuation.separator */
-      paren: 'dmt-tx-paren', /* ( ) [ ]      → 白 punctuation.section */
-      ident: 'dmt-tx-id', /* E h p        → 白斜体 variable.other.math */
-      kwCmd: 'dmt-tx-kwcmd', /* \begin \end  → 紫 keyword.control.* */
-    })
-
-    /**
-     * span 级后处理：把 Sublime 的数学/标点配色贴到 Shiki 已经渲染好的 token span 上。
-     *
-     * 为什么需要这一步（令牌模型覆盖不到的几处）：
-     *   - `\` 反斜杠、`$` 分隔符在 Shiki 的主题里**没有任何规则** → 继承正文色，
-     *     改 CSS 变量无从下手；
-     *   - 数学块内标识符（白）与运算符（橙红）和命令（紫）被归成同一个令牌，
-     *     靠变量区分不了。
-     *
-     * 做法：按文档顺序遍历叶子 span，维护「是否在数学模式」（`$` 开关），
-     * 按 span 文本判类并打 class；CSS 用 `!important` 盖过 Shiki 写在内联 style 上的
-     * `color: var(--shiki-token-*)`。
-     *
-     * ⚠️ **重渲染会让 class 全丢**（Shiki 换主题、React 重渲染都会换掉整棵子树）。
-     * 所以块上会留一个**探针**：记住第一个被打类的 span 及其文本；下次扫描时若
-     * 探针还连着、还带我们的类、文本也没变，才认为整块仍然贴好。早期版本用
-     * 「子元素数 + 文本长度」当签名 —— 重渲染后这两者都不变，于是永远跳过、
-     * 类补不回来（表现就是「有的正常、有的是白的」）。
-     *
-     * @param {Element} pre - 已标记 `dmt-latex` 的代码块。
-     * @returns {number} 实际打上类的 span 数。
-     */
-    function applyLatexSpans(pre) {
-      if (!pre || typeof pre.querySelectorAll !== 'function') return 0
-      let spans
-      try {
-        spans = pre.querySelectorAll('span')
-      } catch {
-        return 0
+    function renderTexHtml(text) {
+      const { tokens } = tokenize(text, TEX_GRAMMAR)
+      const out = []
+      let line = []
+      const flush = () => {
+        out.push('<span class="line">' + line.join('') + '</span>')
+        line = []
       }
-      if (!spans || typeof spans.length !== 'number') return 0
-
-      let inMath = false
-      let prevBackslash = false
-      let touched = 0
-      for (let i = 0; i < spans.length; i += 1) {
-        const span = spans[i]
-        /* 只要有元素子节点就是容器（`span.line` 之类），跳过 —— 否则它的
-           textContent 是整行，判类会全乱。 */
-        if (span.children !== undefined && span.children !== null && span.children.length > 0) continue
-        const t = span.textContent
-        if (typeof t !== 'string' || t === '') continue
-        const cls = span.classList
-        if (cls === undefined || cls === null || typeof cls.add !== 'function') continue
-
-        let kind = null
-
-        /* ---- 与模式无关的标点 ---- */
-        if (t === '\\') {
-          kind = TX_CLASS.backslash
-        } else if (t === '{' || t === '}') {
-          kind = TX_CLASS.brace
-        } else if (/^\$+$/.test(t)) {
-          kind = TX_CLASS.mathDelim
-          /* `\$` 是转义美元号，不切换数学模式 */
-          if (!prevBackslash && t.length % 2 === 1) inMath = !inMath
-        } else if (/^\\[A-Za-z@]/.test(t)) {
-          /* ⚠️ **Shiki 把反斜杠和命令名合成了同一个 span**
-             （真机实测：`\chapter` 是一个 token，不是 `\` + `chapter` 两段）。
-             所以判命令必须按**前缀**，不能等 `prevBackslash` —— 早期版本就是
-             因此对所有命令都不生效，数学里只剩块级令牌覆盖，整片紫。 */
-          const name = (/^\\([A-Za-z@]+)/.exec(t) || [null, ''])[1]
-          if (inMath) {
-            kind = MATH_BUILTINS.has(name) ? TX_CLASS.mathCmd : TX_CLASS.mathCustom
-          } else {
-            kind = TEXT_KEYWORD_COMMANDS.has(name) ? TX_CLASS.kwCmd : null
+      for (let i = 0; i < tokens.length; i += 1) {
+        const tk = tokens[i]
+        const piece = text.slice(tk.start, tk.end)
+        const st = texStyleOfScopes(tk.scopes)
+        const style = 'color:' + st.fg + fontStyleCss(st.fs)
+        const parts = piece.split('\n')
+        for (let p = 0; p < parts.length; p += 1) {
+          if (p > 0) {
+            flush()
+            out.push('\n')
           }
-        } else if (prevBackslash && /^[A-Za-z@]+$/.test(t)) {
-          /* 兼容「反斜杠单独成段」的语法版本：命令名紧跟其后。 */
-          if (inMath) {
-            kind = MATH_BUILTINS.has(t) ? TX_CLASS.mathCmd : TX_CLASS.mathCustom
-          } else {
-            kind = TEXT_KEYWORD_COMMANDS.has(t) ? TX_CLASS.kwCmd : null
+          if (parts[p] !== '') {
+            line.push('<span style="' + style + '">' + escHtml(parts[p]) + '</span>')
           }
-        } else if (inMath) {
-          /* ---- 数学模式内的操作数 ---- */
-          if (/^[0-9]+(?:[.,][0-9]+)?$/.test(t)) kind = TX_CLASS.number
-          else if (/^(?:[<>]=?|=|!=)$/.test(t) || /^[-+*/!]$/.test(t)) kind = TX_CLASS.operator
-          else if (t === '_' || t === '^') kind = TX_CLASS.separator
-          else if (/^[()[\]]$/.test(t)) kind = TX_CLASS.paren
-          else if (/^[A-Za-z]+$/.test(t)) kind = TX_CLASS.ident
         }
+      }
+      flush()
+      return out.join('')
+    }
 
-        if (kind !== null) {
-          try {
-            cls.add(kind)
-            touched += 1
-            /* 探针：只记第一个。文本也存下来，用来发现内容被原地更新。 */
-            if (touched === 1) {
-              pre.__dmtTxProbe = span
-              pre.__dmtTxProbeText = t
+    /**
+     * 保证这一块有一个渲染好的层，且内容与原文一致。
+     *
+     * 用**原文内容**当「要不要重画」的判据 —— 早先版本用「子元素数 + 文本长度」，
+     * 重渲染后这两个数不变，于是永远跳过、类补不回来。
+     *
+     * @param {Element} pre - 代码块。
+     * @param {string} srcText - 宿主原本的文本。
+     */
+    function syncTexLayer(pre, srcText) {
+      let layer = pre.__dmtTexLayer
+      if (layer === undefined || layer === null || layer.isConnected === false) {
+        layer = document.createElement('code')
+        layer.className = TEX_LAYER_CLASS
+        /* 把宿主原本的 <code> 藏起来（它仍在 DOM 里、React 照常更新，只是不显示） */
+        const kids = pre.children
+        if (kids !== undefined && kids !== null) {
+          for (let i = 0; i < kids.length; i += 1) {
+            const el = kids[i]
+            if (el !== null && el !== undefined && el.tagName === 'CODE'
+              && el.classList !== undefined && !el.classList.contains(TEX_LAYER_CLASS)) {
+              try {
+                el.classList.add(TEX_HIDDEN_CLASS)
+              } catch {
+                /* classList 不可用 */
+              }
             }
+          }
+        }
+        try {
+          pre.appendChild(layer)
+        } catch (error) {
+          note('append tex layer', error)
+          return
+        }
+        pre.__dmtTexLayer = layer
+        pre.__dmtTexSrc = undefined
+      }
+      if (pre.__dmtTexSrc === srcText && layer.__dmtTexHtml !== undefined) return
+      const html = renderTexHtml(srcText)
+      if (layer.__dmtTexHtml !== html) {
+        layer.__dmtTexHtml = html
+        try {
+          layer.innerHTML = html
+        } catch (error) {
+          note('paint tex layer', error)
+          return
+        }
+      }
+      pre.__dmtTexSrc = srcText
+    }
+
+    /** 撤掉渲染层，恢复宿主原本的显示。 */
+    function disposeTexLayer(pre) {
+      const layer = pre.__dmtTexLayer
+      if (layer !== undefined && layer !== null) {
+        try {
+          layer.remove()
+        } catch (error) {
+          note('remove tex layer', error)
+        }
+        pre.__dmtTexLayer = null
+      }
+      pre.__dmtTexSrc = undefined
+      const kids = pre.children
+      if (kids === undefined || kids === null) return
+      for (let i = 0; i < kids.length; i += 1) {
+        const el = kids[i]
+        if (el !== null && el !== undefined && el.classList !== undefined
+          && el.classList.contains(TEX_HIDDEN_CLASS)) {
+          try {
+            el.classList.remove(TEX_HIDDEN_CLASS)
           } catch {
             /* classList 不可用 */
           }
         }
-        prevBackslash = t === '\\'
       }
-      return touched
     }
 
     /**
-     * 这一块的 span 类是否还贴着（重渲染会把它们抹掉）。
-     * @param {Element} pre - 代码块。
-     * @returns {boolean} 仍然有效则 true。
-     */
-    function latexSpansIntact(pre) {
-      const probe = pre.__dmtTxProbe
-      if (probe === undefined || probe === null) return false
-      if (pre.__dmtTxProbeText === undefined) return false
-      /* 被移除 / 被换掉 → 失效 */
-      if (probe.isConnected === false) return false
-      if (probe.parentNode === null || probe.parentNode === undefined) return false
-      /* 类被抹掉（重渲染换了节点）→ 失效 */
-      if (typeof probe.className !== 'string' || probe.className.indexOf('dmt-tx-') === -1) return false
-      /* 同一个节点但文本被换了 → 之前判的类可能已不对，重来 */
-      if (probe.textContent !== pre.__dmtTxProbeText) return false
-      return true
-    }
-
-    /**
-     * 生成 LaTeX 块的样式表：令牌覆盖 + span 级类规则。
+     * LaTeX 块的样式表：只需要把宿主的副本藏起来。
      *
-     * 类规则必须带 `!important`：Shiki 把颜色写在 span 的内联 `style` 上，
-     * 内联样式的优先级高于普通类选择器 —— 不加重会被无视。
+     * （渲染层的颜色是写在内联 style 上的，不依赖样式表；
+     * 早先那套「覆盖 --shiki-token-*」现在用不到了 —— 我们自己就是着色器。）
      */
     function buildLatexSheet() {
-      const scope = 'pre.' + LATEX_BLOCK_CLASS
-      const decls = Object.keys(LATEX_TOKEN_OVERRIDES)
-        .map((name) => name + ':' + LATEX_TOKEN_OVERRIDES[name])
-        .join(';')
-      const rules = [
-        /* 令牌覆盖：兜住块内所有 token（punctuation.definition.arguments 等） */
-        scope + '{' + decls + '}',
-        /* span 级：Sublime 的 punctuation.definition（青） */
-        scope + ' .' + TX_CLASS.backslash + ',' + scope + ' .' + TX_CLASS.brace
-          + ',' + scope + ' .' + TX_CLASS.mathDelim + '{color:' + LATEX_COLORS.teal + '!important}',
-        /* span 级：数学内置命令、文本模式关键命令 → keyword.* → 紫 */
-        scope + ' .' + TX_CLASS.mathCmd + ',' + scope + ' .' + TX_CLASS.kwCmd
-          + '{color:' + LATEX_COLORS.keywordPink + '!important}',
-        /* span 级：自定义数学宏 → support.function.math → 蓝 */
-        scope + ' .' + TX_CLASS.mathCustom + '{color:' + LATEX_COLORS.functionBlue + '!important}',
-        /* span 级：数字 → constant.numeric → 橙 */
-        scope + ' .' + TX_CLASS.number + '{color:' + LATEX_COLORS.numberOrange + '!important}',
-        /* span 级：运算符 → keyword.operator → 橙红 */
-        scope + ' .' + TX_CLASS.operator + '{color:' + LATEX_COLORS.operatorRed + '!important}',
-        /* span 级：下标/上标 → punctuation.separator → 灰 */
-        scope + ' .' + TX_CLASS.separator + '{color:' + LATEX_COLORS.separatorGrey + '!important}',
-        /* span 级：数学里的圆/方括号 → punctuation.section → 白 */
-        scope + ' .' + TX_CLASS.paren + '{color:' + LATEX_COLORS.white + '!important}',
-        /* span 级：数学标识符 → variable.other.math → 正文色 + 斜体 */
-        scope + ' .' + TX_CLASS.ident + '{color:' + LATEX_COLORS.foreground
-          + '!important;font-style:italic!important}',
-      ]
-      return rules.join('\n')
+      return 'pre.' + LATEX_BLOCK_CLASS + ' .' + TEX_HIDDEN_CLASS + '{display:none}'
     }
 
 
@@ -2082,7 +2434,9 @@ window.__ModuleLoader__.load({
         const pre = blocks[i]
         if (!pre || !pre.classList) continue
         const marked = pre.classList.contains(LATEX_BLOCK_CLASS)
-        if (isLatexBlock(pre)) {
+        /* 判据用**宿主原本的文本**，不能算上我们自己的渲染层（否则文本翻倍） */
+        const srcText = texSourceOf(pre)
+        if (isLatexBlock(srcText)) {
           count += 1
           if (!marked) {
             try {
@@ -2091,19 +2445,18 @@ window.__ModuleLoader__.load({
               /* classList 不可用 */
             }
           }
-          /* span 级后处理。用**探针**判断是否还需要重跑：Shiki 重渲染会换掉整棵
-             子树、把类全抹掉，而「子元素数 + 文本长度」在重渲染后并不变 —— 早期
-             版本据此跳过，结果类再也补不回来（表现是「有的正常、有的是白的」）。 */
-          if (!latexSpansIntact(pre)) applyLatexSpans(pre)
+          /* 渲染成我们自己的层（原层隐藏但保留，React 照常更新它）。
+             `syncTexLayer` 内部按**原文内容**判断要不要重画 —— 早先用
+             「子元素数 + 文本长度」，重渲染后这两个数不变，于是永远跳过、
+             样式补不回来。 */
+          syncTexLayer(pre, srcText)
         } else if (marked) {
           try {
             pre.classList.remove(LATEX_BLOCK_CLASS)
           } catch {
             /* 同上 */
           }
-          pre.__dmtTxProbe = null
-          pre.__dmtTxProbeText = undefined
-          /* 子树的 class 还留在 span 上，但样式表卸载后不再生效；重进时会重新判。 */
+          disposeTexLayer(pre)
         }
       }
       diag.latex = count
@@ -4018,6 +4371,7 @@ window.__ModuleLoader__.load({
                   } catch {
                     /* classList 不可用 */
                   }
+                  disposeTexLayer(markedBlocks[i])
                 }
               } catch {
                 /* 无 DOM */
@@ -4081,15 +4435,19 @@ window.__ModuleLoader__.load({
         buildMarkdownSheet,
         LATEX_SHEET_ID,
         LATEX_BLOCK_CLASS,
-        LATEX_TOKEN_OVERRIDES,
-        LATEX_COLORS,
-        MATH_BUILTINS,
-        TEXT_KEYWORD_COMMANDS,
-        TX_CLASS,
+        TEX_LAYER_CLASS,
+        TEX_HIDDEN_CLASS,
         isLatexBlock,
+        texSourceOf,
         buildLatexSheet,
-        applyLatexSpans,
-        latexSpansIntact,
+        renderTexHtml,
+        syncTexLayer,
+        disposeTexLayer,
+        texStyleOfScopes,
+        tokenize,
+        makeColorizer,
+        TEX_GRAMMAR,
+        TEX_COLORS,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
