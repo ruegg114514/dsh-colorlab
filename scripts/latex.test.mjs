@@ -168,23 +168,62 @@ check(sectionRule !== undefined && sectionRule.captures && sectionRule.captures[
  * B. 判定 LaTeX 块
  * ------------------------------------------------------------------ */
 
-console.log('  B. 判定 LaTeX 块')
+console.log('  B. 只按宿主声明的语言名判定（不猜内容）')
 
-const latexSamples = [
-  '\\chapter{从经典到量子}\\label{ch:whyquant}',
-  '\\bi \\zh{频率与角频率}: $E=h\\nu=\\hbar\\omega$',
-  '\\begin{summarybox}\n\\bi 1900--1926 的历史链条\n\\end{summarybox}',
-  '$\\hbar=h/2\\pi$',
+/** 造一个带横幅（语言名）的代码块。 */
+function preWithLang(text, lang) {
+  const banner = makeEl('div')
+  const span = makeEl('span', lang)
+  banner.appendChild(span)
+  banner.querySelector = (sel) => (sel === 'span' ? span : null)
+  const block = makeEl('div')
+  block._classes.add('md-code-block')
+  const pre = makeEl('pre', text)
+  block.appendChild(banner)
+  block.appendChild(pre)
+  block.querySelector = (sel) => (sel === '[data-code-block-banner]' ? banner : null)
+  pre.closest = (sel) => (sel === '.md-code-block' ? block : null)
+  return pre
+}
+
+/* ---- B1. 读语言名 ---- */
+check(t.blockLanguageOf(preWithLang('', 'latex')) === 'latex', '读出语言名 latex')
+check(t.blockLanguageOf(preWithLang('', 'Python')) === 'python', '归一化成小写')
+check(t.blockLanguageOf(preWithLang('', '  TeX  ')) === 'tex', '去掉首尾空白')
+check(t.blockLanguageOf(makeEl('pre', 'x')) === null, '没有横幅 → null')
+check(t.blockLanguageOf(preWithLang('', '代码')) === null, '横幅是中文说明文字 → null')
+check(t.blockLanguageOf(preWithLang('', 'code')) === null, '横幅是 code 标签 → null')
+
+/* ---- B2. 只有 LaTeX 语言名才渲染 ---- */
+for (const lang of ['latex', 'tex', 'ltx']) {
+  check(t.shouldRenderLatex(preWithLang('\\chapter{x}', lang)) === true, `语言名 ${lang} → 渲染`)
+}
+
+/* ---- B3. 误判回归：你报的这四种语言，以及同类 ---- */
+/* 根因是早先那套「猜内容」的兜底：
+   `\d{4}` `\w{2}` 命中「≥2 个 \cmd{」→ js/yaml/json 中招；
+   `"C:\Users\$env:USERNAME"` 命中「$…\cmd…$」→ ps1 中招。 */
+const otherLanguages = [
+  ['javascript', 'const dateRe = /\\d{4}-\\d{2}-\\d{2}/;\nexport function f(v) { return `${v}\\n`; }\n'],
+  ['js', 'const p = "C:\\\\Users\\\\name";\nconst q = /\\w{2}/;\n'],
+  ['yaml', "pattern: '\\d{2}/\\d{2}'\npath: C:\\Users\\{name}\\data\n"],
+  ['json', '{"pattern": "\\\\d{4}", "alt": "\\\\w{2}"}\n'],
+  ['powershell', '$path = "C:\\Users\\$env:USERNAME\\file.txt"\nif (Test-Path $path) { Write-Host "ok" }\n'],
+  ['python', 'import re\nm = re.match(r"\\d{4}", s)\n'],
+  ['sql', 'SELECT * FROM t WHERE a = 1;'],
+  ['markdown', '# Title\n\\d{2} and \\w{2}'],
+  ['bash', 'echo "$HOME\\dir" && ls /tmp'],
 ]
-const nonLatexSamples = [
-  'const a = "x\\n" + b;',
-  'print("Pages:", len(doc))',
-  'SELECT * FROM t WHERE a = 1;',
-  'hello world',
-]
-for (const s of latexSamples) check(t.isLatexBlock(s) === true, '判为 LaTeX：' + s.slice(0, 32).replace(/\n/g, '⏎'))
-for (const s of nonLatexSamples) check(t.isLatexBlock(s) === false, '不判为 LaTeX：' + s.slice(0, 32))
-check(t.isLatexBlock('') === false, '空内容安全')
+for (const [lang, text] of otherLanguages) {
+  check(t.shouldRenderLatex(preWithLang(text, lang)) === false, `语言名 ${lang} → 不渲染`)
+  /* 就算内容真的长得像 LaTeX，也不许越界 */
+  check(t.shouldRenderLatex(preWithLang('\\chapter{从经典到量子}\\label{ch:x}', lang)) === false,
+    `语言名 ${lang} → 内容再像 LaTeX 也不渲染`)
+}
+
+/* ---- B4. 读不到语言名 → 不碰（退回 Shiki） ---- */
+check(t.shouldRenderLatex(makeEl('pre', '\\chapter{从经典到量子}')) === false,
+  '读不到语言名 → 不渲染（宁可漏，不可误伤）')
 
 /* ------------------------------------------------------------------ *
  * B2. 不变量：token 必须逐字符覆盖原文，渲染不得增删字符
@@ -305,6 +344,16 @@ console.log('  D. 渲染层挂载')
   const pre = makeEl('pre')
   pre._classes.add('shiki')
   pre.appendChild(original)
+  /* 横幅声明语言名 —— 现在只有语言名说了算 */
+  const langSpan = makeEl('span', 'latex')
+  const banner = makeEl('div')
+  banner.appendChild(langSpan)
+  banner.querySelector = (sel) => (sel === 'span' ? langSpan : null)
+  const block = makeEl('div')
+  block._classes.add('md-code-block')
+  block.querySelector = (sel) => (sel === '[data-code-block-banner]' ? banner : null)
+  block.appendChild(pre)
+  pre.closest = (sel) => (sel === '.md-code-block' ? block : null)
   const dom = createFakeDom([pre])
   const mod2 = loadPlugin(dom)
   const theme = {
