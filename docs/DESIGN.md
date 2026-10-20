@@ -417,6 +417,25 @@ arrows / delimiters）里抽出 **240 个**命令名进了 `MATH_BUILTINS`。表
 （`keyword.other.math.*`），表外的（用户自定义宏如 `\dd`）走蓝
 （`support.function.math`）—— 这个区分做不了只能靠名单。
 
+**⚠️ Shiki 把反斜杠和命令名合成了同一个 span。** 真机把 DOM 打出来才看清：
+
+```
+0  "\chapter"   cls=-      rgb(102,153,204)  color:var(--shiki-token-function)
+1  "{"          cls=dmt-tx-brace  rgb(95,180,180)  color:var(--shiki-token-punctuation)
+4  "\label"     cls=-      rgb(197,148,197)  color:var(--shiki-token-keyword)
+21 "\ket{\psi}" cls=-      rgb(198,148,198)  color:var(--shiki-token-constant)
+```
+
+`\chapter` 是**一个** token（不是 `\` + `chapter` 两段）。所以判命令必须按**前缀**
+`^\\[A-Za-z@]`，不能等「前一段是反斜杠」—— 第一版按后者写，结果**所有命令都判不到**，
+数学里只剩块级令牌覆盖，整片紫（而花括号是独立 span，所以它反而是对的，
+表现为「有的好了、只有 `$` 里全紫」）。
+
+反斜杠和名字挤在同一个文本节点里，CSS 没法只染前一个字符，所以额外挂一个
+`dmt-tx-lead` 类，用 **`::first-letter`** 单独把反斜杠染青 —— 这条规则依赖
+`display:inline-block`（`::first-letter` 只对块容器生效）。inline-block 元素内部
+仍可正常换行，不会撑破布局。
+
 **为什么要守卫、为什么用「探针」而不是签名**：Shiki 换主题或 React 重渲染会换掉
 整棵子树，class 全丢。为了不每次 DOM 变动都遍历整块，需要一个「还贴着吗」的判断。
 
