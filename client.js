@@ -1102,20 +1102,28 @@ window.__ModuleLoader__.load({
      * 按 span 文本判类并打 class；CSS 用 `!important` 盖过 Shiki 写在内联 style 上的
      * `color: var(--shiki-token-*)`。
      *
+     * ⚠️ **重渲染会让 class 全丢**（Shiki 换主题、React 重渲染都会换掉整棵子树）。
+     * 所以块上会留一个**探针**：记住第一个被打类的 span 及其文本；下次扫描时若
+     * 探针还连着、还带我们的类、文本也没变，才认为整块仍然贴好。早期版本用
+     * 「子元素数 + 文本长度」当签名 —— 重渲染后这两者都不变，于是永远跳过、
+     * 类补不回来（表现就是「有的正常、有的是白的」）。
+     *
      * @param {Element} pre - 已标记 `dmt-latex` 的代码块。
+     * @returns {number} 实际打上类的 span 数。
      */
     function applyLatexSpans(pre) {
-      if (!pre || typeof pre.querySelectorAll !== 'function') return
+      if (!pre || typeof pre.querySelectorAll !== 'function') return 0
       let spans
       try {
         spans = pre.querySelectorAll('span')
       } catch {
-        return
+        return 0
       }
-      if (!spans || typeof spans.length !== 'number') return
+      if (!spans || typeof spans.length !== 'number') return 0
 
       let inMath = false
       let prevBackslash = false
+      let touched = 0
       for (let i = 0; i < spans.length; i += 1) {
         const span = spans[i]
         /* 只要有元素子节点就是容器（`span.line` 之类），跳过 —— 否则它的
@@ -1155,12 +1163,38 @@ window.__ModuleLoader__.load({
         if (kind !== null) {
           try {
             cls.add(kind)
+            touched += 1
+            /* 探针：只记第一个。文本也存下来，用来发现内容被原地更新。 */
+            if (touched === 1) {
+              pre.__dmtTxProbe = span
+              pre.__dmtTxProbeText = t
+            }
           } catch {
             /* classList 不可用 */
           }
         }
         prevBackslash = t === '\\'
       }
+      return touched
+    }
+
+    /**
+     * 这一块的 span 类是否还贴着（重渲染会把它们抹掉）。
+     * @param {Element} pre - 代码块。
+     * @returns {boolean} 仍然有效则 true。
+     */
+    function latexSpansIntact(pre) {
+      const probe = pre.__dmtTxProbe
+      if (probe === undefined || probe === null) return false
+      if (pre.__dmtTxProbeText === undefined) return false
+      /* 被移除 / 被换掉 → 失效 */
+      if (probe.isConnected === false) return false
+      if (probe.parentNode === null || probe.parentNode === undefined) return false
+      /* 类被抹掉（重渲染换了节点）→ 失效 */
+      if (typeof probe.className !== 'string' || probe.className.indexOf('dmt-tx-') === -1) return false
+      /* 同一个节点但文本被换了 → 之前判的类可能已不对，重来 */
+      if (probe.textContent !== pre.__dmtTxProbeText) return false
+      return true
     }
 
     /**
@@ -2038,22 +2072,19 @@ window.__ModuleLoader__.load({
               /* classList 不可用 */
             }
           }
-          /* span 级后处理。用「子元素数 + 文本长度」当签名：Shiki 换主题/重渲染会
-             换掉整棵子树，签名一变就重跑；内容没变则跳过，避免每次 DOM 变动都遍历。 */
-          const sig = String(pre.children === undefined ? '' : pre.children.length)
-            + ':' + String(pre.textContent.length)
-          if (pre.__dmtTxSig !== sig) {
-            pre.__dmtTxSig = sig
-            applyLatexSpans(pre)
-          }
+          /* span 级后处理。用**探针**判断是否还需要重跑：Shiki 重渲染会换掉整棵
+             子树、把类全抹掉，而「子元素数 + 文本长度」在重渲染后并不变 —— 早期
+             版本据此跳过，结果类再也补不回来（表现是「有的正常、有的是白的」）。 */
+          if (!latexSpansIntact(pre)) applyLatexSpans(pre)
         } else if (marked) {
           try {
             pre.classList.remove(LATEX_BLOCK_CLASS)
           } catch {
             /* 同上 */
           }
-          pre.__dmtTxSig = undefined
-          /* 子树的 class 还留在 span 上，但样式表卸载后不再生效；重进时签名不同会重打。 */
+          pre.__dmtTxProbe = null
+          pre.__dmtTxProbeText = undefined
+          /* 子树的 class 还留在 span 上，但样式表卸载后不再生效；重进时会重新判。 */
         }
       }
       diag.latex = count
@@ -4039,6 +4070,7 @@ window.__ModuleLoader__.load({
         isLatexBlock,
         buildLatexSheet,
         applyLatexSpans,
+        latexSpansIntact,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
