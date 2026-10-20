@@ -930,6 +930,91 @@ window.__ModuleLoader__.load({
     const ROW_SHEET_ID = 'dsh-colorlab/row.css'
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
     const MARKDOWN_SHEET_ID = 'dsh-colorlab/markdown.css'
+    const LATEX_SHEET_ID = 'dsh-colorlab/latex.css'
+
+    /* ====================================================================== *
+     * 二·七、LaTeX 代码块：让配色回到 Sublime 的样子
+     *
+     * 做法是把**两边的 scope 表**拉平对照（不是看截图猜颜色）：
+     *
+     *   Sublime `LaTeX.sublime-syntax` / `TeX.sublime-syntax`
+     *     \bi \zh  → support.function.general.latex   → Mariana: support.function → #6699CC 蓝
+     *     \ 反斜杠 → punctuation.definition.backslash  → Mariana: punctuation.definition → #5FB4B4 青
+     *     { }      → punctuation.definition.arguments  → #5FB4B4 青
+     *     $ … $    → punctuation.definition.string.*   → #5FB4B4 青
+     *     数学命令  → keyword.other.math.greek/…       → Mariana: keyword → #C695C6 紫
+     *     数学数字  → constant.numeric                 → #F9AE58 橙
+     *     数学标识符→ variable.other.math              → 无色（继承正文）
+     *
+     *   Shiki 的 LaTeX 语法 + css-variables 主题
+     *     support.function.*                       → function   → #6699CC 蓝 ✓
+     *     punctuation.definition.arguments.*       → punctuation→ 灰 ✗（应青）
+     *     punctuation.definition.function.tex（\）  → 无规则 → 继承 ✗（应青）
+     *     punctuation.section.embedded.*.math（$）  → 无规则 → 继承 ✗（应青）
+     *     constant.character.math.tex（数学命令）   → 无规则 → 继承 ✗（应紫）
+     *     整个 $…$ 块外层套了 `support.class.math.block.*` → 匹配主题的 `support` 规则
+     *                                              → 整块 constant → 全橙 ✗（Sublime 是紫命令+白标识符）
+     *
+     * 所以 LaTeX 的偏色有两个来源：
+     *   1. 数学块被 `support` 规则整块染成 constant（橙）；
+     *   2. 括号 / 反斜杠 / `$` 这些 punctuation.definition 落到灰或无色。
+     *
+     * Shiki 的令牌是**按 scope 前缀**归并的（一个 scope 只能落一个令牌，一个令牌只能
+     * 一个颜色），而 Sublime 是按 scope 精确上色 —— 所以不可能 1:1。能做的是把
+     * **LaTeX 块内**的这两个令牌改成 Sublime 对应色，其它语言不受影响：
+     *
+     *   constant    → #C695C6 紫（数学命令压过数学数字：命令远比裸数字常见）
+     *   punctuation → #5FB4B4 青（`punctuation.definition` 在 Mariana 里就是青）
+     *
+     * 为什么必须**按块**而不是全局：全局把 constant 改紫会让 Python/JS 的数字也变紫，
+     * 而 Sublime 里 constant.numeric 是橙。只有 LaTeX 需要这个偏移。
+     * ====================================================================== */
+
+    /** LaTeX 代码块的标记类名（运行时打在 `<pre class="shiki">` 上）。 */
+    const LATEX_BLOCK_CLASS = 'dmt-latex'
+
+    /** LaTeX 块内要覆盖的令牌 → Mariana 对应色。 */
+    const LATEX_TOKEN_OVERRIDES = Object.freeze({
+      '--shiki-token-constant': '#C695C6', /* Mariana var(pink)：keyword.other.math.* 的紫 */
+      '--shiki-token-punctuation': '#5FB4B4', /* Mariana var(blue5)：punctuation.definition 的青 */
+    })
+
+    /**
+     * 判定一个代码块是不是 LaTeX。
+     *
+     * 宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，**pre 上没有语言名**
+     * （`codeToHtml` 只加 `class="shiki <themeName>"`，宿主也没把 lang 写进 DOM）。
+     * 所以只能看内容特征。
+     *
+     * 判据：出现 LaTeX 特有的命令形状。用几个高区分度的模式，避免把 C/JS 里的
+     * `\n`、反斜杠续行误判成 LaTeX。
+     *
+     * @param {Element} pre - 代码块容器。
+     * @returns {boolean}
+     */
+    function isLatexBlock(pre) {
+      if (!pre || typeof pre.textContent !== 'string') return false
+      const text = pre.textContent
+      if (text.length === 0) return false
+      /* 高区分度：这些在别的语言里几乎不会出现 */
+      if (/\\(?:begin|end)\s*\{[A-Za-z*]+\}/.test(text)) return true
+      if (/\\(?:documentclass|usepackage|section|subsection|chapter|label|ref|cite)\b/.test(text)) return true
+      /* 数学 + 反斜杠命令（`$...\alpha...$`）：要求 $ 与 \cmd 同时出现 */
+      if (/\$[^$]*\\[A-Za-z]+[^$]*\$/.test(text)) return true
+      /* 多个 `\cmd{` 形式（自定义宏，如 \bi \zh{...}） */
+      const macroBraces = text.match(/\\[A-Za-z@]+\s*\{/g)
+      if (macroBraces !== null && macroBraces.length >= 2) return true
+      return false
+    }
+
+    /** 生成 LaTeX 块的令牌覆盖样式表。 */
+    function buildLatexSheet() {
+      const decls = Object.keys(LATEX_TOKEN_OVERRIDES)
+        .map((name) => name + ':' + LATEX_TOKEN_OVERRIDES[name])
+        .join(';')
+      return 'pre.' + LATEX_BLOCK_CLASS + '{' + decls + '}'
+    }
+
 
     /* ====================================================================== *
      * 二·六、Markdown 的细节着色
@@ -1535,7 +1620,7 @@ window.__ModuleLoader__.load({
 
     const state = { ...DEFAULTS }
     const store = createStore({ ...DEFAULTS, status: initialStatus() })
-    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off' }
+    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off', latex: 0 }
 
     /**
      * 未确认的颜色改动；空对象 = 无草稿。
@@ -1727,6 +1812,124 @@ window.__ModuleLoader__.load({
 
     /** 过程行高亮样式表元素（独立于主题通道与正文高亮）。 */
     let rowEl = null
+
+    /* ---- LaTeX 块标记：样式表 + 观察器 ---------------------------------- */
+
+    /** LaTeX 覆盖样式表元素。 */
+    let latexEl = null
+    /** 观察器与合帧定时器（代码块是滚动时才渲染的）。 */
+    let latexObserver = null
+    let latexRescanTimer = null
+
+    /**
+     * 把 LaTeX 块的标记同步到 DOM，并维护覆盖样式表。
+     *
+     * 代码块是**动态渲染**的（滚动到旧消息才插进 DOM），所以不能只在设置变更时扫一遍；
+     * 观察器会在 DOM 变化时合帧重扫。
+     */
+    function syncLatexSheet() {
+      if (typeof document === 'undefined') return
+      const wanted = state.enabled !== 'off' && shouldApply() && state.syntax !== 'off'
+      if (wanted) ensureLatexObserver()
+      else disposeLatexObserver()
+
+      let blocks = []
+      try {
+        blocks = document.querySelectorAll('pre.shiki')
+      } catch {
+        blocks = []
+      }
+      let count = 0
+      for (let i = 0; i < blocks.length; i += 1) {
+        const pre = blocks[i]
+        if (!pre || !pre.classList) continue
+        const marked = pre.classList.contains(LATEX_BLOCK_CLASS)
+        if (isLatexBlock(pre)) {
+          count += 1
+          if (!marked) {
+            try {
+              pre.classList.add(LATEX_BLOCK_CLASS)
+            } catch {
+              /* classList 不可用 */
+            }
+          }
+        } else if (marked) {
+          try {
+            pre.classList.remove(LATEX_BLOCK_CLASS)
+          } catch {
+            /* 同上 */
+          }
+        }
+      }
+      diag.latex = count
+
+      if (!wanted || count === 0) {
+        if (latexEl !== null) {
+          try {
+            latexEl.remove()
+          } catch (error) {
+            note('remove latex sheet', error)
+          }
+          latexEl = null
+        }
+        return
+      }
+      try {
+        if (latexEl === null) {
+          latexEl = document.createElement('style')
+          latexEl.dataset.plugin = 'dsh-colorlab'
+          latexEl.dataset.pluginCss = LATEX_SHEET_ID
+          document.head.appendChild(latexEl)
+        }
+        writeSheet(latexEl, buildLatexSheet())
+      } catch (error) {
+        note('install latex sheet', error)
+        diag.latex = 'error'
+      }
+    }
+
+    /** 合帧重扫：DOM 一次变动可能带进很多节点，合并成一次。 */
+    function scheduleLatexRescan() {
+      if (latexRescanTimer !== null) return
+      if (typeof setTimeout !== 'function') return
+      latexRescanTimer = setTimeout(() => {
+        latexRescanTimer = null
+        syncLatexSheet()
+      }, 120)
+      if (latexRescanTimer && typeof latexRescanTimer.unref === 'function') latexRescanTimer.unref()
+    }
+
+    /** 装上观察器（幂等）。只听 childList，改 class 不会自激。 */
+    function ensureLatexObserver() {
+      if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return
+      if (latexObserver !== null) return
+      try {
+        latexObserver = new MutationObserver(() => scheduleLatexRescan())
+        latexObserver.observe(document.body, { childList: true, subtree: true })
+      } catch {
+        latexObserver = null
+      }
+    }
+
+    /** 拆掉观察器与定时器。 */
+    function disposeLatexObserver() {
+      if (latexObserver !== null) {
+        try {
+          latexObserver.disconnect()
+        } catch {
+          /* 已断开 */
+        }
+        latexObserver = null
+      }
+      if (latexRescanTimer !== null) {
+        try {
+          clearTimeout(latexRescanTimer)
+        } catch {
+          /* 无 timer */
+        }
+        latexRescanTimer = null
+      }
+    }
 
     /** 卡片覆盖样式表元素 + 检测到的卡片类名（null = 还没检测到，稍后重试）。 */
     let cardEl = null
@@ -1992,6 +2195,7 @@ window.__ModuleLoader__.load({
       syncMarkdownSheet()
       syncRowSheet()
       syncCardSheet()
+      syncLatexSheet()
       publish()
     }
 
@@ -3550,6 +3754,29 @@ window.__ModuleLoader__.load({
                 markdownEl = null
               }
               diag.markdown = 'off'
+              disposeLatexObserver()
+              if (latexEl !== null) {
+                try {
+                  latexEl.remove()
+                } catch (error) {
+                  note('teardown latex sheet', error)
+                }
+                latexEl = null
+              }
+              diag.latex = 0
+              /* 去掉打在代码块上的标记，否则下次启用时残留。 */
+              try {
+                const markedBlocks = document.querySelectorAll('pre.' + LATEX_BLOCK_CLASS)
+                for (let i = 0; i < markedBlocks.length; i += 1) {
+                  try {
+                    markedBlocks[i].classList.remove(LATEX_BLOCK_CLASS)
+                  } catch {
+                    /* classList 不可用 */
+                  }
+                }
+              } catch {
+                /* 无 DOM */
+              }
               if (pageStyleEl !== null) {
                 try {
                   pageStyleEl.remove()
@@ -3607,6 +3834,11 @@ window.__ModuleLoader__.load({
         MARKDOWN_SHEET_ID,
         MARKDOWN_RULES,
         buildMarkdownSheet,
+        LATEX_SHEET_ID,
+        LATEX_BLOCK_CLASS,
+        LATEX_TOKEN_OVERRIDES,
+        isLatexBlock,
+        buildLatexSheet,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
