@@ -382,15 +382,46 @@ lang 写进 DOM）。所以按内容特征判：`\begin{env}` / `\end{env}` /
 至少两个 `\cmd{`。代码块是滚动时才渲染的，所以用 `MutationObserver`
 （只听 `childList`，改 class 不会自激）合帧重扫。
 
-**仍然做不到的**（令牌模型的天花板）：
+**仍然做不到的**（令牌模型的天花板）：`\` 反斜杠、`$` 分隔符在 Shiki 的主题里
+**没有任何规则**（继承正文色）；数学块内「标识符（白）／运算符（橙红）／命令（紫）」
+被归成同一个令牌。改 CSS 变量到不了这些地方。
 
-- `\` 反斜杠与 `$` 分隔符在 Shiki 里**没有任何令牌**（继承正文色），改 CSS 变量
-  无从下手 —— 只能是正文色，而 Sublime 是青。
-- 数学块内「标识符（白）／运算符（紫）」无法区分：Shiki 把整个块归成一个令牌。
-  现在的取法是紫（命令与运算符合计占多数），代价是裸标识符也变紫。
+### span 级后处理：把令牌模型盖不到的部分补上
 
-要 100% 还原，只能做**span 级后处理**（遍历 Shiki 生成的 span，按文本内容
-重新打 class + `!important` 覆盖），那是另一个量级的复杂度，暂不做。
+所以在令牌覆盖之外，LaTeX 块还会走一遍**span 级后处理**：按文档顺序遍历 Shiki
+生成的叶子 span，维护「是否在数学模式」（`$` 开关，`\$` 转义不切换），按文本判类
+并打 class；CSS 用 `!important` 盖过 Shiki 写在内联 `style` 上的
+`color: var(--shiki-token-*)`（**内联样式优先于普通类选择器，不加 `!important`
+会被无视** —— 这是这一步唯一必须用 `!important` 的地方）。
+
+判类规则与对应的 Mariana 色（全部取自方案文件，含此前手抄误差的修正：
+`hsl(180,36%,54%)` 精确是 `#5FB4B4`，不是 `#5FB3B3`）：
+
+| span 文本 | Sublime scope | class | 颜色 |
+|---|---|---|---|
+| `\` | `punctuation.definition.backslash` | `dmt-tx-bs` | `#5FB4B4` |
+| `{` `}` | `punctuation.definition.arguments` | `dmt-tx-brace` | `#5FB4B4` |
+| `$` | `punctuation.definition.string` | `dmt-tx-mdelim` | `#5FB4B4` |
+| `\hbar` `\nu`（数学内置） | `keyword.other.math.*` | `dmt-tx-mcmd` | `#C695C6` |
+| `\begin` `\label`（文本关键字） | `keyword.control.*` | `dmt-tx-kwcmd` | `#C695C6` |
+| `\dd`（自定义数学宏） | `support.function.math` | `dmt-tx-mcustom` | `#6699CC` |
+| 数字 | `constant.numeric` | `dmt-tx-num` | `#F9AE58` |
+| `=` `<` `+` `-` | `keyword.operator` | `dmt-tx-op` | `#F97B58` |
+| `_` `^` | `punctuation.separator` | `dmt-tx-sep` | `#A6ACB9` |
+| `(` `)` `[` `]` | `punctuation.section` | `dmt-tx-paren` | `#FFFFFF` |
+| `E` `h` `p` | `variable.other.math` | `dmt-tx-id` | `#D8DEE9` + 斜体 |
+
+**「数学内置命令」是查表判定的**：从 `TeX.sublime-syntax` 的九个变量
+（greeks / mathfun / relations / largeops / binops / symbols / accents /
+arrows / delimiters）里抽出 **240 个**命令名进了 `MATH_BUILTINS`。表内的走紫
+（`keyword.other.math.*`），表外的（用户自定义宏如 `\dd`）走蓝
+（`support.function.math`）—— 这个区分做不了只能靠名单。
+
+**为什么要签名守卫**：Shiki 换主题或重渲染会换掉整棵子树，class 全丢。块上存
+「子元素数 + 文本长度」当签名，签名变了才重跑；否则每次 DOM 变动遍历整块太贵。
+
+**已知残留**（Sublime 有、这里没做）：`\begin{equation}` 这类**环境形式的数学**
+不切换数学模式（只认 `$`），所以环境体内的标识符不会被当数学处理。
 
 > ⚠️ **两次踩同一个坑的教训**：截图取色不能用「最饱和像素」—— ClearType
 > 子像素渲染会给蓝字配红/绿边纹，采出来是青的。要用**众数**（笔画主体色），
@@ -698,3 +729,7 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] **控制台干净**：重启后 F12 打开 Console，没有 `[dsh-colorlab]` 开头的报错
       （尤其不能有 `RangeError: Maximum call stack size exceeded` —— 那是 `applyNow`
       与 `theme/change` 互相递归的信号，见上文防重入那一节）
+- [ ] **LaTeX 对标 Sublime**：`\` 反斜杠是**青**、命令名是**蓝**（`\begin`/`\label` 是紫）
+- [ ] **LaTeX 对标 Sublime**：`{` `}` 与 `$` 是**青**
+- [ ] **LaTeX 对标 Sublime**：数学命令 `\hbar` `\nu` `\oint` 是**紫**，自定义宏 `\dd` 是**蓝**
+- [ ] **LaTeX 对标 Sublime**：数学数字是**橙**、`=` `+` 是**橙红**、标识符 `E` `h` 是**白斜体**
