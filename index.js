@@ -68,7 +68,8 @@ const FIELD_DEFAULTS = {
   rowColor: '#7EE787',
   /* 汇总行 / 本轮汇总高亮色。默认亮黄（Mariana 的查找高亮色），在 #343D46 上 7.10:1。 */
   summaryColor: '#FAC863',
-  /* 文件卡片（已编辑 N 个文件）头部横带颜色；空串 = 跟随宿主中性灰。 */
+  /* 卡片底色：「已编辑 N 个文件」的头部横带 + 「交付文件」「计划」「排程」卡片的整张底色。
+     空串 = 跟随宿主中性灰。 */
   cardColor: '',
   /* 要高亮哪些过程行：JSON 数组，值是 ROW_VARIANTS 里的 variant。 */
   rowVariants: '["write","edit","bash","summary","turn"]',
