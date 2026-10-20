@@ -67,11 +67,19 @@ function matchExpr(expr, stack) {
 export function makeColorizer(scheme) {
   const rules = scheme.rules || []
   const fallbackFg = scheme.foreground || '#D8DEE9'
+  /* 同一个 scope 栈在一份文档里会重复成千上万次（每个数字、每个标识符都是同一套
+     scope），而求一次要过全部 63 条规则。实测这是**渲染的主要开销**：
+     200 行文档 9692 个 token，配色 216ms、分词只有 42ms。
+     按 scope 栈缓存后，实际求值次数从「token 数」降到「不同的 scope 组合数」（几十）。 */
+  const memo = new Map()
 
   return function styleOf(scopes) {
     if (!Array.isArray(scopes) || scopes.length === 0) {
       return { fg: fallbackFg, fs: '', score: 0, rule: -1 }
     }
+    const key = scopes.join('\u0000')
+    const cached = memo.get(key)
+    if (cached !== undefined) return cached
     let bestFg = null
     let bestFs = ''
     let bestDepth = -1
@@ -118,12 +126,14 @@ export function makeColorizer(scheme) {
         bestRule = i
       }
     }
-    return {
+    const out = {
       fg: bestFg === null ? fallbackFg : bestFg,
       fs: bestFs,
       score: bestDepth,
       rule: bestRule,
     }
+    memo.set(key, out)
+    return out
   }
 }
 
