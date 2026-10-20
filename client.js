@@ -1027,11 +1027,22 @@ const DIRECTIVE = new Set([
 const EMPTY = []
 
 /**
+ * 正则缓存 —— **跨调用常驻**。
+ *
+ * 早先这个 Map 建在 `tokenize()` 里面，等于每次分词都要把 400+ 条 pattern
+ * 重新编译一遍。提到模块级之后，同一份语法只编译一次。
+ */
+const REGEX_CACHE = new Map()
+
+/** 每个语法的「context 名 → 进入时指令」缓存（按语法对象弱引用）。 */
+const DIRECTIVES_CACHE = new WeakMap()
+
+/**
  * 编译并缓存正则。语法里已经做过 Oniguruma→JS 的转换；
  * 这里再兜一层：任何编译失败都退化成「永不匹配」，不让整块崩掉。
  */
-function compile(grammar, pattern, cache, broken) {
-  let re = cache.get(pattern)
+function compile(pattern, broken) {
+  let re = REGEX_CACHE.get(pattern)
   if (re !== undefined) return re
   try {
     /* `d` = hasIndices（拿到每个捕获组的精确 [start,end) 绝对下标）
@@ -1046,10 +1057,9 @@ function compile(grammar, pattern, cache, broken) {
       re = null
     }
   }
-  cache.set(pattern, re)
+  REGEX_CACHE.set(pattern, re)
   return re
 }
-
 /**
  * 把一个 context 的「进入时指令」读出来（meta_scope / meta_content_scope /
  * meta_include_prototype）。
@@ -1058,6 +1068,7 @@ function readDirectives(list) {
   let metaScope = null
   let metaContentScope = null
   let includePrototype = true
+  if (!Array.isArray(list)) return { metaScope, metaContentScope, includePrototype }
   for (let i = 0; i < list.length; i += 1) {
     const p = list[i]
     if (p === null || typeof p !== 'object') continue
@@ -1078,16 +1089,30 @@ function readDirectives(list) {
  */
 function tokenize(text, grammar) {
   const contexts = grammar.contexts || {}
-  const cache = new Map()
   const broken = []
   const tokens = []
 
-  /** 栈：每层 `{ name, scopes: string[] }`；scopes 是该层贡献的 scope。 */
+  /* 「进入 context 要读的指令」按语法只算一次，别每次 push 都重扫 pattern 列表 */
+  let dirCache = DIRECTIVES_CACHE.get(grammar)
+  if (dirCache === undefined) {
+    dirCache = new Map()
+    DIRECTIVES_CACHE.set(grammar, dirCache)
+  }
+  const directivesOf = (name) => {
+    let d = dirCache.get(name)
+    if (d === undefined) {
+      d = readDirectives(contexts[name])
+      dirCache.set(name, d)
+    }
+    return d
+  }
+
+  /** 栈：每层 `{ name, scopes: string[], includePrototype }`。 */
   const stack = []
   const pushContext = (name, extraScopes) => {
     const body = contexts[name]
     if (!Array.isArray(body)) return false
-    const d = readDirectives(body)
+    const d = directivesOf(name)
     const scopes = (extraScopes || []).slice()
     if (d.metaScope !== null) scopes.push(d.metaScope)
     if (d.metaContentScope !== null) scopes.push(d.metaContentScope)
@@ -1130,7 +1155,7 @@ function tokenize(text, grammar) {
         continue
       }
       if (pat.match === undefined) continue
-      const re = compile(grammar, pat.match, cache, broken)
+      const re = compile(pat.match, broken)
       if (re === null) continue
       re.lastIndex = pos
       const m = re.exec(text)
@@ -1348,11 +1373,19 @@ function matchExpr(expr, stack) {
 function makeColorizer(scheme) {
   const rules = scheme.rules || []
   const fallbackFg = scheme.foreground || '#D8DEE9'
+  /* 同一个 scope 栈在一份文档里会重复成千上万次（每个数字、每个标识符都是同一套
+     scope），而求一次要过全部 63 条规则。实测这是**渲染的主要开销**：
+     200 行文档 9692 个 token，配色 216ms、分词只有 42ms。
+     按 scope 栈缓存后，实际求值次数从「token 数」降到「不同的 scope 组合数」（几十）。 */
+  const memo = new Map()
 
   return function styleOf(scopes) {
     if (!Array.isArray(scopes) || scopes.length === 0) {
       return { fg: fallbackFg, fs: '', score: 0, rule: -1 }
     }
+    const key = scopes.join('\u0000')
+    const cached = memo.get(key)
+    if (cached !== undefined) return cached
     let bestFg = null
     let bestFs = ''
     let bestDepth = -1
@@ -1399,12 +1432,14 @@ function makeColorizer(scheme) {
         bestRule = i
       }
     }
-    return {
+    const out = {
       fg: bestFg === null ? fallbackFg : bestFg,
       fs: bestFs,
       score: bestDepth,
       rule: bestRule,
     }
+    memo.set(key, out)
+    return out
   }
 }
 
@@ -2529,14 +2564,20 @@ function makeColorizer(scheme) {
       }
     }
 
-    /** 合帧重扫：DOM 一次变动可能带进很多节点，合并成一次。 */
+    /**
+     * 合帧重扫：DOM 一次变动可能带进很多节点，合并成一次。
+     *
+     * 用 50ms 而不是更大的值：代码块「先无色 → Shiki 普通高亮 → 我们的 LaTeX 高亮」
+     * 这个三跳本身不可避免，但**我们这一跳的延迟要尽量小**。重扫本身很便宜
+     * （内容没变时 `syncTexLayer` 直接返回），短去抖不会带来负担。
+     */
     function scheduleLatexRescan() {
       if (latexRescanTimer !== null) return
       if (typeof setTimeout !== 'function') return
       latexRescanTimer = setTimeout(() => {
         latexRescanTimer = null
         syncLatexSheet()
-      }, 120)
+      }, 50)
       if (latexRescanTimer && typeof latexRescanTimer.unref === 'function') latexRescanTimer.unref()
     }
 
@@ -2593,19 +2634,58 @@ function makeColorizer(scheme) {
      * 卡片类名要等 ui-deliverables 的样式表进 DOM 才检测得到；检测不到时
      * 有界重试（syncCardSheet 会在每次 applyNow 再试一次，另有定时器兜底）。
      */
+    /**
+     * 合并两轮检测结果（按 `varName` 去重，保留先找到的）。
+     *
+     * 宿主分批注入样式表，所以要能把「这轮新找到的」并进「上轮的」，
+     * 而不是覆盖 —— 覆盖会把先找到的那组丢掉。
+     *
+     * @param {Array|undefined} prev - 上轮结果。
+     * @param {Array} found - 本轮结果。
+     * @returns {Array} 合并后的结果。
+     */
+    function mergeCardTargets(prev, found) {
+      const merged = Array.isArray(prev) ? prev.slice() : []
+      const list = Array.isArray(found) ? found : []
+      for (let i = 0; i < list.length; i += 1) {
+        if (!merged.some((entry) => entry.varName === list[i].varName)) merged.push(list[i])
+      }
+      return merged
+    }
+
+    /**
+     * 是否**找齐**了全部卡片组件。
+     *
+     * ⚠️ 判据是「≥ CARD_TARGETS 的条数」，不是「非空」。早先用非空判定，
+     * 于是第一轮只找到一个就再也不重试 —— 表现是「已编辑」卡片有色、
+     * 「交付文件」卡片一直没色。
+     *
+     * @param {Array|undefined} targets - 检测结果。
+     * @returns {boolean}
+     */
+    function cardTargetsComplete(targets) {
+      return Array.isArray(targets) && targets.length >= CARD_TARGETS.length
+    }
+
     function syncCardSheet() {
       if (typeof document === 'undefined') return
-      if (cardTargets === undefined) {
+      /* ⚠️ **要「全找齐」而不是「找到一个」。**
+         宿主是**分批**注入样式表的：第一轮往往只找得到 ChangedFiles 的
+         `--changes-fill`，Deliverables 的 `--deliverable-fill` 晚一步才进 DOM。
+         早先的判据是「检测结果非空即算成功」，于是找到一个就再也不重试 ——
+         表现就是「已编辑」卡片有色、而「交付文件」卡片一直没色。
+         现在按 CARD_TARGETS 的总数判定，且有新样式表进来就合并重扫。 */
+      const total = CARD_TARGETS.length
+      let have = Array.isArray(cardTargets) ? cardTargets.length : 0
+      if (have < total) {
         const sheets = document.styleSheets
         const count = sheets !== undefined && sheets !== null && typeof sheets.length === 'number'
           ? sheets.length
           : -1
         if (count !== cardScanSheetCount) {
           cardScanSheetCount = count
-          cardTargets = detectCardTargets()
-        } else {
-          /* 样式表没有增减 → 上轮的结论仍然成立，不必再扫。 */
-          cardTargets = []
+          cardTargets = mergeCardTargets(cardTargets, detectCardTargets())
+          have = cardTargets.length
         }
       }
       const css = buildCardSheet(state, cardTargets)
@@ -2619,17 +2699,18 @@ function makeColorizer(scheme) {
           }
           cardEl = null
         }
-        /* 用户挑了色但类名还没检测到 = pending（下面安排重试），否则 = off。 */
+        /* 用户挑了色但类名还没**找齐** = pending（下面安排重试），否则 = off。 */
         const pickedColor = HEX_PATTERN.test(state.cardColor)
-        const detected = Array.isArray(cardTargets) && cardTargets.length > 0
+        const detected = cardTargetsComplete(cardTargets)
         diag.card = !pickedColor ? 'off' : !detected ? 'pending' : 'off'
-        /* 检测成功过就清零计数（下次用户再挑色时重试预算是满的）。 */
+        /* 找齐了就清零计数（下次用户再挑色时重试预算是满的）。 */
         if (detected) cardRetryCount = 0
-        if (diag.card === 'pending' && cardRetryTimer === null && !disposed && cardRetryCount < CARD_RETRY_MAX) {
+        if (pickedColor && !detected && cardRetryTimer === null && !disposed && cardRetryCount < CARD_RETRY_MAX) {
           cardRetryTimer = setTimeout(() => {
             cardRetryTimer = null
             cardRetryCount += 1
-            cardTargets = undefined /* 强制重新检测 */
+            /* 逼下一轮重扫。**不要清 cardTargets** —— 那会把已找到的丢掉。 */
+            cardScanSheetCount = -1
             applyNow()
           }, 1000)
           if (cardRetryTimer && typeof cardRetryTimer.unref === 'function') cardRetryTimer.unref()
@@ -4473,6 +4554,8 @@ function makeColorizer(scheme) {
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
+        mergeCardTargets,
+        cardTargetsComplete,
         MARKDOWN_SHEET_ID,
         MARKDOWN_RULES,
         buildMarkdownSheet,
