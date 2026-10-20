@@ -364,7 +364,7 @@ hex 每补全一次合法值就触发，全走这条路就是"输入一个字母
 
 ```css
 pre.dmt-latex{
-  --shiki-token-constant:#C695C6;    /* 数学命令 → 紫（压过数学数字的橙，命令远比裸数字常见） */
+  --shiki-token-constant:#D8DEE9;    /* 糊成一段的数学内容落「正文色」，见下 */
   --shiki-token-punctuation:#5FB4B4; /* punctuation.definition → 青 */
 }
 ```
@@ -372,8 +372,35 @@ pre.dmt-latex{
 CSS 自定义属性会沿 DOM 继承，Shiki 的 token span 用的是
 `color: var(--shiki-token-*)`，所以在 `pre` 上重定义就能只影响这一块。
 
-**为什么必须按块、不能全局**：全局把 `constant` 改成紫，会让 Python / JS 的数字
-也变紫，而 Sublime 里 `constant.numeric` 是橙。只有 LaTeX 需要这个偏移。
+**为什么必须按块、不能全局**：全局把 `constant` 改掉，会让 Python / JS 的数字
+也跟着变，而 Sublime 里 `constant.numeric` 是橙。只有 LaTeX 需要这个偏移。
+
+### ⚠️ 最关键的机制：Shiki 按「解析后的颜色」合并 token
+
+这条决定了这个插件能做到什么、做不到什么，**别再按「按 token 上色」的思路往上加**：
+
+> 相邻 token 如果最终颜色（`color: var(--shiki-token-*)` 字符串）相同，
+> Shiki 会把它们**合并成一个 span**。
+
+数学里大量 scope（`constant.character.math.tex`、`constant.other.math.tex`、
+`punctuation.math.*` …）在主题的 19 条规则里**都没有对应项** → 全部落到同一个
+`var(--shiki-foreground)` → **整段数学被合成一个 span**。
+
+真机实测的三个后果：
+
+- `\hH` 能单独成段（`support.function` → 蓝，颜色不同）
+- 内置命令能单独成段（`keyword` → 紫，颜色不同）
+- **`=-\frac{\hbar^2}{2m}\lap-\frac{e^2}{r}` 是同一个 span** —— 里面数字、运算符、
+  括号全糊在一起，span 级判类无从下手
+
+而主题的 **scope→令牌映射在宿主手里**（宿主建 highlighter 时写死
+`theme: 'css-variables'`），插件只能覆盖**令牌的值**，改不了**映射**。
+所以**拆不开** —— 这不是没写对，是架构限制。
+
+既然糊成一段的那部分在 Sublime 里主要是**白色标识符/正文**
+（`variable.other.math` 无匹配规则 → 全局前景），把 `constant` 取成前景色
+比取紫色接近得多：内置命令仍紫、自定义宏仍蓝、其余落白。裸数字/运算符/括号
+**能**单独成段的，由 span 级类覆盖成橙/橙红/青。
 
 **块怎么认出来**：宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，
 **pre 上没有语言名**（`codeToHtml` 只加 `class="shiki <themeName>"`；宿主也没把
