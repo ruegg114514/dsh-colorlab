@@ -1617,6 +1617,35 @@ window.__ModuleLoader__.load({
       return scheme !== 'light'
     }
 
+    /**
+     * 「插件已关闭」的总闸属性（与 Host 半体 `index.js` 里的同名常量一致）。
+     *
+     * 宿主半体注入的首屏画布色是**烤进 HTML** 的，页面加载后撤不掉。它外面套了
+     * `html:not([data-dsh-colorlab-off])` 当总闸，这里负责开合：
+     *
+     *   - 启用中 → 移除属性（首屏色生效）
+     *   - 关掉「启用」/ 插件被卸载 → 打上属性（首屏色立刻失效，底色回宿主默认）
+     *
+     * 没有这一步，用户关掉插件后就会出现"高亮没了、但界面底色还是 Mariana"。
+     */
+    const DISABLED_ATTR = 'data-dsh-colorlab-off'
+
+    /** 按当前开关状态维护总闸属性。 */
+    function syncDisabledMarker() {
+      if (typeof document === 'undefined') return
+      const root = document.documentElement
+      if (root === undefined || root === null) return
+      try {
+        if (state.enabled === 'off') {
+          if (typeof root.setAttribute === 'function') root.setAttribute(DISABLED_ATTR, '')
+        } else if (typeof root.removeAttribute === 'function') {
+          root.removeAttribute(DISABLED_ATTR)
+        }
+      } catch (error) {
+        note('sync disabled marker', error)
+      }
+    }
+
     /** 正文高亮样式表元素（独立于主题通道，由 prose 开关单独控制）。 */
     let proseEl = null
 
@@ -1883,6 +1912,8 @@ window.__ModuleLoader__.load({
     function applyNow() {
       const tokens = resolveTokens(state)
       diag.scheme = resolvedScheme()
+      /* 总闸：先把"关掉了没"反映到 html 属性上，Host 半体注入的首屏底色才知道要不要让位。 */
+      syncDisabledMarker()
 
       if (!shouldApply()) {
         teardown()
@@ -3505,6 +3536,13 @@ window.__ModuleLoader__.load({
                 pageStyleEl = null
               }
               try {
+                /* 卸载后客户端不再运行，所以必须在这里就把总闸关上 ——
+                   否则 Host 半体烤进 HTML 的首屏底色会一直留在页面上。 */
+                document.documentElement.setAttribute(DISABLED_ATTR, '')
+              } catch {
+                /* 无 DOM */
+              }
+              try {
                 document.documentElement.removeAttribute('data-dsh-colorlab')
               } catch {
                 /* 无 DOM */
@@ -3524,6 +3562,7 @@ window.__ModuleLoader__.load({
         OPTIONS,
         BOOT_BACKGROUND,
         SHEET_ID,
+        DISABLED_ATTR,
         MarianaSettingsPage,
         writeSheet,
         update,
