@@ -656,6 +656,44 @@ function main() {
     ctx.dispose()
   }
 
+  /* ---- 场景 11：关掉「启用」必须让首屏底色让位 ----------
+     Host 半体注入的首屏画布色是烤进 HTML 的，运行时撤不掉，所以它外面套了
+     `html:not([data-dsh-colorlab-off])` 当总闸，由客户端开合。
+     没有这条，用户关掉插件后就是"高亮没了、界面底色还在"（深浅两种外观都遇到）。 */
+  {
+    const dom = createFakeDom()
+    const theme = createFakeTheme()
+    const ctx = createFakeCtx({ services: { theme }, props: { theme } })
+    const exports = loadPlugin(dom)
+    const attr = exports.__test.DISABLED_ATTR
+    check(attr === 'data-dsh-colorlab-off', 'DISABLED_ATTR 与 Host 半体约定一致', attr)
+
+    exports.apply(ctx)
+    check(
+      dom.documentElement.hasAttribute(attr) === false,
+      '启用中 → 总闸断开（首屏底色照常生效，不闪黑）',
+    )
+
+    exports.__test.update({ enabled: 'off' })
+    check(
+      dom.documentElement.hasAttribute(attr) === true,
+      '关掉「启用」→ 总闸闭合，首屏底色让位',
+    )
+    check(theme._layers.get('dsh-colorlab') === undefined, '关掉「启用」→ 令牌叠层也被摘掉')
+
+    exports.__test.update({ enabled: 'on' })
+    check(
+      dom.documentElement.hasAttribute(attr) === false,
+      '重新打开 → 总闸复位',
+    )
+
+    ctx.dispose()
+    check(
+      dom.documentElement.hasAttribute(attr) === true,
+      '插件卸载 → 总闸闭合（客户端不再运行，必须在这里关掉）',
+    )
+  }
+
   const failed = results.filter((result) => !result.ok)
   console.log('─'.repeat(52))
   if (failed.length > 0) {
