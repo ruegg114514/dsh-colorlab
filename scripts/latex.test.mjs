@@ -33,11 +33,23 @@ function check(condition, label, detail) {
  * 最小 DOM 替身（够跑 LaTeX 块的标记与样式表挂载）
  * ------------------------------------------------------------------ */
 
-function makePre(text) {
+function makePre(text, tokens) {
   const classes = new Set(['shiki', 'css-variables'])
+  const spans = (tokens || []).map((t) => {
+    const sc = new Set()
+    return {
+      textContent: t,
+      children: [],
+      classList: { add: (c) => sc.add(c), contains: (c) => sc.has(c), remove: (c) => sc.delete(c) },
+      _classes: sc,
+    }
+  })
   return {
     tagName: 'PRE',
     textContent: text,
+    children: spans,
+    _spans: spans,
+    querySelectorAll: (sel) => (sel === 'span' ? spans : []),
     classList: {
       contains: (c) => classes.has(c),
       add: (c) => classes.add(c),
@@ -47,8 +59,9 @@ function makePre(text) {
   }
 }
 
-function createFakeDom(preTexts) {
-  const pres = preTexts.map(makePre)
+function createFakeDom(pres) {
+  const list = pres.map((p) => (typeof p === 'string' ? makePre(p) : makePre(p.text, p.tokens)))
+  const pres2 = list
   const created = []
   const head = {
     children: [],
@@ -65,7 +78,7 @@ function createFakeDom(preTexts) {
   }
   const documentElement = { attributes: {} }
   return {
-    pres,
+    pres: pres2,
     created,
     head,
     documentElement,
@@ -74,9 +87,9 @@ function createFakeDom(preTexts) {
       documentElement,
       body: { tagName: 'BODY' },
       querySelectorAll(selector) {
-        if (selector === 'pre.shiki') return pres
+        if (selector === 'pre.shiki') return pres2
         const m = /^pre\.(.+)$/.exec(selector)
-        if (m !== null) return pres.filter((p) => p._classes.has(m[1]))
+        if (m !== null) return pres2.filter((p) => p._classes.has(m[1]))
         return []
       },
       createElement(tag) {
@@ -209,7 +222,10 @@ console.log('  C. 应用后的 DOM 效果')
 
 {
   const dom = createFakeDom([
-    '\\bi \\zh{频率与角频率}: $E=h\\nu=\\hbar\\omega$',
+    {
+      text: '\\bi \\zh{频率与角频率}: $E=h\\nu$',
+      tokens: ['\\', 'bi', ' ', '\\', 'zh', '{', '频率与角频率', '}', ':', ' ', '$', 'E', '=', 'h', '\\', 'nu', '$'],
+    },
     'print("Pages:", len(doc))',
   ])
   const mod = loadPlugin(dom)
@@ -228,6 +244,11 @@ console.log('  C. 应用后的 DOM 效果')
 
   check(dom.pres[0]._classes.has('dmt-latex') === true, 'LaTeX 块被标记 dmt-latex')
   check(dom.pres[1]._classes.has('dmt-latex') === false, 'Python 块没被误标')
+  /* 集成链路：apply → 识别 → 打块标记 → span 级上色 */
+  check(dom.pres[0]._spans[0]._classes.has('dmt-tx-bs'), '集成：apply 后反斜杠 span 被打上青色类')
+  check(dom.pres[0]._spans[10]._classes.has('dmt-tx-mdelim'), '集成：apply 后 $ span 被打上青色类')
+  check(dom.pres[0]._spans[15]._classes.has('dmt-tx-mcmd'), '集成：apply 后 nu span 被打上紫色类')
+  check(dom.pres[1]._spans === undefined || dom.pres[1].children.length === 0, 'Python 块没有 span 被处理')
   const latexSheet = dom.created.find((n) => n.dataset && n.dataset.pluginCss === LATEX_SHEET_ID)
   check(latexSheet !== undefined, 'LaTeX 覆盖样式表已挂上')
   check(
@@ -236,6 +257,104 @@ console.log('  C. 应用后的 DOM 效果')
     latexSheet ? String(latexSheet.textContent).slice(0, 60) : 'n/a',
   )
 }
+
+console.log('  D. span 级后处理（补齐令牌模型盖不到的部分）')
+
+const { TX_CLASS, applyLatexSpans, MATH_BUILTINS, TEXT_KEYWORD_COMMANDS, LATEX_COLORS } = test
+
+check(MATH_BUILTINS.has('hbar') && MATH_BUILTINS.has('nu') && MATH_BUILTINS.has('oint'),
+  '数学内置表含 hbar / nu / oint', String(MATH_BUILTINS.size) + ' 项')
+check(MATH_BUILTINS.has('dd') === false, '自定义宏 dd 不在内置表里（应判为蓝）')
+check(TEXT_KEYWORD_COMMANDS.has('begin') && TEXT_KEYWORD_COMMANDS.has('label'),
+  '文本关键字命令表含 begin / label')
+
+/**
+ * 造一个仿 Shiki 输出的 span 序列：
+ * 每个 token 一个叶子 span，textContent 就是 token 原文。
+ * `\` 与命令名在 Shiki 里是**两个** span（capture 1 是反斜杠）。
+ */
+function makeBlock(tokens) {
+  const spans = tokens.map((t) => {
+    const classes = new Set()
+    return {
+      textContent: t,
+      children: [],
+      classList: {
+        add: (c) => classes.add(c),
+        contains: (c) => classes.has(c),
+        remove: (c) => classes.delete(c),
+      },
+      _classes: classes,
+    }
+  })
+  const pre = {
+    textContent: tokens.join(''),
+    children: spans,
+    querySelectorAll: (sel) => (sel === 'span' ? spans : []),
+    classList: { contains: () => false, add: () => {}, remove: () => {} },
+  }
+  return { pre, spans }
+}
+
+function runTokens(tokens) {
+  const { pre, spans } = makeBlock(tokens)
+  applyLatexSpans(pre)
+  return spans
+}
+
+/* `\bi \zh{频率}: $E=h\nu$` —— 文本模式命令 + 花括号 + 数学块 */
+{
+  const spans = runTokens([
+    '\\', 'bi', ' ', '\\', 'zh', '{', '频率', '}', ':',
+    ' ', '$', 'E', '=', 'h', '\\', 'nu', '2', '\\', 'pi', '$',
+  ])
+  const cls = (i) => spans[i]._classes
+  check(cls(0).has(TX_CLASS.backslash), '反斜杠 → 青（punctuation.definition）')
+  check(cls(1).has(TX_CLASS.backslash) === false, '文本模式命令名不改色（交给令牌：蓝）')
+  check(cls(5).has(TX_CLASS.brace) && cls(7).has(TX_CLASS.brace), '花括号 → 青')
+  check(cls(10).has(TX_CLASS.mathDelim), '$ → 青（punctuation.definition.string）')
+  check(cls(11).has(TX_CLASS.ident), '数学标识符 E → 正文色斜体')
+  check(cls(12).has(TX_CLASS.operator), '数学 = → 橙红（keyword.operator）')
+  check(cls(14).has(TX_CLASS.backslash), '数学里的反斜杠 → 青')
+  check(cls(15).has(TX_CLASS.mathCmd), '数学内置命令 nu → 紫（keyword.other.math.*）')
+  check(cls(16).has(TX_CLASS.number), '数学数字 2 → 橙（constant.numeric）')
+  check(cls(18).has(TX_CLASS.mathCmd), '数学内置命令 pi → 紫')
+  check(cls(19).has(TX_CLASS.mathDelim), '收尾 $ → 青')
+  check(cls(2).has(TX_CLASS.ident) === false, '数学外的空格不被打标')
+}
+
+/* 数学里的自定义宏 → 蓝；下标 → 灰；圆括号 → 白 */
+{
+  const spans = runTokens(['$', '\\', 'dd', 'q', '_', 'n', '(', 'a', ')', '$'])
+  check(spans[2]._classes.has(TX_CLASS.mathCustom), '数学自定义宏 dd → 蓝（support.function.math）')
+  check(spans[4]._classes.has(TX_CLASS.separator), '下标 _ → 灰（punctuation.separator）')
+  check(spans[6]._classes.has(TX_CLASS.paren), '数学圆括号 → 白（punctuation.section）')
+}
+
+/* 文本模式的关键字命令 → 紫（Shiki 给的是 function，Sublime 是 keyword） */
+{
+  const spans = runTokens(['\\', 'begin', '{', 'summarybox', '}'])
+  check(spans[1]._classes.has(TX_CLASS.kwCmd), '文本模式 \\begin → 紫（keyword.control.*）')
+  check(spans[0]._classes.has(TX_CLASS.backslash), '\\begin 的反斜杠 → 青')
+}
+
+/* `\$` 转义不能切换数学模式 */
+{
+  const spans = runTokens(['\\', '$', 'x', '$'])
+  check(
+    spans[2]._classes.has(TX_CLASS.ident) === false,
+    '转义 \\$ 不开启数学模式（后续 x 不被打成标识符）',
+  )
+}
+
+/* 颜色值必须是 Mariana 的精确值 */
+check(LATEX_COLORS.teal === '#5FB4B4', '青 = #5FB4B4（hsl(180,36%,54%)，不是近似的 #5FB3B3）', LATEX_COLORS.teal)
+check(LATEX_COLORS.operatorRed === '#F97B58', '运算符红 = #F97B58（var(red2)）', LATEX_COLORS.operatorRed)
+
+/* 类规则都带 !important（Shiki 把颜色写在内联 style 上） */
+const classRules = buildLatexSheet().split('\n').slice(1)
+check(classRules.length >= 8, '样式表含 8 组以上的类规则', String(classRules.length) + ' 组')
+check(classRules.every((r) => r.includes('!important')), '每组类规则都带 !important')
 
 console.log('')
 if (failures > 0) {
