@@ -227,6 +227,53 @@ check(sheet.includes('--changes-fill:#3B454F'), '样式表覆盖 --changes-fill'
 check(sheet.includes('--deliverable-fill:#3B454F'), '样式表覆盖 --deliverable-fill')
 check(!sheet.includes('!important'), '不使用 !important')
 
+/* ------------------------------------------------------------------ *
+ * 6. 【回归】分批注入：只找到一个组件时不能算「已检测完成」
+ *
+ * 宿主是分批注入样式表的，第一轮往往只找得到 ChangedFiles 的
+ * `--changes-fill`，Deliverables 的 `--deliverable-fill` 晚一步才进 DOM。
+ * 早先的判据是「找到一个就算成功」，于是再也不重试 —— 表现就是
+ * 「已编辑」卡片有色、「交付文件」卡片一直没色。
+ * ------------------------------------------------------------------ */
+
+console.log('  分批注入（回归）')
+
+const { mergeCardTargets, cardTargetsComplete } = test
+
+check(cardTargetsComplete(found) === true, '两个都找到 → 判定为「已找齐」')
+check(cardTargetsComplete([]) === false, '一个都没找到 → 未找齐')
+check(cardTargetsComplete(undefined) === false, 'undefined → 未找齐')
+check(cardTargetsComplete([changesHit]) === false,
+  '只找到 ChangedFiles → **未找齐**（这正是早先漏掉的情形）',
+  String([changesHit].length) + ' / ' + CARD_TARGETS.length)
+
+{
+  /* 第一轮：只有 ChangedFiles 的样式表 */
+  const partialDoc = { styleSheets: [{ cssRules: toCssomRules(changedFilesCss) }] }
+  const partial = loadPlugin(partialDoc).__test.detectCardTargets()
+  check(partial.length === 1 && partial[0].varName === '--changes-fill',
+    '第一轮只检测到 --changes-fill', partial.map((x) => x.varName).join(','))
+
+  /* 第二轮：Deliverables 的样式表也进来了 → 合并，不能丢掉上轮结果 */
+  const merged = mergeCardTargets(partial, found)
+  check(merged.length === CARD_TARGETS.length, '合并后两组都在', String(merged.length))
+  check(merged.some((x) => x.varName === '--changes-fill'), '合并后保留 --changes-fill')
+  check(merged.some((x) => x.varName === '--deliverable-fill'), '合并后补上 --deliverable-fill')
+  check(cardTargetsComplete(merged) === true, '合并后判定为已找齐')
+
+  /* 重复合并不应产生重复项 */
+  const again = mergeCardTargets(merged, found)
+  check(again.length === merged.length, '重复合并不产生重复项', String(again.length))
+  check(mergeCardTargets(undefined, found).length === CARD_TARGETS.length, '从 undefined 合并也正常')
+  check(mergeCardTargets(found, undefined).length === CARD_TARGETS.length, 'found 为 undefined 不炸')
+
+  /* 关键：部分检测结果生成的样式表**只有一条规则** —— 这正是用户看到的
+     「已编辑有色、交付文件没色」 */
+  const partialSheet = buildCardSheet({ cardColor: '#3B454F' }, partial)
+  check(partialSheet.includes('--changes-fill') && !partialSheet.includes('--deliverable-fill'),
+    '只找到一组时样式表只覆盖一半（所以必须继续重试）')
+}
+
 console.log('')
 if (failures > 0) {
   console.log(`✗ ${failures} 项失败`)
