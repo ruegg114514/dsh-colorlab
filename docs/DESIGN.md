@@ -31,6 +31,65 @@
 
 两条互斥，成功一条即卸掉另一条。设置页状态条会把当前走的是哪条显示出来。
 
+### ⚠️ `applyNow` 必须防重入（宿主在 `overrideTokens` 内部**同步** emit）
+
+**这是一个真机抓到的爆栈，不是假想防御。**
+
+宿主的 `overrideTokens` 实现是：
+
+```js
+overrideTokens(source, tokens) {
+  const layer = { seq: this.overrideSeq++, tokens: validateOverrides(source, tokens) };
+  this.overrides.set(source, layer);
+  this.publish();                 // ← 同步
+  return () => { ... };
+}
+```
+
+而 `publish()` 会**同步** emit `theme/change`。插件又订阅了 `theme/change` 去调
+`applyNow()` —— 于是形成闭环：
+
+```
+applyNow → overrideTokens → publish() → emit theme/change
+  → 我们的监听器 → applyNow → overrideTokens → …… 直到爆栈
+```
+
+真机控制台里的样子：
+
+```
+[dsh-colorlab] overrideTokens RangeError: Maximum call stack size exceeded
+    at JSON.stringify
+    at applyNow (client.js:1926)
+    at client.js:2227            ← theme/change 监听器
+    at ThemeRuntime.publish
+    at ThemeRuntime.overrideTokens
+    at applyNow (client.js:1927)
+```
+
+**「内容签名」那条优化救不了它**（很容易误以为能救）：签名是在 `overrideTokens`
+**返回之后**才赋值的，而 emit 发生在它**内部** —— 重入时比对用的还是上一次的签名。
+
+**修法**：`applyNow` 直接拒绝重入。自己刚推的层不需要再响应一次自己触发的事件。
+
+```js
+let applying = false
+function applyNow() {
+  if (applying) return
+  applying = true
+  try { applyNowOnce() } finally { applying = false }
+}
+```
+
+**为什么它能溜过测试**：原来的测试替身 `overrideTokens` 只登记层、**不 emit**，
+所以重入根本不会发生。现在替身按真机行为在 `overrideTokens` **内部同步 emit**
+`theme/change`，并有断言盯着「监听器抛错次数 = 0」。
+
+变异验证：把守卫改回 `if (false) return`，测试进程会在**第一次 `apply()` 就直接
+崩溃退出**（无输出）—— 与真机现象一致。
+
+**教训**：涉及「事件回调里再触发同一事件」的宿主，替身必须还原它的**同步性**，
+否则测到的是一个不存在的时序。
+
 ## 正文高亮为什么必须单独注入样式表
 
 `--shiki-*` 这 11 个变量**只被 Shiki 生成的 `<span>` 的 inline style 引用**，
@@ -568,3 +627,6 @@ boot graph 里有本插件行、设置命名空间被服务。
 - [ ] **启动耗时**：开着插件重启，首屏出现时间与禁用插件时相比没有肉眼可见的差别
 - [ ] **设置页样式表按需加载**：重启后不打开设置页，`document.head` 里没有
       `data-plugin-css="dsh-colorlab/page.css"` 这个 `<style>`（打开设置页后才有）
+- [ ] **控制台干净**：重启后 F12 打开 Console，没有 `[dsh-colorlab]` 开头的报错
+      （尤其不能有 `RangeError: Maximum call stack size exceeded` —— 那是 `applyNow`
+      与 `theme/change` 互相递归的信号，见上文防重入那一节）
