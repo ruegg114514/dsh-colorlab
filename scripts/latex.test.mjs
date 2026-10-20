@@ -158,7 +158,7 @@ console.log('  A. 全局令牌映射')
 const plain = loadPlugin(null)
 const test = plain.__test
 const {
-  PALETTE, resolveTokens, DEFAULTS,
+  PALETTE, resolveTokens, DEFAULTS, LATEX_COLORS,
   LATEX_TOKEN_OVERRIDES, LATEX_BLOCK_CLASS, LATEX_SHEET_ID, buildLatexSheet, isLatexBlock,
 } = test
 
@@ -178,8 +178,8 @@ console.log('  B. LaTeX 块覆盖')
 
 check(LATEX_BLOCK_CLASS === 'dmt-latex', '块标记类名 = dmt-latex', LATEX_BLOCK_CLASS)
 check(
-  LATEX_TOKEN_OVERRIDES['--shiki-token-constant'] === '#C695C6',
-  'LaTeX 块内 constant → #C695C6 紫（Mariana keyword.other.math.*）',
+  LATEX_TOKEN_OVERRIDES['--shiki-token-constant'] === LATEX_COLORS.foreground,
+  'LaTeX 块内 constant → 正文色（糊成一段的数学内容落白，比落紫接近 Sublime）',
   LATEX_TOKEN_OVERRIDES['--shiki-token-constant'],
 )
 check(
@@ -190,7 +190,7 @@ check(
 
 const sheet = buildLatexSheet()
 check(sheet.startsWith('pre.dmt-latex{'), '样式表作用域限定在 pre.dmt-latex', sheet.slice(0, 30))
-check(sheet.includes('--shiki-token-constant:#C695C6'), '覆盖 --shiki-token-constant')
+check(sheet.includes('--shiki-token-constant:' + LATEX_COLORS.foreground), '覆盖 --shiki-token-constant')
 check(sheet.includes('--shiki-token-punctuation:#5FB4B4'), '覆盖 --shiki-token-punctuation')
 
 const latexSamples = [
@@ -260,7 +260,7 @@ console.log('  C. 应用后的 DOM 效果')
 
 console.log('  D. span 级后处理（补齐令牌模型盖不到的部分）')
 
-const { TX_CLASS, applyLatexSpans, latexSpansIntact, MATH_BUILTINS, TEXT_KEYWORD_COMMANDS, LATEX_COLORS } = test
+const { TX_CLASS, applyLatexSpans, latexSpansIntact, MATH_BUILTINS, TEXT_KEYWORD_COMMANDS } = test
 
 check(MATH_BUILTINS.has('hbar') && MATH_BUILTINS.has('nu') && MATH_BUILTINS.has('oint'),
   '数学内置表含 hbar / nu / oint', String(MATH_BUILTINS.size) + ' 项')
