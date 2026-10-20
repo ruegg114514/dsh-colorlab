@@ -23,11 +23,22 @@ const DIRECTIVE = new Set([
 const EMPTY = []
 
 /**
+ * 正则缓存 —— **跨调用常驻**。
+ *
+ * 早先这个 Map 建在 `tokenize()` 里面，等于每次分词都要把 400+ 条 pattern
+ * 重新编译一遍。提到模块级之后，同一份语法只编译一次。
+ */
+const REGEX_CACHE = new Map()
+
+/** 每个语法的「context 名 → 进入时指令」缓存（按语法对象弱引用）。 */
+const DIRECTIVES_CACHE = new WeakMap()
+
+/**
  * 编译并缓存正则。语法里已经做过 Oniguruma→JS 的转换；
  * 这里再兜一层：任何编译失败都退化成「永不匹配」，不让整块崩掉。
  */
-function compile(grammar, pattern, cache, broken) {
-  let re = cache.get(pattern)
+function compile(pattern, broken) {
+  let re = REGEX_CACHE.get(pattern)
   if (re !== undefined) return re
   try {
     /* `d` = hasIndices（拿到每个捕获组的精确 [start,end) 绝对下标）
@@ -42,10 +53,9 @@ function compile(grammar, pattern, cache, broken) {
       re = null
     }
   }
-  cache.set(pattern, re)
+  REGEX_CACHE.set(pattern, re)
   return re
 }
-
 /**
  * 把一个 context 的「进入时指令」读出来（meta_scope / meta_content_scope /
  * meta_include_prototype）。
@@ -54,6 +64,7 @@ function readDirectives(list) {
   let metaScope = null
   let metaContentScope = null
   let includePrototype = true
+  if (!Array.isArray(list)) return { metaScope, metaContentScope, includePrototype }
   for (let i = 0; i < list.length; i += 1) {
     const p = list[i]
     if (p === null || typeof p !== 'object') continue
@@ -74,16 +85,30 @@ function readDirectives(list) {
  */
 export function tokenize(text, grammar) {
   const contexts = grammar.contexts || {}
-  const cache = new Map()
   const broken = []
   const tokens = []
 
-  /** 栈：每层 `{ name, scopes: string[] }`；scopes 是该层贡献的 scope。 */
+  /* 「进入 context 要读的指令」按语法只算一次，别每次 push 都重扫 pattern 列表 */
+  let dirCache = DIRECTIVES_CACHE.get(grammar)
+  if (dirCache === undefined) {
+    dirCache = new Map()
+    DIRECTIVES_CACHE.set(grammar, dirCache)
+  }
+  const directivesOf = (name) => {
+    let d = dirCache.get(name)
+    if (d === undefined) {
+      d = readDirectives(contexts[name])
+      dirCache.set(name, d)
+    }
+    return d
+  }
+
+  /** 栈：每层 `{ name, scopes: string[], includePrototype }`。 */
   const stack = []
   const pushContext = (name, extraScopes) => {
     const body = contexts[name]
     if (!Array.isArray(body)) return false
-    const d = readDirectives(body)
+    const d = directivesOf(name)
     const scopes = (extraScopes || []).slice()
     if (d.metaScope !== null) scopes.push(d.metaScope)
     if (d.metaContentScope !== null) scopes.push(d.metaContentScope)
@@ -126,7 +151,7 @@ export function tokenize(text, grammar) {
         continue
       }
       if (pat.match === undefined) continue
-      const re = compile(grammar, pat.match, cache, broken)
+      const re = compile(pat.match, broken)
       if (re === null) continue
       re.lastIndex = pos
       const m = re.exec(text)
