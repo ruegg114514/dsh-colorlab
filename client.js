@@ -1410,28 +1410,71 @@ function makeColorizer(scheme) {
 
     /* @dsh-tex-assets:end */
 
+    /* ---- 判定「这一块该不该走 LaTeX 渲染」 --------------------------------- */
+
+    /** 语言名是这几个的才走 LaTeX 渲染。 */
+    const LATEX_LANGS = new Set(['latex', 'tex', 'ltx'])
+
     /**
-     * 判定一段文本是不是 LaTeX。
+     * 读代码块的**语言名** —— 宿主已经写在块左上角的横幅里了。
      *
-     * 宿主 Shiki 的输出是 `<pre class="shiki css-variables">`，**pre 上没有语言名**，
-     * 所以只能看内容特征。用几个高区分度的模式，避免把 C/JS 里的 `\n`、
-     * 反斜杠续行误判成 LaTeX。
+     * 文件预览时它就是**文件后缀**推出来的语言，对话里的代码块则来自 ``` 后面的标注；
+     * 两种横幅变体（普通 / 带工具栏）都带 `data-code-block-banner`，语言名是里面
+     * 第一个 `span`。
      *
-     * @param {string|Element} target - 原文或元素。
+     * @param {Element} pre - 代码块。
+     * @returns {string|null} 归一化后的语言名；读不到返回 null。
+     */
+    function blockLanguageOf(pre) {
+      if (pre === null || pre === undefined) return null
+      let host = null
+      try {
+        host = typeof pre.closest === 'function' ? pre.closest('.md-code-block') : null
+      } catch {
+        host = null
+      }
+      if (host === null || host === undefined) host = pre.parentElement
+      for (let hop = 0; hop < 4 && host !== null && host !== undefined; hop += 1) {
+        if (typeof host.querySelector === 'function') {
+          let banner = null
+          try {
+            banner = host.querySelector('[data-code-block-banner]')
+          } catch {
+            banner = null
+          }
+          if (banner !== null && banner !== undefined) {
+            let span = null
+            try {
+              span = banner.querySelector('span')
+            } catch {
+              span = null
+            }
+            const raw = String(span !== null && span !== undefined ? span.textContent : '').trim().toLowerCase()
+            /* 宿主认不出语言时会显示「代码」这类**说明文字**，那不是语言名。
+               要求是纯 ASCII 语言标签，否则当读不到处理。 */
+            if (raw === '' || raw === 'code' || !/^[a-z0-9+#._-]+$/.test(raw)) return null
+            return raw
+          }
+        }
+        host = host.parentElement
+      }
+      return null
+    }
+
+    /**
+     * 这一块该不该走我们自己的 LaTeX 渲染。
+     *
+     * **只认宿主声明的语言名，读不到就不碰。** 早先还加了一套「猜内容特征」的兜底，
+     * 结果是 js / yaml / json 被正则量词 `\d{4}` `\w{2}` 打中、ps1 被
+     * `"C:\Users\$env:USERNAME"` 打中，全被按 LaTeX 上色 —— 猜不如读。
+     * 读不到语言名时退回 Shiki 的普通高亮，这是可接受的代价。
+     *
+     * @param {Element} pre - 代码块。
      * @returns {boolean}
      */
-    function isLatexBlock(target) {
-      const text = typeof target === 'string'
-        ? target
-        : (target !== null && target !== undefined && typeof target.textContent === 'string'
-          ? target.textContent
-          : '')
-      if (text.length === 0) return false
-      if (/\\(?:begin|end)\s*\{[A-Za-z*]+\}/.test(text)) return true
-      if (/\\(?:documentclass|usepackage|section|subsection|chapter|label|ref|cite)\b/.test(text)) return true
-      if (/\$[^$]*\\[A-Za-z]+[^$]*\$/.test(text)) return true
-      const macroBraces = text.match(/\\[A-Za-z@]+\s*\{/g)
-      return macroBraces !== null && macroBraces.length >= 2
+    function shouldRenderLatex(pre) {
+      const lang = blockLanguageOf(pre)
+      return lang !== null && LATEX_LANGS.has(lang)
     }
 
     /** 取「宿主原本的 `<code>`」的文本 —— 不能算上我们自己的渲染层。 */
@@ -2436,7 +2479,7 @@ function makeColorizer(scheme) {
         const marked = pre.classList.contains(LATEX_BLOCK_CLASS)
         /* 判据用**宿主原本的文本**，不能算上我们自己的渲染层（否则文本翻倍） */
         const srcText = texSourceOf(pre)
-        if (isLatexBlock(srcText)) {
+        if (shouldRenderLatex(pre)) {
           count += 1
           if (!marked) {
             try {
@@ -4437,7 +4480,9 @@ function makeColorizer(scheme) {
         LATEX_BLOCK_CLASS,
         TEX_LAYER_CLASS,
         TEX_HIDDEN_CLASS,
-        isLatexBlock,
+        shouldRenderLatex,
+        blockLanguageOf,
+        LATEX_LANGS,
         texSourceOf,
         buildLatexSheet,
         renderTexHtml,
