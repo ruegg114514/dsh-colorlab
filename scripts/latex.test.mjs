@@ -302,6 +302,41 @@ function runTokens(tokens) {
   return spans
 }
 
+/* 真机形态：**反斜杠与命令名在同一个 span 里**（`\bi` 是一个 token）
+   —— 这是 Shiki 的实际输出，早期版本按「反斜杠单独成段」写，导致所有命令
+   都判不到，数学里只剩块级令牌覆盖、整片紫。 */
+{
+  const spans = runTokens([
+    '\\bi', ' ', '\\zh', '{', '频率', '}', ':', ' ',
+    '$', 'E', '=', 'h', '\\nu', '2', '\\pi', '$',
+  ])
+  const cls = (i) => spans[i]._classes
+  check(cls(0).has(TX_CLASS.lead), '整体式命令 \\bi 挂上 lead（供 ::first-letter 染反斜杠）')
+  check(cls(2).has(TX_CLASS.lead), '整体式命令 \\zh 也挂 lead')
+  check(cls(3).has(TX_CLASS.brace) && cls(5).has(TX_CLASS.brace), '花括号 → 青')
+  check(cls(8).has(TX_CLASS.mathDelim), '$ → 青')
+  check(cls(9).has(TX_CLASS.ident), '数学标识符 E → 正文色斜体')
+  check(cls(10).has(TX_CLASS.operator), '数学 = → 橙红')
+  check(cls(12).has(TX_CLASS.mathCmd), '数学内置 \\nu → 紫（不再是「整片紫」里的一坨）')
+  check(cls(12).has(TX_CLASS.lead), '数学命令也挂 lead')
+  check(cls(13).has(TX_CLASS.number), '数学数字 2 → 橙')
+}
+
+/* 自定义数学宏（如 \cH \dd）→ 蓝，而不是跟着 constant 变紫 */
+{
+  const spans = runTokens(['$', '\\cH', '\\dd', 'q', '$'])
+  check(spans[1]._classes.has(TX_CLASS.mathCustom), '数学自定义宏 \\cH → 蓝')
+  check(spans[2]._classes.has(TX_CLASS.mathCustom), '数学自定义宏 \\dd → 蓝')
+  check(spans[1]._classes.has(TX_CLASS.lead), '自定义宏也挂 lead')
+}
+
+/* 反斜杠单独成段的语法版本仍要工作（向后兼容） */
+{
+  const spans = runTokens(['\\', 'chapter', '{', 'x', '}', '$', 'E', '$'])
+  check(spans[0]._classes.has(TX_CLASS.backslash), '独立反斜杠 → 青')
+  check(spans[6]._classes.has(TX_CLASS.ident), '独立反斜杠版本下数学标识符仍判对')
+}
+
 /* `\bi \zh{频率}: $E=h\nu$` —— 文本模式命令 + 花括号 + 数学块 */
 {
   const spans = runTokens([
@@ -351,10 +386,21 @@ function runTokens(tokens) {
 check(LATEX_COLORS.teal === '#5FB4B4', '青 = #5FB4B4（hsl(180,36%,54%)，不是近似的 #5FB3B3）', LATEX_COLORS.teal)
 check(LATEX_COLORS.operatorRed === '#F97B58', '运算符红 = #F97B58（var(red2)）', LATEX_COLORS.operatorRed)
 
-/* 类规则都带 !important（Shiki 把颜色写在内联 style 上） */
+/* 类规则：凡是改颜色的都必须带 !important（Shiki 把颜色写在内联 style 上） */
 const classRules = buildLatexSheet().split('\n').slice(1)
-check(classRules.length >= 8, '样式表含 8 组以上的类规则', String(classRules.length) + ' 组')
-check(classRules.every((r) => r.includes('!important')), '每组类规则都带 !important')
+check(classRules.length >= 9, '样式表含 9 组以上的类规则', String(classRules.length) + ' 组')
+const colorRules = classRules.filter((r) => r.includes('color:'))
+check(colorRules.length >= 9, '其中改颜色的规则 ≥ 9 组', String(colorRules.length) + ' 组')
+check(colorRules.every((r) => r.includes('!important')), '每条改颜色的类规则都带 !important')
+/* 反斜杠与命令名挤在同一文本节点里，只能靠 ::first-letter 单染首字符 */
+check(
+  classRules.some((r) => r.includes('::first-letter') && r.includes('!important')),
+  '有 ::first-letter 规则给首字符（反斜杠）上色且带 !important',
+)
+check(
+  classRules.some((r) => r.includes('dmt-tx-lead') && r.includes('display:inline-block')),
+  'lead 类设了 display:inline-block（::first-letter 只对块容器生效）',
+)
 
 /* ---- 重渲染：类被抹掉后必须能补回来（真机上「有的正常、有的是白的」就是这个）---- */
 {
