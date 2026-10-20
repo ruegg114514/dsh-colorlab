@@ -973,10 +973,31 @@ window.__ModuleLoader__.load({
     /** LaTeX 代码块的标记类名（运行时打在 `<pre class="shiki">` 上）。 */
     const LATEX_BLOCK_CLASS = 'dmt-latex'
 
+    /**
+     * LaTeX 用到的 Mariana 精确色。
+     *
+     * 直接写方案里的值，**不走 `PALETTE_BASE`** —— 那边有几个是早年手抄的近似值
+     * （例如 `teal: '#5FB3B3'`，而方案里 `hsl(180,36%,54%)` 精确是 `#5FB4B4`）。
+     * 对标就要对到字节。
+     */
+    const LATEX_COLORS = Object.freeze({
+      teal: '#5FB4B4', /* var(blue5)：punctuation.definition */
+      keywordPink: '#C695C6', /* var(pink)：keyword */
+      functionBlue: '#6699CC', /* var(blue)：support.function */
+      numberOrange: '#F9AE58', /* var(orange)：constant.numeric */
+      operatorRed: '#F97B58', /* var(red2)：keyword.operator */
+      separatorGrey: '#A6ACB9', /* var(blue6)：punctuation.separator */
+      white: '#FFFFFF', /* var(white)：punctuation.section */
+      foreground: '#D8DEE9', /* var(white3)：全局前景 */
+    })
+
     /** LaTeX 块内要覆盖的令牌 → Mariana 对应色。 */
     const LATEX_TOKEN_OVERRIDES = Object.freeze({
-      '--shiki-token-constant': '#C695C6', /* Mariana var(pink)：keyword.other.math.* 的紫 */
-      '--shiki-token-punctuation': '#5FB4B4', /* Mariana var(blue5)：punctuation.definition 的青 */
+      /* 整个 `$…$` 块被 Shiki 的 `support.class.math.block` meta scope 归到 constant，
+         这里改成紫 —— 块内数学命令占多数，更接近 Sublime 的 keyword.other.math.* */
+      '--shiki-token-constant': LATEX_COLORS.keywordPink,
+      /* punctuation.definition.arguments（花括号等）在 Mariana 里是青 */
+      '--shiki-token-punctuation': LATEX_COLORS.teal,
     })
 
     /**
@@ -1007,12 +1028,176 @@ window.__ModuleLoader__.load({
       return false
     }
 
-    /** 生成 LaTeX 块的令牌覆盖样式表。 */
+    /**
+     * Sublime 认识的**数学内置命令**（从 `TeX.sublime-syntax` 的 greeks / mathfun /
+     * relations / largeops / binops / symbols / accents / arrows / delimiters
+     * 九个变量里抽出来的 240 个名字）。
+     *
+     * 用途：Sublime 里这些走 `keyword.other.math.*` → Mariana 的 `keyword` → **紫**；
+     * 而**不在表里的**（如用户自定义宏 `\dd`）走 `support.function.math.tex`
+     * → Mariana 的 `support.function` → **蓝**。要区分这两类只能靠名单。
+     */
+    const MATH_BUILTINS = new Set(
+      ('Delta Downarrow Gamma Im Lambda Leftarrow Leftrightarrow Longleftarrow '
+        + 'Longleftrightarrow Longrightarrow Omega Phi Pi Pr Psi Re Rightarrow Sigma Theta '
+        + 'Uparrow Updownarrow Upsilon Vert Xi acute aleph alpha amalg angle approx arccos '
+        + 'arcsin arctan arg ast backslash bar beta bigcap bigcirc bigcup bigodot bigoplus '
+        + 'bigotimes bigsqcup bigtriangledown bigtriangleup biguplus bigvee bigwedge bmod bot '
+        + 'bowtie breve bullet cap cdot check chi circ clubsuit cong coprod cos cosh cot coth '
+        + 'csc cup dagger dashv ddagger ddot deg delta det diamond diamondsuit dim div dot doteq '
+        + 'downarrow ell emptyset epsilon equiv eta exists exp flat forall frown gamma gcd ge geq '
+        + 'gets gg grave hat hbar heartsuit hom hookleftarrow hookrightarrow imath in inf infty '
+        + 'int iota jmath kappa ker lambda land langle lbrace lbrack lceil leftarrow '
+        + 'leftrightarrow leq lfloor lg lim liminf limsup ll ln lnot log longleftarrow '
+        + 'longleftrightarrow longmapsto longrightarrow lor lq mapsto max mid min models mp mu '
+        + 'nabla natural ne nearrow neg ni notin nu nwarrow odot oint omega ominus oplus oslash '
+        + 'otimes owns parallel partial perp phi pi pm pmod prec preceq prime prod propto psi '
+        + 'rangle rbrace rbrack rceil rfloor rho rightarrow searrow sec setminus sharp sigma sim '
+        + 'simeq sin sinh smile spadesuit sqcap sqcup sqsubseteq sqsupseteq star subset subseteq '
+        + 'succ succeq sum sup supset supseteq surd swarrow tan tau theta tilde times to top '
+        + 'triangle triangleleft triangleright uparrow updownarrow uplus upsilon varepsilon '
+        + 'varphi varpi varrho varsigma vartheta vdash vec vee vert wedge widehat widetilde wp '
+        + 'wr xi zeta').split(' '),
+    )
+
+    /**
+     * 文本模式下 Mariana 给**紫**的命令名（`keyword.*` / `storage.type.*`）。
+     *
+     * Shiki 的 LaTeX 语法对 `\begin`/`\end` 给的是 `support.function.be.latex`
+     * （→ function → 蓝），而 Sublime 给的是
+     * `support.function.begin.latex keyword.control.flow.begin.latex` ——
+     * 后者更具体，Mariana 按 `keyword` 上成紫。所以要单独点出来。
+     */
+    const TEXT_KEYWORD_COMMANDS = new Set([
+      'begin', 'end', 'label', 'ref', 'eqref', 'pageref', 'cite', 'item', 'include',
+      'usepackage', 'documentclass', 'hline', 'newcommand', 'renewcommand', 'def', 'let',
+      'footnote', 'caption',
+    ])
+
+    /** span 级后处理用到的类名（对应的 CSS 见 buildLatexSheet）。 */
+    const TX_CLASS = Object.freeze({
+      backslash: 'dmt-tx-bs', /* \            → 青 punctuation.definition */
+      brace: 'dmt-tx-brace', /* { }          → 青 punctuation.definition.arguments */
+      mathDelim: 'dmt-tx-mdelim', /* $ / $$       → 青 punctuation.definition.string */
+      mathCmd: 'dmt-tx-mcmd', /* \hbar 等内置 → 紫 keyword.other.math.* */
+      mathCustom: 'dmt-tx-mcustom', /* \dd 等自定义 → 蓝 support.function.math */
+      number: 'dmt-tx-num', /* 123 / 1.5    → 橙 constant.numeric */
+      operator: 'dmt-tx-op', /* = < > + - */ /* → 橙红 keyword.operator */
+      separator: 'dmt-tx-sep', /* _ ^          → 灰 punctuation.separator */
+      paren: 'dmt-tx-paren', /* ( ) [ ]      → 白 punctuation.section */
+      ident: 'dmt-tx-id', /* E h p        → 白斜体 variable.other.math */
+      kwCmd: 'dmt-tx-kwcmd', /* \begin \end  → 紫 keyword.control.* */
+    })
+
+    /**
+     * span 级后处理：把 Sublime 的数学/标点配色贴到 Shiki 已经渲染好的 token span 上。
+     *
+     * 为什么需要这一步（令牌模型覆盖不到的几处）：
+     *   - `\` 反斜杠、`$` 分隔符在 Shiki 的主题里**没有任何规则** → 继承正文色，
+     *     改 CSS 变量无从下手；
+     *   - 数学块内标识符（白）与运算符（橙红）和命令（紫）被归成同一个令牌，
+     *     靠变量区分不了。
+     *
+     * 做法：按文档顺序遍历叶子 span，维护「是否在数学模式」（`$` 开关），
+     * 按 span 文本判类并打 class；CSS 用 `!important` 盖过 Shiki 写在内联 style 上的
+     * `color: var(--shiki-token-*)`。
+     *
+     * @param {Element} pre - 已标记 `dmt-latex` 的代码块。
+     */
+    function applyLatexSpans(pre) {
+      if (!pre || typeof pre.querySelectorAll !== 'function') return
+      let spans
+      try {
+        spans = pre.querySelectorAll('span')
+      } catch {
+        return
+      }
+      if (!spans || typeof spans.length !== 'number') return
+
+      let inMath = false
+      let prevBackslash = false
+      for (let i = 0; i < spans.length; i += 1) {
+        const span = spans[i]
+        /* 只要有元素子节点就是容器（`span.line` 之类），跳过 —— 否则它的
+           textContent 是整行，判类会全乱。 */
+        if (span.children !== undefined && span.children !== null && span.children.length > 0) continue
+        const t = span.textContent
+        if (typeof t !== 'string' || t === '') continue
+        const cls = span.classList
+        if (cls === undefined || cls === null || typeof cls.add !== 'function') continue
+
+        let kind = null
+        /* ---- 与模式无关的标点 ---- */
+        if (t === '\\') {
+          kind = TX_CLASS.backslash
+        } else if (t === '{' || t === '}') {
+          kind = TX_CLASS.brace
+        } else if (/^\$+$/.test(t)) {
+          kind = TX_CLASS.mathDelim
+          /* `\$` 是转义美元号，不切换数学模式 */
+          if (!prevBackslash && t.length % 2 === 1) inMath = !inMath
+        } else if (prevBackslash && /^[A-Za-z@]+$/.test(t)) {
+          /* ---- 命令名（前一个 span 是反斜杠）---- */
+          if (inMath) {
+            kind = MATH_BUILTINS.has(t) ? TX_CLASS.mathCmd : TX_CLASS.mathCustom
+          } else {
+            kind = TEXT_KEYWORD_COMMANDS.has(t) ? TX_CLASS.kwCmd : null
+          }
+        } else if (inMath) {
+          /* ---- 数学模式内的操作数 ---- */
+          if (/^[0-9]+(?:[.,][0-9]+)?$/.test(t)) kind = TX_CLASS.number
+          else if (/^(?:[<>]=?|=|!=)$/.test(t) || /^[-+*/!]$/.test(t)) kind = TX_CLASS.operator
+          else if (t === '_' || t === '^') kind = TX_CLASS.separator
+          else if (/^[()[\]]$/.test(t)) kind = TX_CLASS.paren
+          else if (/^[A-Za-z]+$/.test(t)) kind = TX_CLASS.ident
+        }
+
+        if (kind !== null) {
+          try {
+            cls.add(kind)
+          } catch {
+            /* classList 不可用 */
+          }
+        }
+        prevBackslash = t === '\\'
+      }
+    }
+
+    /**
+     * 生成 LaTeX 块的样式表：令牌覆盖 + span 级类规则。
+     *
+     * 类规则必须带 `!important`：Shiki 把颜色写在 span 的内联 `style` 上，
+     * 内联样式的优先级高于普通类选择器 —— 不加重会被无视。
+     */
     function buildLatexSheet() {
+      const scope = 'pre.' + LATEX_BLOCK_CLASS
       const decls = Object.keys(LATEX_TOKEN_OVERRIDES)
         .map((name) => name + ':' + LATEX_TOKEN_OVERRIDES[name])
         .join(';')
-      return 'pre.' + LATEX_BLOCK_CLASS + '{' + decls + '}'
+      const rules = [
+        /* 令牌覆盖：兜住块内所有 token（punctuation.definition.arguments 等） */
+        scope + '{' + decls + '}',
+        /* span 级：Sublime 的 punctuation.definition（青） */
+        scope + ' .' + TX_CLASS.backslash + ',' + scope + ' .' + TX_CLASS.brace
+          + ',' + scope + ' .' + TX_CLASS.mathDelim + '{color:' + LATEX_COLORS.teal + '!important}',
+        /* span 级：数学内置命令、文本模式关键命令 → keyword.* → 紫 */
+        scope + ' .' + TX_CLASS.mathCmd + ',' + scope + ' .' + TX_CLASS.kwCmd
+          + '{color:' + LATEX_COLORS.keywordPink + '!important}',
+        /* span 级：自定义数学宏 → support.function.math → 蓝 */
+        scope + ' .' + TX_CLASS.mathCustom + '{color:' + LATEX_COLORS.functionBlue + '!important}',
+        /* span 级：数字 → constant.numeric → 橙 */
+        scope + ' .' + TX_CLASS.number + '{color:' + LATEX_COLORS.numberOrange + '!important}',
+        /* span 级：运算符 → keyword.operator → 橙红 */
+        scope + ' .' + TX_CLASS.operator + '{color:' + LATEX_COLORS.operatorRed + '!important}',
+        /* span 级：下标/上标 → punctuation.separator → 灰 */
+        scope + ' .' + TX_CLASS.separator + '{color:' + LATEX_COLORS.separatorGrey + '!important}',
+        /* span 级：数学里的圆/方括号 → punctuation.section → 白 */
+        scope + ' .' + TX_CLASS.paren + '{color:' + LATEX_COLORS.white + '!important}',
+        /* span 级：数学标识符 → variable.other.math → 正文色 + 斜体 */
+        scope + ' .' + TX_CLASS.ident + '{color:' + LATEX_COLORS.foreground
+          + '!important;font-style:italic!important}',
+      ]
+      return rules.join('\n')
     }
 
 
@@ -1853,12 +2038,22 @@ window.__ModuleLoader__.load({
               /* classList 不可用 */
             }
           }
+          /* span 级后处理。用「子元素数 + 文本长度」当签名：Shiki 换主题/重渲染会
+             换掉整棵子树，签名一变就重跑；内容没变则跳过，避免每次 DOM 变动都遍历。 */
+          const sig = String(pre.children === undefined ? '' : pre.children.length)
+            + ':' + String(pre.textContent.length)
+          if (pre.__dmtTxSig !== sig) {
+            pre.__dmtTxSig = sig
+            applyLatexSpans(pre)
+          }
         } else if (marked) {
           try {
             pre.classList.remove(LATEX_BLOCK_CLASS)
           } catch {
             /* 同上 */
           }
+          pre.__dmtTxSig = undefined
+          /* 子树的 class 还留在 span 上，但样式表卸载后不再生效；重进时签名不同会重打。 */
         }
       }
       diag.latex = count
@@ -3837,8 +4032,13 @@ window.__ModuleLoader__.load({
         LATEX_SHEET_ID,
         LATEX_BLOCK_CLASS,
         LATEX_TOKEN_OVERRIDES,
+        LATEX_COLORS,
+        MATH_BUILTINS,
+        TEXT_KEYWORD_COMMANDS,
+        TX_CLASS,
         isLatexBlock,
         buildLatexSheet,
+        applyLatexSpans,
         lightenHex,
         resolveTokens,
         resolveProseTokens,
