@@ -180,6 +180,16 @@ window.__ModuleLoader__.load({
       summaryColor: '#FAC863',
       /* 文件卡片头部横带颜色；空串 = 跟随卡片底色（宿主默认中性灰）。 */
       cardColor: '',
+      /* 表面不透明度（0–100，字符串）。100 = 完全不透明；调低后表面变半透明，
+         宿主窗口的**原生亚克力材质**（Windows `backgroundMaterial: "acrylic"`）
+         就会透出来。只作用于「表面」类 token，不碰文字/边框/菜单。 */
+      surfaceOpacity: '100',
+      /* 毛玻璃开关：'on' / 'off'。给页面内的层叠表面加 `backdrop-filter`。 */
+      glass: 'off',
+      /* 毛玻璃模糊半径（0–40px）。 */
+      glassBlur: '16',
+      /* 毛玻璃饱和度（100–220%）。低于 100 会让背景发灰。 */
+      glassSaturate: '120',
       /* 要高亮哪些过程行：JSON 数组，值是 ROW_VARIANTS 里的 variant。 */
       rowVariants: '["write","edit","bash","summary","turn"]',
     })
@@ -571,366 +581,520 @@ window.__ModuleLoader__.load({
      * @param {object} state - `{ enabled, schemeMode, surface, accent, syntax, prose, custom }`
      * @returns {Record<string, {light: string, dark: string}>}
      */
-    function resolveTokens(state) {
-      const custom = parseCustom(state && state.custom)
-      /* 自定义配色只覆盖深色那一套；浅色保持插件自带的派生值（见 CUSTOM_SLOTS 注释）。 */
-      const PALETTE = withOverrides(PALETTE_BASE, custom.palette)
-      const s = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
-      const a = ACCENTS[state && state.accent] || ACCENTS.teal
-      const syntax = !state || state.syntax !== 'off'
+    /* @dsh-oklch:start —— 由 tools/embed-tex-assets.mjs 生成，请勿手改。
+     改动请改 tools/oklch.mjs，然后重新运行：node tools/embed-tex-assets.mjs */
 
-      /* ---- 深色值 ---- */
-      const dark = {
-        /* 底色 */
-        '--dsw-alias-bg-base': s.base,
-        '--dsw-alias-bg-document-preview': s.layer1,
-        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #6699CC 40%, transparent)',
-        '--dsw-alias-label-document-preview': PALETTE.dim,
-        '--dsw-alias-bg-layer-1': s.layer1,
-        '--dsw-alias-bg-layer-2': s.layer2,
-        '--dsw-alias-bg-layer-3': s.layer3,
-        '--dsw-alias-bg-module-platform': '#38424C',
-        '--dsw-alias-bg-multi-select': '#38424C',
-        '--dsw-alias-bg-overlay': s.overlay,
-        '--dsw-alias-bg-skeleton': '#D8DEE914',
-        /* 遮罩：纯黑半透明与色相无关，保持宿主值 */
-        '--dsw-alias-bg-mask-1': '#00000080',
-        '--dsw-alias-bg-mask-2': '#0003',
-        '--dsw-alias-bg-mask-3': '#0000007a',
-        '--dsw-alias-bg-mask-photo': '#000000e0',
-        '--dsw-alias-bg-mask-drop': '#272730b3',
-        /* 边框 */
-        '--dsw-alias-border-inverted': '#0000',
-        '--dsw-alias-border-inverted2': '#0000',
-        '--dsw-alias-border-l1': '#D8DEE90F',
-        '--dsw-alias-border-l2-darkmode-thin': '#D8DEE90F',
-        '--dsw-alias-border-l2': '#D8DEE91F',
-        '--dsw-alias-border-l3': '#D8DEE929',
-        '--dsw-alias-border-l4': '#D8DEE933',
-        /* 品牌（DSH 的"反色"语义，必须保持中性） */
-        '--dsw-alias-brand-primary': PALETTE.fg,
-        '--dsw-alias-brand-primary-invert': PALETTE.fg,
-        '--dsw-alias-brand-text': PALETTE.fg,
-        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.dark,
-        /* 文字 */
-        '--dsw-alias-label-primary': PALETTE.fg,
-        '--dsw-alias-label-primary-dimmed': '#C3CBD8',
-        '--dsw-alias-label-primary-bluish': '#C9D6E6',
-        '--dsw-alias-label-primary-foreground': '#1B2229',
-        '--dsw-alias-label-primary-inverted': '#2B333C',
-        '--dsw-alias-label-secondary': PALETTE.dim,
-        '--dsw-alias-label-tertiary': '#8792A2',
-        '--dsw-alias-label-caption': PALETTE.faintUi,
-        '--dsw-alias-label-dimmed': '#B4BCC8',
-        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #FFFFFF 45%, transparent)',
-        '--dsw-alias-label-deep-diving': PALETTE.teal,
-        '--dsw-alias-label-deep-diving-shimmer': '#92D6D6',
-        '--dsw-alias-menu-icon': '#C3CBD8',
-        '--dsw-alias-link': PALETTE.blueUi,
-        /* 交互层 */
-        '--dsw-alias-interactive-bg-hover': '#D8DEE914',
-        '--dsw-alias-interactive-bg-hover-solid': s.hover,
-        '--dsw-alias-interactive-bg-hover-accent': '#D8DEE929',
-        '--dsw-alias-interactive-bg-hover-danger': '#EC5F6726',
-        '--dsw-alias-interactive-bg-active': '#D8DEE91F',
-        /* 按钮 */
-        '--dsw-alias-button-contrast-fill': PALETTE.fg,
-        '--dsw-alias-button-elevated-fill': s.bubble,
-        '--dsw-alias-button-floating-fill': s.code,
-        '--dsw-alias-button-floating-hover': '#38424C',
-        '--dsw-alias-button-ghost-active-border': '#5A6773',
-        '--dsw-alias-button-ghost-active-fill': s.bubble,
-        '--dsw-alias-button-ghost-active-hover': s.bubbleHi,
-        '--dsw-alias-button-info-fill': PALETTE.blue,
-        '--dsw-alias-button-info-hover': '#7FA9D6',
-        '--dsw-alias-button-primary-dimmed': '#38424C',
-        '--dsw-alias-button-primary-fill': PALETTE.fg,
-        '--dsw-alias-button-primary-hover': '#E6EBF2',
-        /* 工具栏按钮：宿主自带灰罩，与色相无关，保持 */
-        '--dsw-alias-button-tool-bar-fill': '#54555780',
-        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
-        '--dsw-alias-button-tool-bar-hover': '#54555799',
-        /* Markdown / 代码 */
-        '--dsw-alias-markdown-citation': s.layer1,
-        '--dsw-alias-markdown-code-block': s.code,
-        '--dsw-alias-markdown-code-block-banner': s.layer3,
-        '--dsw-alias-markdown-code-segment-selected': s.bubble,
-        '--dsw-alias-markdown-code-segment-unselected': s.code,
-        '--dsw-alias-markdown-inline-code': s.bubble,
-        '--dsw-alias-markdown-placeholder': s.layer2,
-        '--dsw-alias-markdown-tag': s.bubble,
-        /* 滚动条 */
-        '--dsw-alias-scrollbar-bg-l1': '#4F5B66',
-        '--dsw-alias-scrollbar-bg-l2': '#5A6773',
-        '--dsw-alias-scrollbar-hover-l1': PALETTE.faint,
-        '--dsw-alias-scrollbar-hover-l2': '#72808C',
-        /* 状态色 */
-        '--dsw-alias-state-business-primary': a.dark,
-        '--dsw-alias-state-business-tertiary': a.darkSoft,
-        '--dsw-alias-state-error-primary': PALETTE.red,
-        '--dsw-alias-state-error-secondary': '#F27C82',
-        '--dsw-alias-state-idle-primary': PALETTE.faint,
-        '--dsw-alias-state-success-primary': PALETTE.green,
-        '--dsw-alias-state-success-secondary': '#A9D4A4',
-        '--dsw-alias-state-success-tertiary': '#26382A',
-        '--dsw-alias-state-warn-primary': PALETTE.orange,
-        '--dsw-alias-state-warn-secondary': PALETTE.yellow,
-        '--dsw-alias-state-warn-tertiary': '#3A2E22',
-        '--dsw-alias-state-warn-label': '#FAB763',
-        /* diff */
-        '--dsw-alias-code-diff-added': '#99C7941F',
-        '--dsw-alias-code-diff-deleted': '#EC5F671F',
-        '--dsw-alias-file-diff-added-bg': '#263A2B',
-        '--dsw-alias-file-diff-added-gutter': '#1F2F23',
-        '--dsw-alias-file-diff-added-marker': PALETTE.green,
-        '--dsw-alias-file-diff-deleted-bg': '#3A2427',
-        '--dsw-alias-file-diff-deleted-gutter': '#2C1B1E',
-        '--dsw-alias-file-diff-deleted-marker': PALETTE.red,
-        /* 浮层 */
-        '--dsw-alias-switch-thumb': PALETTE.dim,
-        '--dsw-alias-toast-bg': PALETTE.bg1,
-        '--dsw-alias-toast-label': '#E6EBF2',
-        '--dsw-alias-tooltip-bg': PALETTE.bg2,
-        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #1D1E22, white 18%)',
-        '--dsw-alias-turn-trigger-bg': s.code,
-        '--dsw-alias-turn-trigger-bg-hover': '#38424C',
-        '--dsw-alias-menu-group-header-fill': '#23292EF0',
-        /* 菜单材质（README 明确这是共享令牌，值必须接近不透明，否则菜单文字发糊） */
-        '--dsw-menu-surface-fill': '#23292EB8',
-        '--dsw-specific-menu': '#23292EB8',
-        /* 侧栏与气泡 */
-        '--dsw-specific-sidebar-fill': s.sidebar,
-        '--dsw-specific-sidebar-nav-item-active': s.bubble,
-        '--dsw-specific-sidebar-nav-item-active-accent': '#5FB3B355',
-        '--dsw-specific-sidebar-nav-item-hover': s.layer1,
-        '--dsw-specific-bubble': s.bubble,
-        '--dsw-specific-bubble-highlight': s.bubbleHi,
-        '--dsw-specific-input-major': s.code,
-        '--dsw-specific-login-input': s.layer3,
-        '--dsw-specific-selector': s.selector,
-        '--dsw-specific-tip': s.layer1,
-        /* 宿主笔误补丁：终端状态栏 CSS 写的是 var(--dsw-alias-bg-l2)，
-           真名是 --dsw-alias-bg-layer-2；补一个同名别名把那条规则救回来。 */
-        '--dsw-alias-bg-l2': s.layer2,
-      }
+    /* ---- OKLCH 色彩科学（真源：tools/oklch.mjs）----
+       感知均匀的亮度/彩度调整：hover 提亮、调色都走它，
+       而不是在 sRGB/HSL 里线性插值（那样同样步长在深色和浅色上观感不一致）。 */
 
-      /* ---- 浅色值 ---- */
-      const light = {
-        '--dsw-alias-bg-base': LIGHT.base,
-        '--dsw-alias-bg-document-preview': LIGHT.layer1,
-        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #4A7FB5 40%, transparent)',
-        '--dsw-alias-label-document-preview': LIGHT.dim,
-        '--dsw-alias-bg-layer-1': LIGHT.layer1,
-        '--dsw-alias-bg-layer-2': LIGHT.layer2,
-        '--dsw-alias-bg-layer-3': LIGHT.layer3,
-        '--dsw-alias-bg-module-platform': LIGHT.layer3,
-        '--dsw-alias-bg-multi-select': LIGHT.layer3,
-        '--dsw-alias-bg-overlay': LIGHT.overlay,
-        '--dsw-alias-bg-skeleton': '#0000000a',
-        '--dsw-alias-bg-mask-1': '#0000003d',
-        '--dsw-alias-bg-mask-2': '#0000001f',
-        '--dsw-alias-bg-mask-3': '#0000007a',
-        '--dsw-alias-bg-mask-photo': '#000000e0',
-        '--dsw-alias-bg-mask-drop': '#ffffffb3',
-        '--dsw-alias-border-inverted': '#0000',
-        '--dsw-alias-border-inverted2': '#0000',
-        '--dsw-alias-border-l1': '#0000000a',
-        '--dsw-alias-border-l2-darkmode-thin': '#0000001a',
-        '--dsw-alias-border-l2': '#0000001a',
-        '--dsw-alias-border-l3': '#0000001f',
-        '--dsw-alias-border-l4': '#00000029',
-        '--dsw-alias-brand-primary': LIGHT.fg,
-        '--dsw-alias-brand-primary-invert': LIGHT.fg,
-        '--dsw-alias-brand-text': LIGHT.fg,
-        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.light,
-        '--dsw-alias-label-primary': LIGHT.fg,
-        '--dsw-alias-label-primary-dimmed': '#3B454F',
-        '--dsw-alias-label-primary-bluish': LIGHT.fg,
-        '--dsw-alias-label-primary-foreground': '#FFFFFF',
-        '--dsw-alias-label-primary-inverted': '#FFFFFF',
-        '--dsw-alias-label-secondary': LIGHT.dim,
-        '--dsw-alias-label-tertiary': LIGHT.faint,
-        '--dsw-alias-label-caption': LIGHT.caption,
-        '--dsw-alias-label-dimmed': '#C7CFDA',
-        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #000000 30%, transparent)',
-        '--dsw-alias-label-deep-diving': a.light,
-        '--dsw-alias-label-deep-diving-shimmer': a.light,
-        '--dsw-alias-menu-icon': '#3B454F',
-        '--dsw-alias-link': LIGHT.link,
-        '--dsw-alias-interactive-bg-hover': '#2631480f',
-        '--dsw-alias-interactive-bg-hover-solid': LIGHT.layer2,
-        '--dsw-alias-interactive-bg-hover-accent': '#26314824',
-        '--dsw-alias-interactive-bg-hover-danger': '#ec13130d',
-        '--dsw-alias-interactive-bg-active': '#2631481a',
-        '--dsw-alias-button-contrast-fill': LIGHT.fg,
-        '--dsw-alias-button-elevated-fill': '#FFFFFF',
-        '--dsw-alias-button-floating-fill': '#FFFFFF',
-        '--dsw-alias-button-floating-hover': LIGHT.layer2,
-        '--dsw-alias-button-ghost-active-border': PALETTE.dim,
-        '--dsw-alias-button-ghost-active-fill': LIGHT.layer3,
-        '--dsw-alias-button-ghost-active-hover': '#DDE4EC',
-        '--dsw-alias-button-info-fill': '#4A7FB5',
-        '--dsw-alias-button-info-hover': '#3E6E9E',
-        '--dsw-alias-button-primary-dimmed': LIGHT.layer3,
-        '--dsw-alias-button-primary-fill': LIGHT.fg,
-        '--dsw-alias-button-primary-hover': '#1B2229',
-        '--dsw-alias-button-tool-bar-fill': '#54555780',
-        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
-        '--dsw-alias-button-tool-bar-hover': '#54555799',
-        '--dsw-alias-markdown-citation': LIGHT.layer2,
-        '--dsw-alias-markdown-code-block': LIGHT.code,
-        '--dsw-alias-markdown-code-block-banner': LIGHT.layer3,
-        '--dsw-alias-markdown-code-segment-selected': '#FFFFFF',
-        '--dsw-alias-markdown-code-segment-unselected': LIGHT.layer3,
-        '--dsw-alias-markdown-inline-code': LIGHT.code,
-        '--dsw-alias-markdown-placeholder': LIGHT.layer3,
-        '--dsw-alias-markdown-tag': LIGHT.layer3,
-        '--dsw-alias-scrollbar-bg-l1': '#CFD3D6',
-        '--dsw-alias-scrollbar-bg-l2': '#C0C5CE',
-        '--dsw-alias-scrollbar-hover-l1': PALETTE.dim,
-        '--dsw-alias-scrollbar-hover-l2': '#979DA6',
-        '--dsw-alias-state-business-primary': a.light,
-        '--dsw-alias-state-business-tertiary': a.lightSoft,
-        '--dsw-alias-state-error-primary': '#C4464F',
-        '--dsw-alias-state-error-secondary': '#D4686F',
-        '--dsw-alias-state-idle-primary': '#CFD3D6',
-        '--dsw-alias-state-success-primary': '#4E8A4A',
-        '--dsw-alias-state-success-secondary': '#5E9C58',
-        '--dsw-alias-state-success-tertiary': '#E6FAED',
-        '--dsw-alias-state-warn-primary': '#C97A2B',
-        '--dsw-alias-state-warn-secondary': '#E08C34',
-        '--dsw-alias-state-warn-tertiary': '#FEF5E7',
-        '--dsw-alias-state-warn-label': '#B36A1E',
-        '--dsw-alias-code-diff-added': '#22c55e14',
-        '--dsw-alias-code-diff-deleted': '#f25a5a14',
-        '--dsw-alias-file-diff-added-bg': '#E6F4E7',
-        '--dsw-alias-file-diff-added-gutter': '#EDF7ED',
-        '--dsw-alias-file-diff-added-marker': '#01A241',
-        '--dsw-alias-file-diff-deleted-bg': '#FCE6E2',
-        '--dsw-alias-file-diff-deleted-gutter': '#FDECE9',
-        '--dsw-alias-file-diff-deleted-marker': '#BA2723',
-        '--dsw-alias-switch-thumb': '#FFFFFF',
-        '--dsw-alias-toast-bg': '#38424C',
-        '--dsw-alias-toast-label': '#FFFFFF',
-        '--dsw-alias-tooltip-bg': '#38424C',
-        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #38424C, white 18%)',
-        '--dsw-alias-turn-trigger-bg': LIGHT.code,
-        '--dsw-alias-turn-trigger-bg-hover': LIGHT.layer3,
-        '--dsw-alias-menu-group-header-fill': '#F8F9FAF0',
-        '--dsw-menu-surface-fill': '#F8F9FAF0',
-        '--dsw-specific-menu': '#F8F9FAF0',
-        '--dsw-specific-sidebar-fill': LIGHT.sidebar,
-        '--dsw-specific-sidebar-nav-item-active': LIGHT.layer3,
-        '--dsw-specific-sidebar-nav-item-active-accent': a.lightSoft,
-        '--dsw-specific-sidebar-nav-item-hover': LIGHT.layer2,
-        '--dsw-specific-bubble': LIGHT.bubble,
-        '--dsw-specific-bubble-highlight': LIGHT.bubbleHi,
-        '--dsw-specific-input-major': LIGHT.code,
-        '--dsw-specific-login-input': LIGHT.layer3,
-        '--dsw-specific-selector': LIGHT.selector,
-        '--dsw-specific-tip': LIGHT.layer2,
-        '--dsw-alias-bg-l2': LIGHT.layer2,
-      }
+/**
+ * OKLCH / OKLab 色彩科学工具（Björn Ottosson 的 OKLab，sRGB 基准）。
+ *
+ * 设计约束：
+ * - **零依赖**：不 import 任何东西，不碰 DOM、不碰 Node API，纯函数、无副作用。
+ *   同一份文件既能被浏览器端（client.js）import，也能被 Node 测试脚本 import。
+ * - **官方矩阵**：线性 sRGB → LMS 用 M1，LMS' → OKLab 用官方系数；
+ *   反向走 M2。不做任何近似或"看起来差不多"的化简。
+ * - **sRGB 传递函数**：okSrgbToOklab / okOklabToSrgb 内部自己做 gamma 解码 / 编码，
+ *   传入的 {r,g,b} 是**非线性 sRGB 值**（就是 hex 里那两个十六进制数 / 255）。
+ *
+ * 参考：https://bottosson.github.io/posts/oklab/
+ */
 
-      /* ---- 静态色阶（前端 CSS 有 9 处直接引用，用于文件类型图标/内联动作）---- */
-      const staticTokens = {
-        '--dsw-static-deepseek-500': { dark: PALETTE.teal, light: a.light },
-        '--dsw-static-deepseek-450': { dark: '#7FC7C7', light: '#5A9E9E' },
-        '--dsw-static-deepseek-400': { dark: '#7FC7C7', light: '#5A9E9E' },
-        '--dsw-static-green-500': { dark: PALETTE.green, light: '#4E8A4A' },
-        '--dsw-static-amber-400': { dark: PALETTE.yellow, light: '#E08C34' },
-        '--dsw-static-amber-500': { dark: PALETTE.orange, light: '#C97A2B' },
-        '--dsw-static-red-600': { dark: PALETTE.red, light: '#C4464F' },
-        '--dsw-static-neutral-bluish-00': { dark: '#F7F9FB', light: '#FFFFFF' },
-        '--dsw-static-neutral-bluish-300': { dark: PALETTE.dim, light: '#A7ADBA' },
-      }
+/* ------------------------------------------------------------------ *
+ * 内部常量与私有助手（不导出）
+ * ------------------------------------------------------------------ */
 
-      /* ---- Shiki 语法色（css-variables 主题，前缀 --shiki-）---- */
-      const shikiTokens = syntax
-        ? {
-            '--shiki-foreground': { dark: PALETTE.fg, light: LIGHT.fg },
-            '--shiki-background': { dark: s.code, light: LIGHT.code },
-            '--shiki-token-constant': { dark: PALETTE.orange, light: '#C97A2B' },
-            '--shiki-token-string': { dark: PALETTE.green, light: '#4E8A4A' },
-            '--shiki-token-comment': { dark: '#8792A2', light: '#6B7686' },
-            '--shiki-token-keyword': { dark: PALETTE.purple, light: '#8A5E8A' },
-            '--shiki-token-parameter': { dark: PALETTE.orange, light: '#C97A2B' },
-            /* function 令牌 = Mariana 的 var(blue) #6699CC。
-               Sublime Mariana 里 `support.function, support.macro` → var(blue)，
-               所以 Python 内置函数（print/len/open）、LaTeX 命令（\chapter）
-               都是这个蓝。（另一条规则 `entity.name.function` → var(blue5) 青
-               只管「函数定义名」，Shiki 把两者合并了，取更常见的蓝。） */
-            '--shiki-token-function': { dark: PALETTE.blue, light: '#3E6FA8' },
-            '--shiki-token-string-expression': { dark: '#A9D4A4', light: '#3E7A3A' },
-            '--shiki-token-punctuation': { dark: PALETTE.dim, light: '#5A6472' },
-            '--shiki-token-link': { dark: PALETTE.blueUi, light: LIGHT.link },
-            /* Shiki 的 css-variables 主题还引用这三个（用于 ```diff 代码块），
-               但宿主 shiki.css 没有声明它们 —— 不补的话 diff 新增/删除行会落到
-               var() 未定义的兜底色（继承正文色），看不出增删。 */
-            '--shiki-token-inserted': { dark: PALETTE.green, light: '#4E8A4A' },
-            '--shiki-token-deleted': { dark: PALETTE.red, light: '#C4464F' },
-            '--shiki-token-changed': { dark: PALETTE.yellow, light: '#C97A2B' },
-          }
-        : {}
+/** sRGB → 线性 sRGB 的 gamma 解码阈值（IEC 61966-2-1）。 */
+const SRGB_GAMMA_THRESHOLD = 0.04045
 
-      /* ---- 合并成 { light, dark } 对；缺浅色值的回落到深色值（绝不出现单值）---- */
-      const out = {}
-      for (const name of Object.keys(dark)) {
-        out[name] = { light: light[name] !== undefined ? light[name] : dark[name], dark: dark[name] }
-      }
-      for (const name of Object.keys(staticTokens)) out[name] = staticTokens[name]
-      for (const name of Object.keys(shikiTokens)) out[name] = shikiTokens[name]
-      /* 正文高亮的辅助令牌：与 syntax 开关解耦，由 prose 开关单独控制样式表挂载。 */
-      for (const [name, pair] of Object.entries(resolveProseTokens(state))) out[name] = pair
-      /* 过程行高亮色：写进令牌层，样式表用 var(--dmt-row-color, 兜底) 取。
-         浅色值与深色值相同（过程行颜色是用户挑的，不该随外观变）。
-         state 可能整体缺省（测试/首次挂载），所以每个字段都单独兜底。 */
-      const rowColor = typeof (state && state.rowColor) === 'string' && HEX_PATTERN.test(state.rowColor)
-        ? state.rowColor
-        : DEFAULTS.rowColor
-      out['--dmt-row-color'] = { light: rowColor, dark: rowColor }
-      /* 汇总行 / 本轮汇总的颜色（黄），同上：两色系同值。 */
-      const summaryColor = typeof (state && state.summaryColor) === 'string' && HEX_PATTERN.test(state.summaryColor)
-        ? state.summaryColor
-        : DEFAULTS.summaryColor
-      out['--dmt-summary-color'] = { light: summaryColor, dark: summaryColor }
-      /* Markdown 细节色：对齐 Sublime Mariana 的 markup.* 规则。 */
-      out['--dmt-md-list-marker'] = { light: PALETTE.green, dark: PALETTE.green }
-      out['--dmt-md-quote'] = { light: PALETTE.orange, dark: PALETTE.orange }
-      out['--dmt-md-code-bg'] = { light: LIGHT.code, dark: s.layer2 }
-      return out
+/** 把 0..1 的值夹到 0..1；非有限值（NaN/Infinity）退回 0。 */
+function clamp01(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  if (value > 1) return 1
+  return value
+}
+
+/** 把一个 0..1 的分量转成两位小写十六进制（内部会 clamp）。 */
+function byteToHex(value) {
+  return Math.round(clamp01(value) * 255)
+    .toString(16)
+    .padStart(2, '0')
+}
+
+/** 单通道 sRGB 非线性值 → 线性值。 */
+function srgbChannelToLinear(channel) {
+  return channel <= SRGB_GAMMA_THRESHOLD
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4
+}
+
+/** 单通道线性值 → sRGB 非线性值（不做 clamp，由调用方决定）。 */
+function linearChannelToSrgb(channel) {
+  return channel <= 0.0031308
+    ? channel * 12.92
+    : 1.055 * channel ** (1 / 2.4) - 0.055
+}
+
+/**
+ * 低于这个彩度就当作灰阶（色相无意义）。
+ * 取 1e-7 而不是 0：M1/M2 的系数是有限小数，纯灰（如 `#ffffff`）算出来的
+ * C 是 3.7e-8 这个量级的浮点残差，不是真彩度。
+ */
+const NEUTRAL_CHROMA_EPSILON = 1e-7
+
+/** 角度归一化到 [0, 360)。 */
+function normalizeHue(degrees) {
+  const wrapped = degrees % 360
+  return wrapped < 0 ? wrapped + 360 : wrapped
+}
+
+/** 取出 okHexToRgb 的结果，失败时返回 null（供派生函数统一判空）。 */
+function parseHex(hex) {
+  return okHexToRgb(hex)
+}
+
+/* ------------------------------------------------------------------ *
+ * 导出：hex / rgb 基础互转
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把十六进制颜色字符串转成 0..1 的 RGB(A) 分量。
+ *
+ * @param {string} hex 形如 `'#rrggbb'` 或 `'#rrggbbaa'`（大小写均可，必须带 `#`）。
+ * @returns {{r: number, g: number, b: number, a: number}|null}
+ *   `r/g/b/a` 均为 0..1 的数（`a` 省略时默认 1）；非法输入返回 `null`，不抛异常。
+ */
+function okHexToRgb(hex) {
+  if (typeof hex !== 'string') return null
+  const match = /^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$/.exec(hex.trim())
+  if (match === null) return null
+  const digits = match[1]
+  return {
+    r: Number.parseInt(digits.slice(0, 2), 16) / 255,
+    g: Number.parseInt(digits.slice(2, 4), 16) / 255,
+    b: Number.parseInt(digits.slice(4, 6), 16) / 255,
+    a: match[2] === undefined ? 1 : Number.parseInt(match[2], 16) / 255,
+  }
+}
+
+/**
+ * 把 0..1 的 RGB 分量转成 `'#rrggbb'`（小写，超出范围的分量会被夹到 0..1）。
+ *
+ * @param {{r: number, g: number, b: number}} rgb 0..1 的 sRGB 非线性分量。
+ * @returns {string} 形如 `'#6699cc'` 的字符串（非法输入按 0 处理，不抛异常）。
+ */
+function okRgbToHex(rgb) {
+  if (rgb === null || typeof rgb !== 'object') return '#000000'
+  return `#${byteToHex(rgb.r)}${byteToHex(rgb.g)}${byteToHex(rgb.b)}`
+}
+
+/* ------------------------------------------------------------------ *
+ * 导出：sRGB ↔ OKLab（官方矩阵）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把 sRGB（非线性）颜色转成 OKLab。内部先做 gamma 解码到线性光，再走官方
+ * M1 矩阵与立方根，最后套 OKLab 的线性组合。
+ *
+ * @param {{r: number, g: number, b: number}} rgb 0..1 的 sRGB 非线性分量。
+ * @returns {{L: number, a: number, b: number}} OKLab 坐标；`L` 约 0..1，`a/b` 大致 ±0.4。
+ */
+function okSrgbToOklab(rgb) {
+  const r = clamp01(rgb?.r)
+  const g = clamp01(rgb?.g)
+  const b = clamp01(rgb?.b)
+
+  const lr = srgbChannelToLinear(r)
+  const lg = srgbChannelToLinear(g)
+  const lb = srgbChannelToLinear(b)
+
+  /* M1：线性 sRGB → 近似锥体响应 LMS。 */
+  const l = 0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb
+  const m = 0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb
+  const s = 0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb
+
+  const lRoot = Math.cbrt(l)
+  const mRoot = Math.cbrt(m)
+  const sRoot = Math.cbrt(s)
+
+  return {
+    L: 0.2104542553 * lRoot + 0.793617785 * mRoot - 0.0040720468 * sRoot,
+    a: 1.9779984951 * lRoot - 2.428592205 * mRoot + 0.4505937099 * sRoot,
+    b: 0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot,
+  }
+}
+
+/**
+ * 把 OKLab 转回 sRGB（非线性）。这是 okSrgbToOklab 的严格逆运算，
+ * 超出 sRGB 色域的结果会被夹到 0..1。
+ *
+ * @param {{L: number, a: number, b: number}} lab OKLab 坐标。
+ * @returns {{r: number, g: number, b: number}} 0..1 的 sRGB 非线性分量（已 clamp）。
+ */
+function okOklabToSrgb(lab) {
+  const L = Number.isFinite(lab?.L) ? lab.L : 0
+  const a = Number.isFinite(lab?.a) ? lab.a : 0
+  const b = Number.isFinite(lab?.b) ? lab.b : 0
+
+  const lRoot = L + 0.3963377774 * a + 0.2158037573 * b
+  const mRoot = L - 0.1055613458 * a - 0.0638541728 * b
+  const sRoot = L - 0.0894841775 * a - 1.291485548 * b
+
+  const l = lRoot ** 3
+  const m = mRoot ** 3
+  const s = sRoot ** 3
+
+  /* M2：LMS → 线性 sRGB。 */
+  const lr = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
+  const lg = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
+  const lb = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s
+
+  return {
+    r: clamp01(linearChannelToSrgb(lr)),
+    g: clamp01(linearChannelToSrgb(lg)),
+    b: clamp01(linearChannelToSrgb(lb)),
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 导出：OKLCH（极坐标形式）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把 hex 颜色转成 OKLCH：`L` 为感知亮度，`C` 为彩度，`h` 为色相角。
+ * 色相取 OKLab 平面上的 `atan2(b, a)`，单位度、范围 [0, 360)。
+ * 灰阶（C 小到 1e-7 以下，含浮点残差导致的"假彩度"）时色相没有意义，
+ * 此时固定返回 0，调用方不应依赖它。
+ *
+ * @param {string} hex `'#rrggbb'` 或 `'#rrggbbaa'`。
+ * @returns {{L: number, C: number, h: number}|null} 非法输入返回 `null`。
+ */
+function okOklchFromHex(hex) {
+  const rgb = parseHex(hex)
+  if (rgb === null) return null
+  const lab = okSrgbToOklab(rgb)
+  const C = Math.hypot(lab.a, lab.b)
+  const h =
+    C < NEUTRAL_CHROMA_EPSILON ? 0 : normalizeHue((Math.atan2(lab.b, lab.a) * 180) / Math.PI)
+  return { L: lab.L, C, h }
+}
+
+/**
+ * 把 OKLCH 转成 `'#rrggbb'`。`L` 超出 0..1、`C` 为负或负数导致的超界都会
+ * 被安全地夹回 sRGB 色域（不抛异常）；`C≈0`（灰阶）时色相被忽略。
+ *
+ * @param {{L: number, C: number, h: number}} lch OKLCH 坐标（`h` 单位为度，任意实数）。
+ * @returns {string} 小写 `'#rrggbb'`；输入不可用时退回 `'#000000'`。
+ */
+function okHexFromOklch(lch) {
+  const L = Number.isFinite(lch?.L) ? lch.L : 0
+  const C = Number.isFinite(lch?.C) ? Math.max(0, lch.C) : 0
+  const h = Number.isFinite(lch?.h) ? lch.h : 0
+  const radians = (h * Math.PI) / 180
+  return okRgbToHex(
+    okOklabToSrgb({
+      L: clamp01(L),
+      a: C * Math.cos(radians),
+      b: C * Math.sin(radians),
+    }),
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * 导出：派生调整
+ * ------------------------------------------------------------------ */
+
+/**
+ * 在感知亮度 L 上加减 `dL`，保持 a/b（即色相与彩度）不变。
+ * 加减后会夹到 0..1，再回到 sRGB；比直接缩放 RGB 更符合人眼观感。
+ *
+ * @param {string} hex 起始颜色 `'#rrggbb'` 或 `'#rrggbbaa'`。
+ * @param {number} dL 亮度增量（可为负）。
+ * @returns {string|null} 小写 `'#rrggbb'`；`hex` 非法时返回 `null`。
+ */
+function okAdjustLightness(hex, dL) {
+  const rgb = parseHex(hex)
+  if (rgb === null) return null
+  const lab = okSrgbToOklab(rgb)
+  const delta = Number.isFinite(dL) ? dL : 0
+  return okRgbToHex(okOklabToSrgb({ L: clamp01(lab.L + delta), a: lab.a, b: lab.b }))
+}
+
+/**
+ * 按倍数缩放彩度 C（`factor < 1` 去饱和，`> 1` 加饱和），保持 L 与色相 h 不变。
+ * 结果若超出 sRGB 色域会被夹回，因此极饱和的颜色可能无法完全达到目标 C。
+ *
+ * @param {string} hex 起始颜色 `'#rrggbb'` 或 `'#rrggbbaa'`。
+ * @param {number} factor 彩度倍数（0 即变灰）。
+ * @returns {string|null} 小写 `'#rrggbb'`；`hex` 非法时返回 `null`。
+ */
+function okAdjustChroma(hex, factor) {
+  const lch = okOklchFromHex(hex)
+  if (lch === null) return null
+  const scale = Number.isFinite(factor) ? Math.max(0, factor) : 1
+  return okHexFromOklch({ L: lch.L, C: lch.C * scale, h: lch.h })
+}
+
+/**
+ * 在 OKLab 空间里对两个颜色做线性插值（比在 sRGB 里插值更接近感知中点）。
+ * `t = 0` 精确返回 A，`t = 1` 精确返回 B；`t` 超出 [0,1] 时按外推处理。
+ *
+ * @param {string} hexA 起点颜色。
+ * @param {string} hexB 终点颜色。
+ * @param {number} t 插值比例，通常 0..1。
+ * @returns {string|null} 小写 `'#rrggbb'`；任一输入非法时返回 `null`。
+ */
+function okMixOklch(hexA, hexB, t) {
+  const rgbA = parseHex(hexA)
+  const rgbB = parseHex(hexB)
+  if (rgbA === null || rgbB === null) return null
+  const labA = okSrgbToOklab(rgbA)
+  const labB = okSrgbToOklab(rgbB)
+  const ratio = Number.isFinite(t) ? t : 0
+  return okRgbToHex(
+    okOklabToSrgb({
+      L: labA.L + (labB.L - labA.L) * ratio,
+      a: labA.a + (labB.a - labA.a) * ratio,
+      b: labA.b + (labB.b - labA.b) * ratio,
+    }),
+  )
+}
+
+/**
+ * 给颜色附加透明度，输出 8 位 `'#rrggbbaa'`（小写）。
+ * `alpha` 会被夹到 0..1，并按 `round(alpha * 255)` 转两位十六进制
+ * （例如 0.5 → 127.5 → 128 → `'80'`）。
+ *
+ * @param {string} hex 起始颜色 `'#rrggbb'` 或 `'#rrggbbaa'`（原 alpha 被覆盖）。
+ * @param {number} alpha 0..1 的透明度，1 为完全不透明。
+ * @returns {string|null} 形如 `'#6699cc80'`；`hex` 非法时返回 `null`。
+ */
+function okWithAlpha(hex, alpha) {
+  const rgb = parseHex(hex)
+  if (rgb === null) return null
+  const a = Number.isFinite(alpha) ? clamp01(alpha) : 1
+  const base = okRgbToHex(rgb)
+  const byte = Math.round(a * 255)
+    .toString(16)
+    .padStart(2, '0')
+  return `${base}${byte}`
+}
+
+/* ------------------------------------------------------------------ *
+ * 导出：WCAG 对比度
+ * ------------------------------------------------------------------ */
+
+/**
+ * 计算 WCAG 2.x 对比度（用 sRGB 相对亮度，**不是** OKLab 的 L）。
+ * 公式：`(L_lighter + 0.05) / (L_darker + 0.05)`，范围 1..21。
+ * 注意：这里直接用 sRGB 分量做 gamma 解码求相对亮度，符合 WCAG 定义。
+ *
+ * @param {string} hexA 前景或背景色。
+ * @param {string} hexB 另一个颜色。
+ * @returns {number|null} 1..21 的对比度（如 4.5）；任一输入非法时返回 `null`。
+ */
+function okContrastRatio(hexA, hexB) {
+  const rgbA = parseHex(hexA)
+  const rgbB = parseHex(hexB)
+  if (rgbA === null || rgbB === null) return null
+  const luminance = (rgb) =>
+    0.2126 * srgbChannelToLinear(rgb.r) +
+    0.7152 * srgbChannelToLinear(rgb.g) +
+    0.0722 * srgbChannelToLinear(rgb.b)
+  const la = luminance(rgbA)
+  const lb = luminance(rgbB)
+  const lighter = Math.max(la, lb)
+  const darker = Math.min(la, lb)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+    /* @dsh-oklch:end */
+
+    /**
+     * 表面不透明度 + 毛玻璃 —— **覆盖层方案**，在令牌层之外单独挂一张样式表。
+     *
+     * 为什么不做进令牌层：令牌层（`resolveTokens`）是主题通道的一部分，改它是
+     * 全局的、还得跟着 `overrideTokens` 的撤销机制走。半透明/毛玻璃是**独立的
+     * 视觉层**，可单独开关，写成覆盖层更干净，也不会连带影响别的令牌。
+     *
+     * 这个方案的三个要点**都是从既有实现里学的**（见 README 的致谢）：
+     *
+     *   1. 颜色用 `rgba(r, g, b, a)` 而不是 `#rrggbbaa` —— 精度更高，
+     *      也不会和已经是 `color-mix()` 的值打架；
+     *   2. 光靠令牌不够：中列本身是透明的，真正铺底的是**列内元素**，
+     *      所以还要用 `[class*="centerCol"]` 这类**类名片段**直接给布局列上色；
+     *   3. 开毛玻璃时必须先把外层容器 `background: transparent`，
+     *      否则底下不透、模糊等于没做。
+     *
+     * 类名用**片段**而不是全名：宿主是 CSS Modules（`pI_x6G_centerCol` 或
+     * `_centerCol_1ypvv_12`），可读部分（`centerCol`）跨构建稳定。
+     */
+
+    /** 布局列（没有对应令牌，只能按类名片段命中）。 */
+    const LAYOUT_COLUMNS = Object.freeze([
+      Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]', label: '左侧栏' }),
+      Object.freeze({ key: 'center', sel: '[class*="centerCol"]', label: '会话栏' }),
+      Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"]', label: '右侧栏' }),
+    ])
+
+    /** 要加 backdrop-filter 的容器（类名片段）。 */
+    const GLASS_TARGETS = Object.freeze([
+      Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"], [class*="sidebar"], aside, nav' }),
+      Object.freeze({ key: 'center', sel: '[class*="centerCol"]' }),
+      Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"], [class*="Rightbar"]' }),
+      Object.freeze({ key: 'card', sel: '[class*="kuvljq_card"], [class*="flL80G_file"], [class*="KuQXFq_card"], [class*="QSKnSa_card"]' }),
+      Object.freeze({ key: 'bubble', sel: '[class*="bubble"], [class*="chat-node"], [class*="message"]' }),
+      Object.freeze({ key: 'composer', sel: '[class*="RlGAzG_card"], [class*="composer"]' }),
+    ])
+
+    /**
+     * 开毛玻璃时必须透明化的外层容器 —— 不透明就看不见模糊。
+     * 只列**结构性容器**（frame / scrollBody / composerSeat 之类），
+     * 不给内容元素加，避免把该有底色的东西弄透明。
+     */
+    const GLASS_TRANSPARENT = Object.freeze([
+      'html', 'body', '#root',
+      '[class*="frame"]', '[class*="_frame_"]',
+      '[class*="scrollBody"]', '[class*="_scrollBody_"]',
+      '[class*="composerSeat"]', '[class*="_composerSeat_"]',
+      '[class*="composerStack"]', '[class*="composerHero"]',
+      '[class*="viewArea"]', '[class*="Dc7zOa_root"]',
+    ])
+
+    /**
+     * 解析 0–100 的「表面不透明度」。无效值按 100（不透明）处理。
+     * @param {string|number|undefined} raw - 设置值。
+     * @returns {number} 0–100 的整数。
+     */
+    function parseSurfaceOpacity(raw) {
+      if (raw === undefined || raw === null || raw === '') return 100
+      const n = Number(String(raw).trim())
+      if (!Number.isFinite(n)) return 100
+      return Math.max(0, Math.min(100, Math.round(n)))
     }
 
-    /* ====================================================================== *
-     * 二·五、正文高亮样式表（prose）
-     *
-     * 为什么需要单独一张表：`--shiki-*` 只被 Shiki 生成的 `<span>` 的 inline style
-     * 引用，**Markdown 正文完全不消费它**。正文的颜色来自前端 CSS 里那几条固定规则
-     * （下面用行内注释形式引用，避免与 JS 块注释嵌套冲突）：
-     *
-     *     ._markdown_xxx { color: var(--dsw-alias-label-primary) }   // 全部文字同色
-     *     ._markdown_xxx strong { font-weight: 600 }                 // 只改字重，不改色
-     *
-     * 所以想让正文"有高亮"，只能往宿主 DOM 里加规则。
-     *
-     * 选择器怎么选才不随构建失效：
-     *   宿主 markdown 容器是 `className: de(St.markdown, ...)`，St.markdown 是
-     *   CSS Modules 生成的 `_markdown_1ypvv_5` —— 前缀 `_markdown_` 来自源文件名，
-     *   **跨构建稳定**；末尾的 hash 与序号会变。所以用 `[class*="_markdown_"]`
-     *   做属性子串匹配，既不写死 hash，也不会误伤其它模块。
-     *
-     * 为什么要排除 compact：宿主对摘要/紧凑变体显式写了
-     *     ._compact_xxx pre, ._compact_xxx pre :is(code,span){color:inherit!important}
-     *     ._compact_xxx a { color: inherit; text-decoration: underline dotted }
-     * 它在紧凑场景**故意**要求继承色，我们的规则若命中也应该让位 ——
-     * 容器上只有 compact 时有 `data-markdown-variant="compact"`，据此排除。
-     * ====================================================================== */
+    /** 解析带上下限的数值设置。 */
+    function parseBounded(raw, min, max, fallback) {
+      if (raw === undefined || raw === null || raw === '') return fallback
+      const n = Number(String(raw).trim())
+      if (!Number.isFinite(n)) return fallback
+      return Math.max(min, Math.min(max, n))
+    }
 
+    /** 深色模式选择器：属性写两遍提升权重，压过宿主自己的 `body[data-ds-dark-theme]`。 */
+    const DARK_SELECTOR = 'body[data-ds-dark-theme][data-ds-dark-theme]'
+    /** 浅色模式选择器：`:not()` 同样高于宿主的 `body`。 */
+    const LIGHT_SELECTOR = 'body:not([data-ds-dark-theme])'
+
+    /**
+     * 把 hex 转成 `rgba(r, g, b, a)`。
+     * 用 rgba 而不是 8 位 hex：精度更高，也便于和 alpha 计算混合。
+     * @param {string} hex - `#rgb` 或 `#rrggbb`。
+     * @param {number} alpha - 0..1。
+     * @returns {string} rgba() 文本；输入非法时原样返回。
+     */
+    function hexToRgba(hex, alpha) {
+      if (typeof hex !== 'string') return hex
+      let clean = hex.trim().replace('#', '')
+      if (clean.length === 3) clean = clean.split('').map((c) => c + c).join('')
+      if (!/^[0-9a-fA-F]{6}$/.test(clean)) return hex
+      const r = parseInt(clean.slice(0, 2), 16)
+      const g = parseInt(clean.slice(2, 4), 16)
+      const b = parseInt(clean.slice(4, 6), 16)
+      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return hex
+      const a = Math.max(0, Math.min(1, alpha))
+      return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')'
+    }
+
+    /**
+     * 生成「表面不透明度 + 毛玻璃」覆盖样式表。
+     *
+     * @param {object} state - 已生效设置。
+     * @param {object} darkSurfaces - 深色表面色。
+     * @param {object} lightSurfaces - 浅色表面色。
+     * @returns {string} CSS 文本；两个功能都没开时为空串。
+     */
+    function buildGlassSheet(state, darkSurfaces, lightSurfaces) {
+      const s = state || {}
+      const percent = parseSurfaceOpacity(s.surfaceOpacity)
+      const glassOn = s.glass === 'on'
+      const blur = parseBounded(s.glassBlur, 0, 40, 16)
+      const saturate = parseBounded(s.glassSaturate, 100, 220, 120)
+      const wantAlpha = percent < 100
+      const wantGlass = glassOn && blur > 0
+      if (!wantAlpha && !wantGlass) return ''
+
+      const alpha = percent / 100
+      /* 各层不透明度：越靠上越实一点，否则叠起来的层次会糊。 */
+      const aBase = alpha
+      const aSidebar = Math.min(1, alpha * 1.08)
+      const aLayer1 = Math.min(1, alpha * 1.12)
+      const aLayer2 = Math.min(1, alpha * 1.18)
+
+      const dark = darkSurfaces || {}
+      const light = lightSurfaces || {}
+      const lines = ['/* dsh-colorlab —— 表面不透明度 + 毛玻璃（覆盖层，不改令牌） */']
+
+      const surfaceDecls = (surf, aB, aS, a1, a2) => {
+        const out = []
+        if (!wantAlpha) return out
+        if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB))
+        if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS))
+        if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1))
+        if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2))
+        if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)))
+        if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)))
+        if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1))
+        /* 输入框实体：让它完全透明，交给毛玻璃与底下的材质 */
+        if (wantGlass) out.push('--dsw-specific-input-major:transparent')
+        return out
+      }
+
+      const darkDecls = surfaceDecls(dark, aBase, aSidebar, aLayer1, aLayer2)
+      const lightDecls = surfaceDecls(light, aBase, aSidebar, aLayer1, aLayer2)
+      if (darkDecls.length > 0) lines.push(DARK_SELECTOR + '{' + darkDecls.join(';') + '}')
+      if (lightDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lightDecls.join(';') + '}')
+
+      /* 布局列：只设令牌不够，中列/侧栏真正铺底的是列内元素。 */
+      if (wantAlpha) {
+        for (const col of LAYOUT_COLUMNS) {
+          const dColor = col.key === 'center' ? dark.base : dark.sidebar
+          const lColor = col.key === 'center' ? light.base : light.sidebar
+          const a = col.key === 'center' ? aBase : aSidebar
+          if (dColor) {
+            lines.push(DARK_SELECTOR + ' ' + col.sel
+              + '{background-color:' + hexToRgba(dColor, a) + ' !important}')
+          }
+          if (lColor) {
+            lines.push(LIGHT_SELECTOR + ' ' + col.sel
+              + '{background-color:' + hexToRgba(lColor, a) + ' !important}')
+          }
+        }
+      }
+
+      if (wantGlass) {
+        /* 1) 先把外层结构透明化，否则底下不透、模糊看不见 */
+        lines.push(GLASS_TRANSPARENT.join(',')
+          + '{background:transparent !important;background-color:transparent !important}')
+        /* 2) 再给容器加 backdrop-filter */
+        const filter = 'backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important;'
+          + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important'
+        for (const target of GLASS_TARGETS) {
+          lines.push(target.sel + '{' + filter + '}')
+        }
+      }
+
+      return lines.join('\n')
+    }
     const PROSE_SHEET_ID = 'dsh-colorlab/prose.css'
     const ROW_SHEET_ID = 'dsh-colorlab/row.css'
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
     const MARKDOWN_SHEET_ID = 'dsh-colorlab/markdown.css'
     const LATEX_SHEET_ID = 'dsh-colorlab/latex.css'
+    const GLASS_SHEET_ID = 'dsh-colorlab/glass.css'
 
     /* ====================================================================== *
      * 二·七、LaTeX 代码块：让配色回到 Sublime 的样子
@@ -1901,6 +2065,335 @@ function makeColorizer(scheme) {
       return found
     }
 
+    function resolveTokens(state) {
+      const custom = parseCustom(state && state.custom)
+      /* 自定义配色只覆盖深色那一套；浅色保持插件自带的派生值（见 CUSTOM_SLOTS 注释）。 */
+      const PALETTE = withOverrides(PALETTE_BASE, custom.palette)
+      const s = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
+      const a = ACCENTS[state && state.accent] || ACCENTS.teal
+      const syntax = !state || state.syntax !== 'off'
+
+      /* ---- 深色值 ---- */
+      const dark = {
+        /* 底色 */
+        '--dsw-alias-bg-base': s.base,
+        '--dsw-alias-bg-document-preview': s.layer1,
+        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #6699CC 40%, transparent)',
+        '--dsw-alias-label-document-preview': PALETTE.dim,
+        '--dsw-alias-bg-layer-1': s.layer1,
+        '--dsw-alias-bg-layer-2': s.layer2,
+        '--dsw-alias-bg-layer-3': s.layer3,
+        '--dsw-alias-bg-module-platform': '#38424C',
+        '--dsw-alias-bg-multi-select': '#38424C',
+        '--dsw-alias-bg-overlay': s.overlay,
+        '--dsw-alias-bg-skeleton': '#D8DEE914',
+        /* 遮罩：纯黑半透明与色相无关，保持宿主值 */
+        '--dsw-alias-bg-mask-1': '#00000080',
+        '--dsw-alias-bg-mask-2': '#0003',
+        '--dsw-alias-bg-mask-3': '#0000007a',
+        '--dsw-alias-bg-mask-photo': '#000000e0',
+        '--dsw-alias-bg-mask-drop': '#272730b3',
+        /* 边框 */
+        '--dsw-alias-border-inverted': '#0000',
+        '--dsw-alias-border-inverted2': '#0000',
+        '--dsw-alias-border-l1': '#D8DEE90F',
+        '--dsw-alias-border-l2-darkmode-thin': '#D8DEE90F',
+        '--dsw-alias-border-l2': '#D8DEE91F',
+        '--dsw-alias-border-l3': '#D8DEE929',
+        '--dsw-alias-border-l4': '#D8DEE933',
+        /* 品牌（DSH 的"反色"语义，必须保持中性） */
+        '--dsw-alias-brand-primary': PALETTE.fg,
+        '--dsw-alias-brand-primary-invert': PALETTE.fg,
+        '--dsw-alias-brand-text': PALETTE.fg,
+        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.dark,
+        /* 文字 */
+        '--dsw-alias-label-primary': PALETTE.fg,
+        '--dsw-alias-label-primary-dimmed': '#C3CBD8',
+        '--dsw-alias-label-primary-bluish': '#C9D6E6',
+        '--dsw-alias-label-primary-foreground': '#1B2229',
+        '--dsw-alias-label-primary-inverted': '#2B333C',
+        '--dsw-alias-label-secondary': PALETTE.dim,
+        '--dsw-alias-label-tertiary': '#8792A2',
+        '--dsw-alias-label-caption': PALETTE.faintUi,
+        '--dsw-alias-label-dimmed': '#B4BCC8',
+        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #FFFFFF 45%, transparent)',
+        '--dsw-alias-label-deep-diving': PALETTE.teal,
+        '--dsw-alias-label-deep-diving-shimmer': '#92D6D6',
+        '--dsw-alias-menu-icon': '#C3CBD8',
+        '--dsw-alias-link': PALETTE.blueUi,
+        /* 交互层 */
+        '--dsw-alias-interactive-bg-hover': '#D8DEE914',
+        '--dsw-alias-interactive-bg-hover-solid': s.hover,
+        '--dsw-alias-interactive-bg-hover-accent': '#D8DEE929',
+        '--dsw-alias-interactive-bg-hover-danger': '#EC5F6726',
+        '--dsw-alias-interactive-bg-active': '#D8DEE91F',
+        /* 按钮 */
+        '--dsw-alias-button-contrast-fill': PALETTE.fg,
+        '--dsw-alias-button-elevated-fill': s.bubble,
+        '--dsw-alias-button-floating-fill': s.code,
+        '--dsw-alias-button-floating-hover': '#38424C',
+        '--dsw-alias-button-ghost-active-border': '#5A6773',
+        '--dsw-alias-button-ghost-active-fill': s.bubble,
+        '--dsw-alias-button-ghost-active-hover': s.bubbleHi,
+        '--dsw-alias-button-info-fill': PALETTE.blue,
+        '--dsw-alias-button-info-hover': '#7FA9D6',
+        '--dsw-alias-button-primary-dimmed': '#38424C',
+        '--dsw-alias-button-primary-fill': PALETTE.fg,
+        '--dsw-alias-button-primary-hover': '#E6EBF2',
+        /* 工具栏按钮：宿主自带灰罩，与色相无关，保持 */
+        '--dsw-alias-button-tool-bar-fill': '#54555780',
+        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
+        '--dsw-alias-button-tool-bar-hover': '#54555799',
+        /* Markdown / 代码 */
+        '--dsw-alias-markdown-citation': s.layer1,
+        '--dsw-alias-markdown-code-block': s.code,
+        '--dsw-alias-markdown-code-block-banner': s.layer3,
+        '--dsw-alias-markdown-code-segment-selected': s.bubble,
+        '--dsw-alias-markdown-code-segment-unselected': s.code,
+        '--dsw-alias-markdown-inline-code': s.bubble,
+        '--dsw-alias-markdown-placeholder': s.layer2,
+        '--dsw-alias-markdown-tag': s.bubble,
+        /* 滚动条 */
+        '--dsw-alias-scrollbar-bg-l1': '#4F5B66',
+        '--dsw-alias-scrollbar-bg-l2': '#5A6773',
+        '--dsw-alias-scrollbar-hover-l1': PALETTE.faint,
+        '--dsw-alias-scrollbar-hover-l2': '#72808C',
+        /* 状态色 */
+        '--dsw-alias-state-business-primary': a.dark,
+        '--dsw-alias-state-business-tertiary': a.darkSoft,
+        '--dsw-alias-state-error-primary': PALETTE.red,
+        '--dsw-alias-state-error-secondary': '#F27C82',
+        '--dsw-alias-state-idle-primary': PALETTE.faint,
+        '--dsw-alias-state-success-primary': PALETTE.green,
+        '--dsw-alias-state-success-secondary': '#A9D4A4',
+        '--dsw-alias-state-success-tertiary': '#26382A',
+        '--dsw-alias-state-warn-primary': PALETTE.orange,
+        '--dsw-alias-state-warn-secondary': PALETTE.yellow,
+        '--dsw-alias-state-warn-tertiary': '#3A2E22',
+        '--dsw-alias-state-warn-label': '#FAB763',
+        /* diff */
+        '--dsw-alias-code-diff-added': '#99C7941F',
+        '--dsw-alias-code-diff-deleted': '#EC5F671F',
+        '--dsw-alias-file-diff-added-bg': '#263A2B',
+        '--dsw-alias-file-diff-added-gutter': '#1F2F23',
+        '--dsw-alias-file-diff-added-marker': PALETTE.green,
+        '--dsw-alias-file-diff-deleted-bg': '#3A2427',
+        '--dsw-alias-file-diff-deleted-gutter': '#2C1B1E',
+        '--dsw-alias-file-diff-deleted-marker': PALETTE.red,
+        /* 浮层 */
+        '--dsw-alias-switch-thumb': PALETTE.dim,
+        '--dsw-alias-toast-bg': PALETTE.bg1,
+        '--dsw-alias-toast-label': '#E6EBF2',
+        '--dsw-alias-tooltip-bg': PALETTE.bg2,
+        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #1D1E22, white 18%)',
+        '--dsw-alias-turn-trigger-bg': s.code,
+        '--dsw-alias-turn-trigger-bg-hover': '#38424C',
+        '--dsw-alias-menu-group-header-fill': '#23292EF0',
+        /* 菜单材质（README 明确这是共享令牌，值必须接近不透明，否则菜单文字发糊） */
+        '--dsw-menu-surface-fill': '#23292EB8',
+        '--dsw-specific-menu': '#23292EB8',
+        /* 侧栏与气泡 */
+        '--dsw-specific-sidebar-fill': s.sidebar,
+        '--dsw-specific-sidebar-nav-item-active': s.bubble,
+        '--dsw-specific-sidebar-nav-item-active-accent': '#5FB3B355',
+        '--dsw-specific-sidebar-nav-item-hover': s.layer1,
+        '--dsw-specific-bubble': s.bubble,
+        '--dsw-specific-bubble-highlight': s.bubbleHi,
+        '--dsw-specific-input-major': s.code,
+        '--dsw-specific-login-input': s.layer3,
+        '--dsw-specific-selector': s.selector,
+        '--dsw-specific-tip': s.layer1,
+        /* 宿主笔误补丁：终端状态栏 CSS 写的是 var(--dsw-alias-bg-l2)，
+           真名是 --dsw-alias-bg-layer-2；补一个同名别名把那条规则救回来。 */
+        '--dsw-alias-bg-l2': s.layer2,
+      }
+
+      /* ---- 浅色值 ---- */
+      const light = {
+        '--dsw-alias-bg-base': LIGHT.base,
+        '--dsw-alias-bg-document-preview': LIGHT.layer1,
+        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #4A7FB5 40%, transparent)',
+        '--dsw-alias-label-document-preview': LIGHT.dim,
+        '--dsw-alias-bg-layer-1': LIGHT.layer1,
+        '--dsw-alias-bg-layer-2': LIGHT.layer2,
+        '--dsw-alias-bg-layer-3': LIGHT.layer3,
+        '--dsw-alias-bg-module-platform': LIGHT.layer3,
+        '--dsw-alias-bg-multi-select': LIGHT.layer3,
+        '--dsw-alias-bg-overlay': LIGHT.overlay,
+        '--dsw-alias-bg-skeleton': '#0000000a',
+        '--dsw-alias-bg-mask-1': '#0000003d',
+        '--dsw-alias-bg-mask-2': '#0000001f',
+        '--dsw-alias-bg-mask-3': '#0000007a',
+        '--dsw-alias-bg-mask-photo': '#000000e0',
+        '--dsw-alias-bg-mask-drop': '#ffffffb3',
+        '--dsw-alias-border-inverted': '#0000',
+        '--dsw-alias-border-inverted2': '#0000',
+        '--dsw-alias-border-l1': '#0000000a',
+        '--dsw-alias-border-l2-darkmode-thin': '#0000001a',
+        '--dsw-alias-border-l2': '#0000001a',
+        '--dsw-alias-border-l3': '#0000001f',
+        '--dsw-alias-border-l4': '#00000029',
+        '--dsw-alias-brand-primary': LIGHT.fg,
+        '--dsw-alias-brand-primary-invert': LIGHT.fg,
+        '--dsw-alias-brand-text': LIGHT.fg,
+        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.light,
+        '--dsw-alias-label-primary': LIGHT.fg,
+        '--dsw-alias-label-primary-dimmed': '#3B454F',
+        '--dsw-alias-label-primary-bluish': LIGHT.fg,
+        '--dsw-alias-label-primary-foreground': '#FFFFFF',
+        '--dsw-alias-label-primary-inverted': '#FFFFFF',
+        '--dsw-alias-label-secondary': LIGHT.dim,
+        '--dsw-alias-label-tertiary': LIGHT.faint,
+        '--dsw-alias-label-caption': LIGHT.caption,
+        '--dsw-alias-label-dimmed': '#C7CFDA',
+        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #000000 30%, transparent)',
+        '--dsw-alias-label-deep-diving': a.light,
+        '--dsw-alias-label-deep-diving-shimmer': a.light,
+        '--dsw-alias-menu-icon': '#3B454F',
+        '--dsw-alias-link': LIGHT.link,
+        '--dsw-alias-interactive-bg-hover': '#2631480f',
+        '--dsw-alias-interactive-bg-hover-solid': LIGHT.layer2,
+        '--dsw-alias-interactive-bg-hover-accent': '#26314824',
+        '--dsw-alias-interactive-bg-hover-danger': '#ec13130d',
+        '--dsw-alias-interactive-bg-active': '#2631481a',
+        '--dsw-alias-button-contrast-fill': LIGHT.fg,
+        '--dsw-alias-button-elevated-fill': '#FFFFFF',
+        '--dsw-alias-button-floating-fill': '#FFFFFF',
+        '--dsw-alias-button-floating-hover': LIGHT.layer2,
+        '--dsw-alias-button-ghost-active-border': PALETTE.dim,
+        '--dsw-alias-button-ghost-active-fill': LIGHT.layer3,
+        '--dsw-alias-button-ghost-active-hover': '#DDE4EC',
+        '--dsw-alias-button-info-fill': '#4A7FB5',
+        '--dsw-alias-button-info-hover': '#3E6E9E',
+        '--dsw-alias-button-primary-dimmed': LIGHT.layer3,
+        '--dsw-alias-button-primary-fill': LIGHT.fg,
+        '--dsw-alias-button-primary-hover': '#1B2229',
+        '--dsw-alias-button-tool-bar-fill': '#54555780',
+        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
+        '--dsw-alias-button-tool-bar-hover': '#54555799',
+        '--dsw-alias-markdown-citation': LIGHT.layer2,
+        '--dsw-alias-markdown-code-block': LIGHT.code,
+        '--dsw-alias-markdown-code-block-banner': LIGHT.layer3,
+        '--dsw-alias-markdown-code-segment-selected': '#FFFFFF',
+        '--dsw-alias-markdown-code-segment-unselected': LIGHT.layer3,
+        '--dsw-alias-markdown-inline-code': LIGHT.code,
+        '--dsw-alias-markdown-placeholder': LIGHT.layer3,
+        '--dsw-alias-markdown-tag': LIGHT.layer3,
+        '--dsw-alias-scrollbar-bg-l1': '#CFD3D6',
+        '--dsw-alias-scrollbar-bg-l2': '#C0C5CE',
+        '--dsw-alias-scrollbar-hover-l1': PALETTE.dim,
+        '--dsw-alias-scrollbar-hover-l2': '#979DA6',
+        '--dsw-alias-state-business-primary': a.light,
+        '--dsw-alias-state-business-tertiary': a.lightSoft,
+        '--dsw-alias-state-error-primary': '#C4464F',
+        '--dsw-alias-state-error-secondary': '#D4686F',
+        '--dsw-alias-state-idle-primary': '#CFD3D6',
+        '--dsw-alias-state-success-primary': '#4E8A4A',
+        '--dsw-alias-state-success-secondary': '#5E9C58',
+        '--dsw-alias-state-success-tertiary': '#E6FAED',
+        '--dsw-alias-state-warn-primary': '#C97A2B',
+        '--dsw-alias-state-warn-secondary': '#E08C34',
+        '--dsw-alias-state-warn-tertiary': '#FEF5E7',
+        '--dsw-alias-state-warn-label': '#B36A1E',
+        '--dsw-alias-code-diff-added': '#22c55e14',
+        '--dsw-alias-code-diff-deleted': '#f25a5a14',
+        '--dsw-alias-file-diff-added-bg': '#E6F4E7',
+        '--dsw-alias-file-diff-added-gutter': '#EDF7ED',
+        '--dsw-alias-file-diff-added-marker': '#01A241',
+        '--dsw-alias-file-diff-deleted-bg': '#FCE6E2',
+        '--dsw-alias-file-diff-deleted-gutter': '#FDECE9',
+        '--dsw-alias-file-diff-deleted-marker': '#BA2723',
+        '--dsw-alias-switch-thumb': '#FFFFFF',
+        '--dsw-alias-toast-bg': '#38424C',
+        '--dsw-alias-toast-label': '#FFFFFF',
+        '--dsw-alias-tooltip-bg': '#38424C',
+        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #38424C, white 18%)',
+        '--dsw-alias-turn-trigger-bg': LIGHT.code,
+        '--dsw-alias-turn-trigger-bg-hover': LIGHT.layer3,
+        '--dsw-alias-menu-group-header-fill': '#F8F9FAF0',
+        '--dsw-menu-surface-fill': '#F8F9FAF0',
+        '--dsw-specific-menu': '#F8F9FAF0',
+        '--dsw-specific-sidebar-fill': LIGHT.sidebar,
+        '--dsw-specific-sidebar-nav-item-active': LIGHT.layer3,
+        '--dsw-specific-sidebar-nav-item-active-accent': a.lightSoft,
+        '--dsw-specific-sidebar-nav-item-hover': LIGHT.layer2,
+        '--dsw-specific-bubble': LIGHT.bubble,
+        '--dsw-specific-bubble-highlight': LIGHT.bubbleHi,
+        '--dsw-specific-input-major': LIGHT.code,
+        '--dsw-specific-login-input': LIGHT.layer3,
+        '--dsw-specific-selector': LIGHT.selector,
+        '--dsw-specific-tip': LIGHT.layer2,
+        '--dsw-alias-bg-l2': LIGHT.layer2,
+      }
+
+      /* ---- 静态色阶（前端 CSS 有 9 处直接引用，用于文件类型图标/内联动作）---- */
+      const staticTokens = {
+        '--dsw-static-deepseek-500': { dark: PALETTE.teal, light: a.light },
+        '--dsw-static-deepseek-450': { dark: '#7FC7C7', light: '#5A9E9E' },
+        '--dsw-static-deepseek-400': { dark: '#7FC7C7', light: '#5A9E9E' },
+        '--dsw-static-green-500': { dark: PALETTE.green, light: '#4E8A4A' },
+        '--dsw-static-amber-400': { dark: PALETTE.yellow, light: '#E08C34' },
+        '--dsw-static-amber-500': { dark: PALETTE.orange, light: '#C97A2B' },
+        '--dsw-static-red-600': { dark: PALETTE.red, light: '#C4464F' },
+        '--dsw-static-neutral-bluish-00': { dark: '#F7F9FB', light: '#FFFFFF' },
+        '--dsw-static-neutral-bluish-300': { dark: PALETTE.dim, light: '#A7ADBA' },
+      }
+
+      /* ---- Shiki 语法色（css-variables 主题，前缀 --shiki-）---- */
+      const shikiTokens = syntax
+        ? {
+            '--shiki-foreground': { dark: PALETTE.fg, light: LIGHT.fg },
+            '--shiki-background': { dark: s.code, light: LIGHT.code },
+            '--shiki-token-constant': { dark: PALETTE.orange, light: '#C97A2B' },
+            '--shiki-token-string': { dark: PALETTE.green, light: '#4E8A4A' },
+            '--shiki-token-comment': { dark: '#8792A2', light: '#6B7686' },
+            '--shiki-token-keyword': { dark: PALETTE.purple, light: '#8A5E8A' },
+            '--shiki-token-parameter': { dark: PALETTE.orange, light: '#C97A2B' },
+            /* function 令牌 = Mariana 的 var(blue) #6699CC。
+               Sublime Mariana 里 `support.function, support.macro` → var(blue)，
+               所以 Python 内置函数（print/len/open）、LaTeX 命令（\chapter）
+               都是这个蓝。（另一条规则 `entity.name.function` → var(blue5) 青
+               只管「函数定义名」，Shiki 把两者合并了，取更常见的蓝。） */
+            '--shiki-token-function': { dark: PALETTE.blue, light: '#3E6FA8' },
+            '--shiki-token-string-expression': { dark: '#A9D4A4', light: '#3E7A3A' },
+            '--shiki-token-punctuation': { dark: PALETTE.dim, light: '#5A6472' },
+            '--shiki-token-link': { dark: PALETTE.blueUi, light: LIGHT.link },
+            /* Shiki 的 css-variables 主题还引用这三个（用于 ```diff 代码块），
+               但宿主 shiki.css 没有声明它们 —— 不补的话 diff 新增/删除行会落到
+               var() 未定义的兜底色（继承正文色），看不出增删。 */
+            '--shiki-token-inserted': { dark: PALETTE.green, light: '#4E8A4A' },
+            '--shiki-token-deleted': { dark: PALETTE.red, light: '#C4464F' },
+            '--shiki-token-changed': { dark: PALETTE.yellow, light: '#C97A2B' },
+          }
+        : {}
+
+      /* ---- 合并成 { light, dark } 对；缺浅色值的回落到深色值（绝不出现单值）---- */
+      const out = {}
+      for (const name of Object.keys(dark)) {
+        out[name] = { light: light[name] !== undefined ? light[name] : dark[name], dark: dark[name] }
+      }
+      for (const name of Object.keys(staticTokens)) out[name] = staticTokens[name]
+      for (const name of Object.keys(shikiTokens)) out[name] = shikiTokens[name]
+      /* 正文高亮的辅助令牌：与 syntax 开关解耦，由 prose 开关单独控制样式表挂载。 */
+      for (const [name, pair] of Object.entries(resolveProseTokens(state))) out[name] = pair
+      /* 过程行高亮色：写进令牌层，样式表用 var(--dmt-row-color, 兜底) 取。
+         浅色值与深色值相同（过程行颜色是用户挑的，不该随外观变）。
+         state 可能整体缺省（测试/首次挂载），所以每个字段都单独兜底。 */
+      const rowColor = typeof (state && state.rowColor) === 'string' && HEX_PATTERN.test(state.rowColor)
+        ? state.rowColor
+        : DEFAULTS.rowColor
+      out['--dmt-row-color'] = { light: rowColor, dark: rowColor }
+      /* 汇总行 / 本轮汇总的颜色（黄），同上：两色系同值。 */
+      const summaryColor = typeof (state && state.summaryColor) === 'string' && HEX_PATTERN.test(state.summaryColor)
+        ? state.summaryColor
+        : DEFAULTS.summaryColor
+      out['--dmt-summary-color'] = { light: summaryColor, dark: summaryColor }
+      /* Markdown 细节色：对齐 Sublime Mariana 的 markup.* 规则。 */
+      out['--dmt-md-list-marker'] = { light: PALETTE.green, dark: PALETTE.green }
+      out['--dmt-md-quote'] = { light: PALETTE.orange, dark: PALETTE.orange }
+      out['--dmt-md-code-bg'] = { light: LIGHT.code, dark: s.layer2 }
+      return out
+    }
     /**
      * 生成正文高亮样式表。
      *
@@ -1963,6 +2456,14 @@ function makeColorizer(scheme) {
 
     /**
      * 把 hex 颜色朝白色插值（线性 sRGB 空间，通道各自向 255 靠拢）。
+     *
+     * **注意：这里暂时不用 OKLCH。** 试过用 `okAdjustLightness` 换掉它，会把三条
+     * 既有契约改掉：`t=1` 不再到纯白、`#808080@t=0.5` 的具体值变了，而且
+     * 「正文提亮档位」的层次反而塌掉（实测 soft 档 em 对正文从 1.15:1 掉到 1.06:1）——
+     * 因为线性公式在深色上会**过冲**到正文色之外，而 OKLCH 的均匀步长不会。
+     * 要换就得连同三档 boost 一起重新标定，那是单独一轮的事。
+     * OKLCH 模块（`tools/oklch.mjs` + 内嵌）已经就位，留给后续新功能用。
+     *
      * @param {string} hex - `#rgb` 或 `#rrggbb`。
      * @param {number} t - 插值比例 0..1。
      * @returns {string} 提亮后的 hex（大写）；输入非法时原样返回。
@@ -2294,7 +2795,7 @@ function makeColorizer(scheme) {
 
     const state = { ...DEFAULTS }
     const store = createStore({ ...DEFAULTS, status: initialStatus() })
-    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off', latex: 0 }
+    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off', latex: 0, glass: 'off' }
 
     /**
      * 未确认的颜色改动；空对象 = 无草稿。
@@ -2577,6 +3078,53 @@ function makeColorizer(scheme) {
      * 这个三跳本身不可避免，但**我们这一跳的延迟要尽量小**。重扫本身很便宜
      * （内容没变时 `syncTexLayer` 直接返回），短去抖不会带来负担。
      */
+    /** 毛玻璃样式表元素。 */
+    let glassEl = null
+
+    /**
+     * 按当前设置维护「表面不透明度 + 毛玻璃」覆盖样式表。
+     *
+     * 与卡片/正文那几张表同一套模式：只在需要时挂一张 `<style>`，关掉就撤掉，
+     * 不留残留。
+     *
+     * 表面色从**当前设置解析出来**（`SURFACES` / `LIGHT` + 自定义槽位），
+     * 而不是从 DOM 里读计算值 —— 我们要生成的是「目标值」，
+     * 读回来只会拿到自己上一轮写进去的东西。
+     */
+    function syncGlassSheet() {
+      if (typeof document === 'undefined') return
+      const wanted = state.enabled !== 'off' && shouldApply()
+      const custom = parseCustom(state && state.custom)
+      const darkSurfaces = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
+      const lightSurfaces = withOverrides(LIGHT, custom.surface)
+      const css = wanted ? buildGlassSheet(state, darkSurfaces, lightSurfaces) : ''
+      if (css === '') {
+        if (glassEl !== null) {
+          try {
+            glassEl.remove()
+          } catch (error) {
+            note('remove glass sheet', error)
+          }
+          glassEl = null
+        }
+        diag.glass = 'off'
+        return
+      }
+      try {
+        if (glassEl === null) {
+          glassEl = document.createElement('style')
+          glassEl.dataset.plugin = 'dsh-colorlab'
+          glassEl.dataset.pluginCss = GLASS_SHEET_ID
+          document.head.appendChild(glassEl)
+        }
+        writeSheet(glassEl, css)
+        diag.glass = 'on'
+      } catch (error) {
+        note('install glass sheet', error)
+        diag.glass = 'error'
+      }
+    }
+
     function scheduleLatexRescan() {
       if (latexRescanTimer !== null) return
       if (typeof setTimeout !== 'function') return
@@ -2927,6 +3475,7 @@ function makeColorizer(scheme) {
       syncRowSheet()
       syncCardSheet()
       syncLatexSheet()
+      syncGlassSheet()
       publish()
     }
 
@@ -3962,6 +4511,127 @@ function makeColorizer(scheme) {
               : null,
           ),
         ),
+
+        /* ---- 表面不透明度 + 毛玻璃 ----------------------------------------
+           两个旋钮配合才有意义：不透明度让底下透出来，毛玻璃模糊掉它背后的内容。
+           DSH 桌面端在 Windows 上用 backgroundMaterial:"acrylic" 创建窗口，
+           所以「透出来」的确实是系统材质 —— 不是对着纯色做无用功。 */
+        h(
+          Row,
+          {
+            title: '表面不透明度',
+            hint: '100% = 不透明。调低后表面变半透明，桌面端窗口的原生亚克力材质会透出来。只作用于表面（底色/层/侧栏/气泡/输入框），不碰文字、边框与菜单。',
+          },
+          h(
+            'span',
+            { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flex: 'none' } },
+            h('input', {
+              type: 'range',
+              min: '0',
+              max: '100',
+              step: '1',
+              style: { width: '132px' },
+              value: String(parseSurfaceOpacity(snapshot.surfaceOpacity)),
+              'aria-label': '表面不透明度',
+              onChange: (event) => updateDraft({ surfaceOpacity: event.target.value }),
+            }),
+            h(
+              'span',
+              {
+                style: {
+                  minWidth: '40px',
+                  textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums',
+                  color: 'var(--dsw-alias-label-secondary, #A7ADBA)',
+                  fontSize: '12px',
+                },
+              },
+              parseSurfaceOpacity(snapshot.surfaceOpacity) + '%',
+            ),
+          ),
+        ),
+        h(
+          Row,
+          {
+            title: '毛玻璃',
+            hint: '给页面内层叠的表面（侧栏 / 面板 / 卡片 / 气泡 / 输入框）加 backdrop-filter，模糊掉它背后的页面内容。配合上面的不透明度使用才明显。',
+          },
+          h('input', {
+            type: 'checkbox',
+            checked: snapshot.glass === 'on',
+            'aria-label': '毛玻璃',
+            onChange: (event) => updateDraft({ glass: event.target.checked ? 'on' : 'off' }),
+          }),
+        ),
+        h(
+          Row,
+          {
+            title: '模糊半径',
+            hint: '0–40 px。0 = 不模糊；太大（>24px）会让背后的内容完全看不出形状。',
+          },
+          h(
+            'span',
+            { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flex: 'none' } },
+            h('input', {
+              type: 'range',
+              min: '0',
+              max: '40',
+              step: '1',
+              style: { width: '132px' },
+              value: String(parseBounded(snapshot.glassBlur, 0, 40, 16)),
+              'aria-label': '模糊半径',
+              onChange: (event) => updateDraft({ glassBlur: event.target.value }),
+            }),
+            h(
+              'span',
+              {
+                style: {
+                  minWidth: '40px',
+                  textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums',
+                  color: 'var(--dsw-alias-label-secondary, #A7ADBA)',
+                  fontSize: '12px',
+                },
+              },
+              parseBounded(snapshot.glassBlur, 0, 40, 16) + 'px',
+            ),
+          ),
+        ),
+        h(
+          Row,
+          {
+            title: '背景饱和度',
+            hint: '100–220 %。毛玻璃会把背后的颜色洗淡，适度过饱和（默认 120%）能把颜色拉回来。',
+          },
+          h(
+            'span',
+            { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flex: 'none' } },
+            h('input', {
+              type: 'range',
+              min: '100',
+              max: '220',
+              step: '5',
+              style: { width: '132px' },
+              value: String(parseBounded(snapshot.glassSaturate, 100, 220, 120)),
+              'aria-label': '背景饱和度',
+              onChange: (event) => updateDraft({ glassSaturate: event.target.value }),
+            }),
+            h(
+              'span',
+              {
+                style: {
+                  minWidth: '40px',
+                  textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums',
+                  color: 'var(--dsw-alias-label-secondary, #A7ADBA)',
+                  fontSize: '12px',
+                },
+              },
+              parseBounded(snapshot.glassSaturate, 100, 220, 120) + '%',
+            ),
+          ),
+        ),
+
         /* 卡片预览：结构复刻宿主 ChangedFiles（头部横带走 --changes-fill）。
            容器挂 previewVars，草稿的卡片色只盖这棵子树。 */
         h(
@@ -4487,6 +5157,15 @@ function makeColorizer(scheme) {
                 markdownEl = null
               }
               diag.markdown = 'off'
+              if (glassEl !== null) {
+                try {
+                  glassEl.remove()
+                } catch (error) {
+                  note('teardown glass sheet', error)
+                }
+                glassEl = null
+              }
+              diag.glass = 'off'
               disposeLatexObserver()
               if (latexEl !== null) {
                 try {
@@ -4562,6 +5241,16 @@ function makeColorizer(scheme) {
         PROSE_COLOR_KEYS,
         parseProseColors,
         CARD_SHEET_ID,
+        GLASS_SHEET_ID,
+        GLASS_TARGETS,
+        LAYOUT_COLUMNS,
+        GLASS_TRANSPARENT,
+        buildGlassSheet,
+        hexToRgba,
+        parseSurfaceOpacity,
+        parseBounded,
+        DARK_SELECTOR,
+        LIGHT_SELECTOR,
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
