@@ -240,8 +240,9 @@ const FIELD_DEFAULTS = {
   glass: 'on',
   /* "wallpaper"（读 Windows 当前桌面壁纸）| "gradient"（用当前配色生成的柔和光斑）。 */
   glassBackground: 'wallpaper',
-  /* 三列底色浓度百分比 0–30。0 = 完全通透，越大越接近实心面板。 */
-  glassTint: '10',
+  /* 三列底色浓度百分比 0–100。越高越接近原生 Mariana（主题色越保得住），
+     越低壁纸越明显。默认 65：既能透出壁纸的明暗，又让 #343D46 仍是主调。 */
+  glassTint: '65',
   /* 浮层（菜单/提示/输入框/气泡）雾面浓度百分比 0–40。 */
   glassFog: '16',
   /* 玻璃背后的模糊半径 0–40 px。 */
