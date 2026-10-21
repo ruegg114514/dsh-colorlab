@@ -229,6 +229,30 @@ npm test        # 9 suites, offline
 npm run check   # syntax check
 ```
 
+## Credits
+
+Two design decisions in this plugin were learned by reading other DSH theme
+plugins, and are credited here:
+
+- **Surface opacity and frosted glass.** The approach of writing an *override
+  stylesheet* (rather than folding alpha into the token layer), using
+  `rgba()` values, hitting layout columns through `[class*="centerCol"]`
+  fragment selectors, and making the outer containers transparent before
+  applying `backdrop-filter` — this combination comes from
+  [yaanlaan/deepseek-colorful](https://github.com/yaanlaan/deepseek-colorful)
+  (MIT). Its `theme-engine.js` was the reference.
+- **Per-region background overrides and mode-scoped selectors.** Raising
+  specificity by repeating the dark-mode attribute
+  (`body[data-ds-dark-theme][data-ds-dark-theme]`) instead of reaching for
+  `!important` comes from
+  [Alicex7777/dsh-theme-colors](https://github.com/Alicex7777/dsh-theme-colors)
+  (MIT). Its `palette.js` was the reference.
+
+No code was copied verbatim; what was taken is the approach, then reimplemented
+against this plugin's own architecture. The OKLCH conversion in
+`tools/oklch.mjs` is an independent implementation of Björn Ottosson's
+published matrices.
+
 ## License
 
 MIT. The Mariana palette originates from Sublime Text
@@ -430,6 +454,24 @@ WCAG 对比度，不是估算。
 npm test        # 11 个套件，离线可跑
 npm run check   # 语法检查
 ```
+
+## 致谢
+
+这个插件里有两处设计是**读了别人的实现之后学的**，在此注明：
+
+- **表面不透明度与毛玻璃**：用**覆盖样式表**（而不是把 alpha 折进令牌层）、
+  用 `rgba()` 写颜色、用 `[class*="centerCol"]` 这类**类名片段**命中布局列、
+  以及在加 `backdrop-filter` 前先把外层容器透明化 —— 这套组合来自
+  [yaanlaan/deepseek-colorful](https://github.com/yaanlaan/deepseek-colorful)（MIT），
+  参考的是它的 `theme-engine.js`。
+- **按区域覆盖背景与按模式限定选择器**：把深色属性写两遍
+  （`body[data-ds-dark-theme][data-ds-dark-theme]`）来提权、而不是直接上
+  `!important`，这个手法来自
+  [Alicex7777/dsh-theme-colors](https://github.com/Alicex7777/dsh-theme-colors)（MIT），
+  参考的是它的 `palette.js`。
+
+**没有逐字复制代码**：取的是思路，然后按本插件自己的架构重新实现。
+`tools/oklch.mjs` 里的 OKLCH 换算是按 Björn Ottosson 公开的矩阵独立实现的。
 
 ## 许可
 
