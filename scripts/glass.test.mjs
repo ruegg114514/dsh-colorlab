@@ -141,11 +141,26 @@ check(half.includes('--dsw-alias-bg-layer-2:rgba(66, 75, 85, 0.59) !important'),
 check(!half.includes('#343D46'), '不再出现原始 6 位 hex（已换成 rgba）')
 check(!/#[0-9a-fA-F]{8}\b/.test(half), '不含 8 位 hex（统一走 rgba）')
 
-/* 布局列必须单独上色 */
-check(half.includes('[class*="centerCol"]'), '给中列类名片段上色')
-check(half.includes('[class*="sidebarCol"]'), '给左栏类名片段上色')
-check(half.includes('[class*="rightbarCol"]'), '给右栏类名片段上色')
-check((half.match(/!important/g) || []).length > 0, '布局列覆盖带 !important（压过宿主）')
+/* 【关键回归】布局列必须被**透明化**，不是被上色。
+   宿主结构是嵌套的、每层都用同一个不透明色铺底；给每层都加 alpha 会叠加成
+   几乎不透明（0.6 叠两层 = 0.84、三层 = 0.944），实测症状就是"开了和没开一样"。
+   所以只有最外层 frame 带 alpha，内层必须 transparent。 */
+for (const [key, sel] of [['中列', 'centerCol'], ['左栏', 'sidebarCol'], ['右栏', 'rightbarCol']]) {
+  const line = half.split('\n').find((l) => l.includes('"' + sel + '"') && l.includes('transparent'))
+  check(line !== undefined, `${key}被透明化（不再叠 alpha）`)
+}
+check((half.match(/!important/g) || []).length > 0, '覆盖带 !important（压过宿主内联样式）')
+
+/* alpha 只能出现在最外层 frame 上，不能出现在布局列上 */
+const colLines = half.split('\n').filter((l) => /Col"\]/.test(l))
+check(colLines.every((l) => l.includes('transparent')), '所有布局列规则都是 transparent')
+check(!colLines.some((l) => /rgba\(/.test(l)), '布局列规则里不再出现 rgba（不叠 alpha）')
+
+/* 窗口框架选择器必须被 data-windows-titlebar 限定，否则会命中 14 个 _frame 类 */
+check(half.includes('[data-windows-titlebar] [class*="frame"]'),
+  '窗口框架选择器带 [data-windows-titlebar] 限定')
+check(!half.includes('[class*="frame"]{') || half.includes('[data-windows-titlebar] [class*="frame"]'),
+  '不存在裸的 [class*="frame"] 选择器')
 
 /* 【关键回归】token 声明必须**全部**带 !important。
    宿主 ThemePresenter 用 body.style.setProperty(...) 写这些 token ——
