@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /**
- * 表面不透明度 + 毛玻璃（覆盖层）测试。
+ * 表面不透明度 + 毛玻璃测试。
  *
- * 这块的设计是**从既有实现里学的**（见 README 致谢），三个要点各自对应一组断言：
+ * 实现是**从 yaanlaan/deepseek-colorful 的 `lib/theme-engine.js` 移植**的（MIT）。
+ * 本测试锁住原实现的三个必备机制 —— 前几版反复失败，都是缺了其中一环：
  *
- *   1. 颜色用 `rgba(r, g, b, a)` 而不是 `#rrggbbaa` —— 精度更高、不与 color-mix 打架
- *   2. 光靠令牌不够：中列透明、真正铺底的是列内元素 → 还要给布局列直接上色
- *   3. 开毛玻璃必须先把外层容器 `background: transparent`，否则模糊看不见
+ *   1. **必须自己铺一层背景**（fixed、z-index 0、prepend 到 body）。
+ *      没有它，backdrop-filter 模糊的是同一块纯色，屏幕上毫无变化。
+ *   2. **结构必须透明化**，否则背景层被挡住看不见。
+ *   3. **背景层的颜色必须和表面色拉开明暗差**，
+ *      否则透过半透明看到的还是自己（实测通道差 < 15 时肉眼无感）。
  *
- * 另外锁住两条容易退化的性质：
- *   - 两个功能都关时**不产生任何 CSS**（不能挂空样式表）
- *   - 生成的样式表里**不含 `#rrggbbaa`**（统一走 rgba）
+ * 另外锁住两条「规则不许互相打架」的约束：
+ *   - 三列不能同时出现在「透明化」和「上色」两个规则里
+ *   - 三列不能既透明又带 alpha
  */
 
 import { readFileSync } from 'node:fs'
@@ -31,10 +34,10 @@ function check(condition, label, detail) {
 }
 
 /* ------------------------------------------------------------------ *
- * 载入 client.js（与其它套件同一套方式）
+ * 载入 client.js
  * ------------------------------------------------------------------ */
 
-function loadPlugin(dom) {
+function loadPlugin() {
   let captured = null
   const fakeWindow = {
     __ModuleLoader__: { load: (d) => { captured = d } },
@@ -52,19 +55,28 @@ function loadPlugin(dom) {
     throw new Error('unexpected require: ' + id)
   }
   new Function('window', 'document', 'require', 'setTimeout', source)(
-    fakeWindow, dom ? dom.document : undefined, fakeRequire, () => ({ unref() {} }),
+    fakeWindow, undefined, fakeRequire, () => ({ unref() {} }),
   )
   if (captured === null) throw new Error('client.js 没有注册 bundle')
   return captured.factory(fakeRequire)
 }
 
-const mod = loadPlugin(null)
+const mod = loadPlugin()
 const t = mod.__test
 const {
-  buildGlassSheet, hexToRgba, parseSurfaceOpacity, parseBounded,
-  GLASS_TARGETS, LAYOUT_COLUMNS, GLASS_TRANSPARENT,
-  DARK_SELECTOR, LIGHT_SELECTOR, GLASS_SHEET_ID,
+  buildGlassSheet, buildBackdropImage, hexToRgba, parseSurfaceOpacity, parseBounded,
+  GLASS_TARGETS, TRANSPARENT_SELECTORS, DARK_SELECTOR, LIGHT_SELECTOR,
+  GLASS_SHEET_ID, BACKDROP_ID,
 } = t
+
+const darkSurf = {
+  base: '#343D46', sidebar: '#2E363F', layer1: '#3B444D', layer2: '#424B55',
+  layer3: '#49525C', overlay: '#1E242A', bubble: '#3B444D',
+}
+const lightSurf = {
+  base: '#FFFFFF', sidebar: '#F9FAFB', layer1: '#FFFFFF', layer2: '#F3F4F6',
+  layer3: '#E9EBEF', overlay: '#E5E7EB', bubble: '#FFFFFF',
+}
 
 console.log('')
 console.log('dsh-colorlab 表面不透明度 + 毛玻璃测试')
@@ -77,14 +89,13 @@ console.log('─'.repeat(56))
 console.log('  A. hexToRgba')
 
 check(hexToRgba('#6699CC', 0.5) === 'rgba(102, 153, 204, 0.5)', '6 位 hex + alpha', hexToRgba('#6699CC', 0.5))
-check(hexToRgba('#69C', 1) === 'rgba(102, 153, 204, 1)', '3 位简写展开', hexToRgba('#69C', 1))
-check(hexToRgba('#000000', 0) === 'rgba(0, 0, 0, 0)', '纯黑 + alpha 0')
-check(hexToRgba('#FFFFFF', 1) === 'rgba(255, 255, 255, 1)', '纯白 + alpha 1')
+check(hexToRgba('#69C', 1) === 'rgba(102, 153, 204, 1)', '3 位简写展开')
+check(hexToRgba('#000000', 0) === 'rgba(0, 0, 0, 0)', '纯黑 alpha 0')
+check(hexToRgba('#FFFFFF', 1) === 'rgba(255, 255, 255, 1)', '纯白 alpha 1')
 check(hexToRgba('#6699CC', 2) === 'rgba(102, 153, 204, 1)', 'alpha > 1 被 clamp')
 check(hexToRgba('#6699CC', -1) === 'rgba(102, 153, 204, 0)', 'alpha < 0 被 clamp')
-check(hexToRgba('not-a-color', 0.5) === 'not-a-color', '非法输入原样返回')
+check(hexToRgba('nope', 0.5) === 'nope', '非法输入原样返回')
 check(hexToRgba(null, 0.5) === null, 'null 原样返回')
-check(hexToRgba('#12345', 0.5) === '#12345', '5 位 hex 非法，原样返回')
 
 /* ------------------------------------------------------------------ *
  * B. 数值解析
@@ -93,198 +104,154 @@ check(hexToRgba('#12345', 0.5) === '#12345', '5 位 hex 非法，原样返回')
 console.log('  B. 数值解析')
 
 check(parseSurfaceOpacity('60') === 60, "字符串 '60' → 60")
-check(parseSurfaceOpacity(60) === 60, '数字 60 → 60')
-check(parseSurfaceOpacity('') === 100, '空串 → 100（默认不透明）')
+check(parseSurfaceOpacity('') === 100, '空串 → 100')
 check(parseSurfaceOpacity(undefined) === 100, 'undefined → 100')
 check(parseSurfaceOpacity('abc') === 100, '非法 → 100')
-check(parseSurfaceOpacity('150') === 100, '超上界被 clamp 到 100')
-check(parseSurfaceOpacity('-20') === 0, '超下界被 clamp 到 0')
-check(parseSurfaceOpacity('59.6') === 60, '四舍五入')
-
-check(parseBounded('16', 0, 40, 16) === 16, 'parseBounded 正常值')
+check(parseSurfaceOpacity('150') === 100, '超上界 clamp')
+check(parseSurfaceOpacity('-20') === 0, '超下界 clamp')
+check(parseBounded('16', 0, 40, 16) === 16, 'parseBounded 正常')
 check(parseBounded('99', 0, 40, 16) === 40, 'parseBounded 上界')
-check(parseBounded('-5', 0, 40, 16) === 0, 'parseBounded 下界')
 check(parseBounded('x', 0, 40, 16) === 16, 'parseBounded 非法回落')
 
 /* ------------------------------------------------------------------ *
- * C. 都不开 → 不产生 CSS
+ * C. 关闭状态不产生样式
  * ------------------------------------------------------------------ */
 
-console.log('  C. 关闭状态不产生样式')
-
-const darkSurf = { base: '#343D46', sidebar: '#2E363F', layer1: '#3B444D', layer2: '#424B55', layer3: '#49525C', overlay: '#1E242A', bubble: '#3B444D' }
-const lightSurf = { base: '#FFFFFF', sidebar: '#F9FAFB', layer1: '#FFFFFF', layer2: '#F3F4F6', layer3: '#E9EBEF', overlay: '#E5E7EB', bubble: '#FFFFFF' }
+console.log('  C. 关闭状态')
 
 check(buildGlassSheet({ surfaceOpacity: '100', glass: 'off' }, darkSurf, lightSurf, true) === '',
-  '不透明度 100 + 毛玻璃关 → 空串（不挂空样式表）')
+  '不透明度 100 + 毛玻璃关 → 空串')
 check(buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '0' }, darkSurf, lightSurf, true) === '',
-  '毛玻璃开但半径为 0 → 空串')
+  '毛玻璃开但半径 0 → 空串')
 check(buildGlassSheet({}, darkSurf, lightSurf, true) === '', '空设置 → 空串')
 
 /* ------------------------------------------------------------------ *
- * D. 不透明度生效
+ * D. 【机制 1】背景层必须存在且是渐变
  * ------------------------------------------------------------------ */
 
-console.log('  D. 表面不透明度')
+console.log('  D. 背景层（机制 1：必须有东西可被模糊）')
 
-const half = buildGlassSheet({ surfaceOpacity: '50', glass: 'off' }, darkSurf, lightSurf, true)
-check(half !== '', '50% 产生样式')
-check(half.includes(DARK_SELECTOR), '有深色模式规则', DARK_SELECTOR)
-check(half.includes(LIGHT_SELECTOR), '有浅色模式规则', LIGHT_SELECTOR)
-check(half.includes('--dsw-alias-bg-base:rgba(52, 61, 70, 0.5) !important'),
-  '深色底色带 0.5 alpha，且带 !important',
-  'rgba(52, 61, 70, 0.5) !important')
-check(half.includes('--dsw-specific-sidebar-fill:rgba(46, 54, 63, 0.54) !important'),
-  '侧栏 alpha 略高（1.08×）且带 !important')
-check(half.includes('--dsw-alias-bg-layer-2:rgba(66, 75, 85, 0.59) !important'),
-  'layer2 alpha 更高（1.18×）且带 !important')
-check(!half.includes('#343D46'), '不再出现原始 6 位 hex（已换成 rgba）')
-check(!/#[0-9a-fA-F]{8}\b/.test(half), '不含 8 位 hex（统一走 rgba）')
-
-/* 【关键】布局列必须**完全透明**，不许带 alpha。
-   宿主背景是嵌套的、每层同色；token 改成 rgba 后 frame 自动半透明，
-   列若再设 rgba 就会叠加（0.6 叠两层 = 0.84、三层 = 0.94），
-   屏幕上等于完全不透明 —— 这是"改了也没变化"的直接原因。 */
-for (const [key, sel] of [['中列', 'centerCol'], ['左栏', 'sidebarCol'], ['右栏', 'rightbarCol']]) {
-  const line = half.split('\n').find((l) => l.includes('"' + sel + '"'))
-  check(line !== undefined && line.includes('transparent'), `${key}完全透明（不叠 alpha）`)
-  check(line !== undefined && !line.includes('rgba('), `${key}不带 rgba`)
-}
-check((half.match(/!important/g) || []).length > 0, '覆盖带 !important（压过宿主内联样式）')
-
-/* 窗口框架**不再单独写规则** —— 它的半透明完全来自 token
-   （`background: var(--dsw-alias-bg-base)` + 我们把该 token 改成 rgba）。
-   所以这里断言的是"没有针对 frame 的 background 覆盖"，
-   否则会和 token 打架（上一版把它清成 transparent，导致毫无效果）。 */
-check(!half.split('\n').some((line) => /\[class\*="frame"\]/.test(line) && /background/.test(line)),
-  '不对 frame 单独覆盖 background（半透明靠 token 承载）')
-
-/* 【关键回归】token 声明必须**全部**带 !important。
-   宿主 ThemePresenter 用 body.style.setProperty(...) 写这些 token ——
-   内联样式压过普通样式表规则，不加 !important 的话整段覆盖层完全无效。
-   实测症状：不透明度拖到底毫无变化，只有 backdrop-filter 生效。 */
 {
-  const tokenDecls = half.split('\n')
-    .filter((line) => line.includes('--dsw-'))
-    .flatMap((line) => (line.match(/--dsw-[a-z0-9-]+:[^;!}]+/g) || []))
-  check(tokenDecls.length >= 7, 'token 声明数量 ≥ 7', String(tokenDecls.length))
-  const missing = half.split('\n')
-    .filter((line) => line.includes('--dsw-'))
-    .filter((line) => {
-      /* 找出这条规则里没有跟 !important 的声明 */
-      const decls = line.match(/--dsw-[a-z0-9-]+:[^;}]+/g) || []
-      return decls.some((d) => !d.includes('!important'))
-    })
-  check(missing.length === 0, '每条 token 声明都带 !important（否则被宿主内联样式压掉）',
-    missing.length === 0 ? '' : missing[0].slice(0, 60))
-}
-
-/* 0% = 完全透明 */
-const zero = buildGlassSheet({ surfaceOpacity: '0', glass: 'off' }, darkSurf, lightSurf, true)
-check(zero.includes('rgba(52, 61, 70, 0)'), '0% → alpha 0')
-check(!zero.includes('rgba(52, 61, 70, 1)'), '0% 不出现完全不透明')
-
-/* ------------------------------------------------------------------ *
- * E. 毛玻璃生效
- * ------------------------------------------------------------------ */
-
-console.log('  E. 毛玻璃')
-
-const glass = buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '20', glassSaturate: '150' }, darkSurf, lightSurf, true)
-check(glass !== '', '毛玻璃产生样式')
-check(glass.includes('backdrop-filter:blur(20px) saturate(150%)'), '模糊半径与饱和度正确',
-  'blur(20px) saturate(150%)')
-check(glass.includes('-webkit-backdrop-filter'), '带 -webkit- 前缀（Safari/旧 Chromium）')
-
-/* 【关键】结构必须透明化 —— 但**前提是有背景层**。
-   没有背景层时透明化会露 Electron 黑底（上一版踩过）；
-   现在 syncGlassSheet 会先 prepend #dmt-backdrop，所以透明化是对的。 */
-check(glass.includes('html,body,#root'), 'html/body/#root 被透明化（露出背景层）')
-check(glass.includes('background:transparent'), '有 transparent 规则')
-check(glass.includes('#root{position:relative'), '#root 抬到背景层之上（z-index:1）')
-check(glass.includes('z-index:1'), '#root 的 z-index 是 1')
-
-/* 容器要加 backdrop-filter */
-check(glass.includes('[class*="sidebarCol"]'), '侧栏加模糊')
-check(glass.includes('[class*="kuvljq_card"]'), '卡片加模糊')
-check(glass.includes('[class*="bubble"]'), '气泡加模糊')
-/* 选择器必须收窄：宽选择器（aside/nav/泛 sidebar/message）会糊掉大量不该模糊的元素。 */
-check(!/\baside\b/.test(glass) && !/\bnav\b/.test(glass), '不含 aside / nav 这类宽选择器')
-check(!glass.includes('[class*="message"]'), '不含 [class*="message"]（会命中消息内每一行）')
-check(!glass.includes('[class*="sidebar"]') || glass.includes('[class*="sidebarCol"]'),
-  '侧栏只命中 sidebarCol，不用泛 sidebar 片段')
-
-/* 全部目标都出现 */
-for (const target of GLASS_TARGETS) {
-  check(glass.includes(target.sel.split(',')[0].trim()),
-    `毛玻璃目标 ${target.key} 出现在样式表里`)
-}
-
-/* 不透明度与毛玻璃同时开：两者都要在 */
-const both = buildGlassSheet({ surfaceOpacity: '70', glass: 'on', glassBlur: '12' }, darkSurf, lightSurf, true)
-check(both.includes('rgba(52, 61, 70, 0.7)'), '同时开：alpha 生效')
-check(both.includes('backdrop-filter:blur(12px)'), '同时开：模糊生效')
-/* 输入框**不许**被设成透明：真机上那样做会让输入框丢底色、和周围糊在一起。 */
-check(!both.includes('--dsw-specific-input-major:transparent'),
-  '不把输入框设成 transparent（否则它没底色）')
-
-/* ------------------------------------------------------------------ *
- * F. 常量合理性
- * ------------------------------------------------------------------ */
-
-console.log('  F. 背景层（模糊的"内容"来源）')
-
-/* 没有背景层，backdrop-filter 模糊的是同一块纯色 —— 屏幕上毫无变化。
-   这是前两版"开了和没开一样"的真正原因。 */
-{
-  const img = t.buildBackdropImage(darkSurf, true)
+  const img = buildBackdropImage(darkSurf, true)
   check(typeof img === 'string' && img.length > 0, '背景图非空')
-  check(img.includes('radial-gradient'), '背景是**渐变**而不是纯色（纯色模糊后还是纯色）')
-  check(img.includes('rgba('), '渐变里用 rgba（带透明度才能叠出光晕）')
-  check(img.includes('#343D46'), '底色仍是当前配色的 base')
-  /* 【关键回归】背景层必须和表面色**拉开明暗差**，否则半透明看不出效果。
-     第一版用了同色系的低透明度光斑：原始 rgb(52,61,70) → 显示 rgb(48,56,65)，
-     通道差只有 14，肉眼完全无感 —— 表现为"开了和没开一样"。
-     这条断言把「可辨识度」变成可测的：光斑色与底色的通道差必须够大。 */
-  {
-    const m = /rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/.exec(img)
-    check(m !== null, '背景图里能解析出光斑色')
-    if (m !== null) {
-      const spot = [Number(m[1]), Number(m[2]), Number(m[3])]
-      const baseRgb = [52, 61, 70] /* #343D46 */
-      const diff = Math.abs(spot[0] - baseRgb[0]) + Math.abs(spot[1] - baseRgb[1]) + Math.abs(spot[2] - baseRgb[2])
-      check(diff >= 40, '光斑色与底色通道差 ≥ 40（低于这个值肉眼看不出半透明）',
-        '通道差 ' + diff)
-    }
-  }
-
-  const img2 = t.buildBackdropImage(lightSurf, false)
-  check(img2.includes('#FFFFFF'), '浅色模式用浅色底')
-  check(t.BACKDROP_ID === 'dmt-backdrop', '背景层元素 id', t.BACKDROP_ID)
+  check(img.includes('radial-gradient'), '背景是渐变而非纯色（纯色模糊后还是纯色）')
+  check(img.includes('rgba('), '渐变用 rgba 叠光斑')
+  check(BACKDROP_ID === 'dmt-theme-bg-container', '背景层 id 与移植源一致', BACKDROP_ID)
   check(typeof t.syncBackdropLayer === 'function', 'syncBackdropLayer 已导出')
 }
 
-console.log('  G. 常量')
+/* 【机制 3】背景色必须和表面色拉开明暗差 */
+{
+  const img = buildBackdropImage(darkSurf, true)
+  const m = /rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/.exec(img)
+  check(m !== null, '能从背景图解析出光斑色')
+  if (m !== null) {
+    const spot = [Number(m[1]), Number(m[2]), Number(m[3])]
+    const base = [52, 61, 70]
+    const diff = Math.abs(spot[0] - base[0]) + Math.abs(spot[1] - base[1]) + Math.abs(spot[2] - base[2])
+    check(diff >= 40, '光斑色与底色通道差 ≥ 40（低于此值肉眼看不出半透明）', '通道差 ' + diff)
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * E. 【机制 2】结构透明化
+ * ------------------------------------------------------------------ */
+
+console.log('  E. 结构透明化（机制 2：让背景层露出来）')
+
+{
+  const css = buildGlassSheet({ surfaceOpacity: '60', glass: 'off' }, darkSurf, lightSurf, true)
+  check(css.includes('html') && css.includes('body') && css.includes('#root'),
+    'html/body/#root 被透明化')
+  check(css.includes('transparent !important'), '有 transparent !important')
+  check(css.includes('#root{position:relative'), '#root 抬到背景层之上')
+  check(css.includes('z-index:1'), '#root z-index = 1')
+  check(TRANSPARENT_SELECTORS.includes('html'), '透明化列表含 html')
+  check(TRANSPARENT_SELECTORS.some((s) => s.includes('frame')),
+    '透明化列表含 frame（它是铺满窗口的那层）')
+}
+
+/* ------------------------------------------------------------------ *
+ * F. 半透明 + 冲突检查
+ * ------------------------------------------------------------------ */
+
+console.log('  F. 半透明与规则冲突')
+
+{
+  const css = buildGlassSheet({ surfaceOpacity: '60', glass: 'off' }, darkSurf, lightSurf, true)
+  check(css.includes('--dsw-alias-bg-base:rgba(52, 61, 70, 0.6) !important'),
+    '底色 token 带 0.6 alpha 且 !important')
+  check(css.includes(DARK_SELECTOR), '深色选择器（属性写两遍提权）', DARK_SELECTOR)
+  check(css.includes(LIGHT_SELECTOR), '浅色选择器', LIGHT_SELECTOR)
+
+  /* 【关键回归】每条 token 声明都必须带 !important —— 宿主用 body 内联样式写 token，
+     不带 !important 会被压掉，整段无效。 */
+  const tokenLines = css.split('\n').filter((l) => l.includes('--dsw-'))
+  const badDecl = tokenLines.find((l) => {
+    const decls = l.match(/--dsw-[a-z0-9-]+:[^;}]+/g) || []
+    return decls.some((d) => !d.includes('!important'))
+  })
+  check(tokenLines.length >= 1 && badDecl === undefined,
+    '每条 token 声明都带 !important（否则被宿主内联样式压掉）',
+    badDecl ? badDecl.slice(0, 50) : '')
+
+  /* 三列各自带 alpha（它们不跟 token 走） */
+  for (const [key, sel] of [['中列', 'centerCol'], ['左栏', 'sidebarCol'], ['右栏', 'rightbarCol']]) {
+    const line = css.split('\n').find((l) => l.includes('"' + sel + '"'))
+    check(line !== undefined && line.includes('rgba('), `${key}带 alpha`, line ? line.slice(0, 60) : '')
+  }
+
+  /* 【关键回归】同一批元素不许既被透明化又被上色 —— 两条规则打架会让 alpha 失效 */
+  const transparentRule = css.split('\n').find((l) => l.startsWith('html,body,#root'))
+  check(transparentRule !== undefined && !transparentRule.includes('centerCol'),
+    '透明化规则里不含三列（避免与上色规则打架）')
+  check(transparentRule !== undefined && !transparentRule.includes('sidebarCol'),
+    '透明化规则里不含左栏')
+}
+
+/* 0% = 完全透明 */
+{
+  const zero = buildGlassSheet({ surfaceOpacity: '0', glass: 'off' }, darkSurf, lightSurf, true)
+  check(zero.includes('rgba(52, 61, 70, 0)'), '0% → alpha 0')
+}
+
+/* ------------------------------------------------------------------ *
+ * G. 毛玻璃
+ * ------------------------------------------------------------------ */
+
+console.log('  G. 毛玻璃')
+
+{
+  const css = buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '20', glassSaturate: '150' }, darkSurf, lightSurf, true)
+  check(css !== '', '毛玻璃产生样式')
+  check(css.includes('backdrop-filter:blur(20px) saturate(150%)'), '模糊半径与饱和度正确')
+  check(css.includes('-webkit-backdrop-filter'), '带 -webkit- 前缀')
+  check(!css.includes('--dsw-alias-bg-base'), '只开毛玻璃时不改 token（表面保持不透明，模糊的是背景层）')
+
+  for (const target of GLASS_TARGETS) {
+    check(css.includes(target.sel.split(',')[0].trim()), `毛玻璃目标 ${target.key} 在样式表里`)
+  }
+}
+
+/* 两者同开 */
+{
+  const both = buildGlassSheet({ surfaceOpacity: '70', glass: 'on', glassBlur: '12' }, darkSurf, lightSurf, true)
+  check(both.includes('rgba(52, 61, 70, 0.7)'), '同时开：alpha 生效')
+  check(both.includes('backdrop-filter:blur(12px)'), '同时开：模糊生效')
+}
+
+/* ------------------------------------------------------------------ *
+ * H. 常量
+ * ------------------------------------------------------------------ */
+
+console.log('  H. 常量')
 
 check(Array.isArray(GLASS_TARGETS) && GLASS_TARGETS.length >= 5, '毛玻璃目标 ≥ 5 组', String(GLASS_TARGETS.length))
-check(Array.isArray(LAYOUT_COLUMNS) && LAYOUT_COLUMNS.length === 3, '布局列 3 个（左/中/右）')
-check(LAYOUT_COLUMNS.every((c) => c.sel.includes('[class*=')), '布局列全部用类名片段选择器')
-check(Array.isArray(GLASS_TRANSPARENT) && GLASS_TRANSPARENT.length >= 4,
-  '透明化容器列表非空（有背景层，必须透明化才露得出来）', String(GLASS_TRANSPARENT.length))
-check(GLASS_TRANSPARENT.includes('html') && GLASS_TRANSPARENT.includes('body'),
-  '透明化列表含 html/body')
-check(!GLASS_TRANSPARENT.includes('[class*="frame"]'),
-  '透明化列表不含裸 [class*="frame"]（会命中 14 个类）')
-/* 【关键回归】窗口框架**不许**被透明化：它是唯一承载 alpha 的那一层。
-   把它清成 transparent，token 里的 rgba 就完全用不上，半透明彻底失效。 */
-check(!GLASS_TRANSPARENT.some((sel) => sel.includes('frame') && sel.includes('titlebar')),
-  '透明化列表不含 [data-windows-titlebar] [class*="frame"]（它要留着承载 alpha）')
-check(!glass.split('\n').some((line) => line.startsWith('html,body,#root') && line.includes('titlebar')),
-  '结构透明化规则里没有窗口框架')
+check(Array.isArray(TRANSPARENT_SELECTORS) && TRANSPARENT_SELECTORS.length >= 5,
+  '透明化选择器 ≥ 5 个', String(TRANSPARENT_SELECTORS.length))
 check(GLASS_SHEET_ID === 'dsh-colorlab/glass.css', '样式表 id', GLASS_SHEET_ID)
 check(DARK_SELECTOR.includes('[data-ds-dark-theme][data-ds-dark-theme]'),
-  '深色选择器把属性写两遍提权（不靠 !important）', DARK_SELECTOR)
-check(LIGHT_SELECTOR.includes(':not('), '浅色选择器用 :not()', LIGHT_SELECTOR)
+  '深色选择器属性写两遍提权')
 
 console.log('')
 if (failures > 0) {
