@@ -192,6 +192,8 @@ window.__ModuleLoader__.load({
       glassFog: '16',
       /* 模糊半径 0–40 px。 */
       glassBlur: '16',
+      /* 自选壁纸路径；空串 = 跟随系统桌面壁纸。 */
+      glassWallpaperPath: '',
     })
 
     /* ====================================================================== *
@@ -1070,12 +1072,21 @@ window.__ModuleLoader__.load({
      *
      * 失败（404 / 网络错误 / Host 没有 webServer）时静默退回渐变。
      */
-    function loadWallpaper() {
+    /** 上一次加载用的壁纸来源签名（路径 + 来源模式）。变了就要重新拉。 */
+    let wallpaperSignature = null
+
+    function loadWallpaper(signature) {
       if (typeof fetch !== 'function' || typeof URL === 'undefined') {
         wallpaperStatus = 'fallback'
         return
       }
-      if (wallpaperStatus === 'loading' || wallpaperStatus === 'ready') return
+      /* 🔧 不能只判断 loading/ready：用户在设置里换了自选壁纸路径后，
+       * 状态仍是 ready，会一直显示旧图。所以按「来源签名」判断 ——
+       * 签名变了就重新拉，同一签名才短路。 */
+      const sig = signature === undefined ? '' : String(signature)
+      if (wallpaperStatus === 'loading') return
+      if (wallpaperStatus === 'ready' && wallpaperSignature === sig) return
+      wallpaperSignature = sig
       wallpaperStatus = 'loading'
       try {
         fetch(WALLPAPER_ROUTE, { cache: 'no-store' })
@@ -1099,6 +1110,7 @@ window.__ModuleLoader__.load({
           })
           .catch(() => {
             wallpaperStatus = 'fallback'
+            wallpaperSignature = null
             diag.glass = 'gradient'
             paintWallpaperLayer()
           })
@@ -1278,14 +1290,22 @@ window.__ModuleLoader__.load({
        *    注意这一步不改成半透明 —— 透明才能看到背景层。 */
       out.push('--dsw-alias-bg-base:transparent !important')
 
-      /* ② 侧栏底色令牌：透明。
-       *    ⚠️ 它被 DSH 的隐藏探针消费：preload 读它的计算色再调
-       *    window.setTitleBarOverlay({color})。实测该 API 的颜色**支持 alpha**：
-       *      不透明近黑 → 标题栏和侧栏一起纯黑
-       *      半透明     → 发灰
-       *      transparent → 纯玻璃
-       *    所以这里必须给 transparent，标题栏才会跟窗口一致。 */
-      out.push('--dsw-specific-sidebar-fill:transparent !important')
+      /* ② 侧栏底色令牌 —— 它同时决定标题栏的颜色。
+       *
+       * 链路：preload 读这个令牌的计算色 → IPC → 主进程
+       *   mainWindow.setTitleBarOverlay({ color, symbolColor })
+       *
+       * 主进程侧的校验是一条正则（app.asar lib/main.js）：
+       *   /^(?:#[\da-f]{3,8}|rgba?\([\d.,%\s]+\))$/iu
+       *
+       * 🔧 关键：不能给 transparent。这个字符串通不过上面那条正则，
+       * IPC 会被丢弃，系统保留默认的不透明标题栏 ——
+       * 表现就是「最上面应用/编辑那一栏没被处理」。
+       *
+       * 正解：给带 alpha 的 rgba。它通过校验，alpha 让覆盖层与背后叠在一起，
+       * 标题栏就和侧栏是同一套颜色了。 */
+      const barColor = surf.sidebar || surf.base || (isDark ? '#343D46' : '#FFFFFF')
+      out.push('--dsw-specific-sidebar-fill:' + hexToRgba(barColor, Math.min(1, alpha + 0.1)) + ' !important')
 
       /* ③ 分层表面：给 alpha。这些是卡片/面板/浮层的底。
        *    浮层（layer1-3 / overlay）比底层更浓一点，保证能读字。 */
@@ -1432,10 +1452,35 @@ window.__ModuleLoader__.load({
         lines.push(g + '[class*="_centerCol"],' + g + '[class*="_rightbarCol"]{'
           + 'background:' + hexToRgba(centerColor, alpha) + ' !important}')
       }
+      /* 🔧 清掉中栏左上角的圆角。
+       *
+       * 宿主 CSS（Windows 分支）：
+       *   .BynINW_centerCol { border-radius: var(--dsh-windows-content-radius) 0 0 0;
+       *                       corner-shape: round }
+       * 那是给标题栏让位的设计 —— 圆角处会露出底色。
+       * 玻璃模式下这块露出的底色看起来就是「分割线有个圆角」。 */
+      lines.push(g + '[class*="_centerCol"]{'
+        + 'border-radius:0 !important;corner-shape:round !important}')
+
+      /* 🔧 输入栏座：给它一层自己的不透明底，把正文挡在外面。
+       *
+       * 问题：聊天内容在 scrollBody 里滚动，composerSeat 是它的**兄弟**，
+       * 位置在下方。两者都被清成透明之后，正文就透到输入框区域里了。
+       *
+       * 真正的「硬裁」（文字在输入栏上沿断开）需要把 seat 从滚动容器里
+       * 移出去 —— 那是移动 React 托管的 DOM，冷启动有白屏风险，
+       * 参考实现自己也踩过这个坑。所以这里用更安全的方式：
+       * 给 seat 铺一层够浓的主题色底，让正文透不出来。
+       *
+       * 浓度用 0.82：足够挡住正文，又比实心板略透，不破坏玻璃观感。 */
+      const seatColor = surf.base || (isDark ? '#343D46' : '#FFFFFF')
+      lines.push(g + '[class*="Dc7zOa_composerSeat"],'
+        + g + '[data-composer-seat]{'
+        + 'background:' + hexToRgba(seatColor, 0.82) + ' !important;'
+        + 'background-image:none !important}')
 
       /* ④ 主内容区内部容器：清透明，否则会把三列的 alpha 又盖回实色。
-       *    ⚠️ **不含 composerSeat** —— 它是输入栏座，清透明会让聊天正文
-       *    滚到输入框区域里来（实测就是这样）。 */
+       *    ⚠️ **不含 composerSeat** —— 它在上面单独处理了。 */
       lines.push(g + '[class*="Dc7zOa_root"],'
         + g + '[class*="xz4KEq_root"],' + g + '[class*="xz4KEq_frame"],'
         + g + '[class*="xz4KEq_scroll"]{background:transparent !important;'
@@ -1512,7 +1557,7 @@ window.__ModuleLoader__.load({
       const blurValue = parsePercent(state && state.glassBlur, 0, 40, 16)
       syncWallpaperLayer(on, blurValue)
       if (on && state.glassBackground !== 'gradient') {
-        loadWallpaper()
+        loadWallpaper(String(state.glassWallpaperPath || ''))
       } else if (on) {
         wallpaperStatus = 'fallback'
         diag.glass = 'gradient'
@@ -2854,6 +2899,8 @@ function makeColorizer(scheme) {
 .dmt-slider{width:132px;height:20px;accent-color:var(--dsw-alias-state-business-primary,#5FB3B3);cursor:pointer}
 .dmt-sliderValue{min-width:46px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}
 .dmt-slider[disabled]{opacity:.45;cursor:default}
+.dmt-pathInput{box-sizing:border-box;padding:6px 10px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px}
+.dmt-pathInput::placeholder{color:var(--dsw-alias-label-tertiary)}
 `
 
     /* ====================================================================== *
@@ -4525,6 +4572,27 @@ function makeColorizer(scheme) {
             suffix: 'px',
             disabled: snapshot.glass === 'off',
             onChange: (next) => updateDraft({ glassBlur: String(next) }),
+          }),
+        ),
+
+        /* 自选壁纸路径：留空 = 跟随系统桌面壁纸。
+           用文本输入而不是文件选择器 —— 浏览器沙箱拿不到真实绝对路径
+           （input[type=file] 只给文件名），而 Host 侧需要绝对路径去读文件。 */
+        h(
+          Row,
+          {
+            title: '自选壁纸',
+            hint: '填本机图片的完整路径（如 D:\\pics\\bg.jpg），留空则跟随系统桌面壁纸。支持 jpg / png / webp，上限 12 MB。',
+          },
+          h('input', {
+            type: 'text',
+            className: 'dmt-pathInput',
+            style: { flex: 'none', width: '260px' },
+            placeholder: '跟随系统壁纸',
+            value: snapshot.glassWallpaperPath,
+            'aria-label': '自选壁纸路径',
+            spellcheck: false,
+            onChange: (event) => updateDraft({ glassWallpaperPath: event.target.value }),
           }),
         ),
 
