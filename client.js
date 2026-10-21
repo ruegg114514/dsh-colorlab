@@ -1065,15 +1065,29 @@ function okContrastRatio(hexA, hexB) {
     function buildBackdropImage(surfaces, isDark) {
       const s = surfaces || {}
       const base = s.base || (isDark ? '#343D46' : '#FFFFFF')
-      const layer1 = s.layer1 || base
-      const layer2 = s.layer2 || layer1
-      const sidebar = s.sidebar || layer1
-      /* 三个光斑：左上偏侧栏色、右下偏 layer2、中间偏 layer1。
-         大半径 + 低不透明度，模糊后是柔和的光晕，不会显得花。 */
+      /* ⚠️ **背景层必须和表面色拉开明暗差**，否则半透明看不出效果。
+       *
+       * 第一版这里用了「表面色同色系的低透明度光斑」，实测合成后
+       * 原始 rgb(52,61,70) → 显示 rgb(48,56,65)，通道差只有 14，肉眼无感。
+       * 原因很直接：透出来的东西和原来一样，半透明就等于没做。
+       *
+       * 现在用**明暗差拉大**的光斑：深色模式下往亮处拉（+0.18 亮度）、
+       * 浅色模式下往暗处拉（-0.12 亮度），这样透过半透明表面能明显看到
+       * 光斑的明暗变化 —— 这也是真实毛玻璃的观感来源。 */
+      const shift = (hex, delta) => {
+        const lab = okOklchFromHex(hex)
+        if (lab === null) return hex
+        const next = okHexFromOklch({ L: Math.max(0.02, Math.min(0.98, lab.L + delta)), C: lab.C, h: lab.h })
+        return next === null ? hex : next
+      }
+      /* 深色：往亮拉；浅色：往暗拉。让光斑与底色形成可见对比。 */
+      const d = isDark ? 0.16 : -0.10
+      const bright = shift(base, d)
+      const bright2 = shift(base, d * 1.8)
       const spot = (color, alpha) => hexToRgba(color, alpha)
-      return 'radial-gradient(circle at 18% 12%, ' + spot(sidebar, 0.85) + ' 0%, transparent 55%),'
-        + 'radial-gradient(circle at 82% 78%, ' + spot(layer2, 0.85) + ' 0%, transparent 58%),'
-        + 'radial-gradient(circle at 50% 50%, ' + spot(layer1, 0.6) + ' 0%, transparent 70%),'
+      return 'radial-gradient(circle at 20% 15%, ' + spot(bright2, 0.95) + ' 0%, transparent 48%),'
+        + 'radial-gradient(circle at 78% 72%, ' + spot(bright, 0.9) + ' 0%, transparent 52%),'
+        + 'radial-gradient(circle at 52% 45%, ' + spot(bright, 0.55) + ' 0%, transparent 65%),'
         + base
     }
 
