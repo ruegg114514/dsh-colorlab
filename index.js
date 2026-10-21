@@ -30,7 +30,170 @@
  */
 
 import { createRequire } from 'node:module'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+/* ====================================================================== *
+ * 壁纸路由
+ *
+ * ## 为什么必须有这一步
+ *
+ * 页面里的 `backdrop-filter` 只能模糊「同一张画布里、位于它背后的像素」。
+ * **窗口背后的真实桌面不在 Chromium 的画布里**，所以 CSS 永远采不到它 ——
+ * 无论怎么调 blur，毛玻璃背后都是空的，看起来就是「开了没变化」。
+ *
+ * 解法：把壁纸**作为一张图铺进页面最底层**，它就成了画布内像素，
+ * 上面的玻璃才有东西可糊。这条路线**不需要修改 app.asar，也不需要窗口透明**。
+ *
+ * ## 为什么用 HTTP 路由
+ *
+ * 插件宿主跑在独立的 Node 进程里，和页面渲染进程不共享内存。
+ * 页面拿不到宿主的文件读取能力，只能通过 webServer 注册的路由同源 fetch。
+ * （页面跑在 dsh-app:// 协议下，`file://` 会被安全策略拦掉，走 HTTP 才通。）
+ *
+ * ## 壁纸来源
+ *
+ * 1. `%APPDATA%\Microsoft\Windows\Themes\TranscodedWallpaper`
+ *    —— Windows 固定的当前壁纸缓存，路径不变、换壁纸时内容自动更新。
+ * 2. 注册表 `HKCU\Control Panel\Desktop` 的 `Wallpaper` 值 —— 仅作兜底：
+ *    Wallpaper Engine 之类的工具会把它指向过期/不存在的文件。
+ * ====================================================================== */
+
+/** 壁纸路由。页面用同源 fetch 取。 */
+const WALLPAPER_ROUTE = '/dsh-colorlab/wallpaper'
+
+/** 壁纸大小上限：正常约 1MB，超过 12MB 视为异常，不塞进页面。 */
+const WALLPAPER_MAX_BYTES = 12 * 1024 * 1024
+
+/**
+ * 按优先级列出壁纸候选路径。
+ * @returns {string[]} 可能存在的壁纸文件路径。
+ */
+function wallpaperCandidates() {
+  const out = []
+  const appData = process.env.APPDATA
+  if (appData) {
+    out.push(join(appData, 'Microsoft', 'Windows', 'Themes', 'TranscodedWallpaper'))
+  }
+  try {
+    const text = execFileSync('reg', ['query', 'HKCU\\Control Panel\\Desktop', '/v', 'Wallpaper'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 3000,
+    })
+    const match = /Wallpaper\s+REG_SZ\s+(.+)/.exec(text)
+    if (match !== null) out.push(match[1].trim())
+  } catch {
+    /* 读不到注册表就只用 TranscodedWallpaper */
+  }
+  return out
+}
+
+/**
+ * 按魔数嗅探图片 MIME。
+ * @param {Buffer} bytes - 文件字节。
+ * @returns {string} MIME；无法识别时返回 'application/octet-stream'。
+ */
+function detectImageMime(bytes) {
+  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg'
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50) return 'image/png'
+  if (bytes.length > 12 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42) return 'image/webp'
+  return 'application/octet-stream'
+}
+
+/** 缓存：壁纸约 1MB，没必要每个请求都重读盘；按 mtime 失效。 */
+let wallpaperCache = { mtime: 0, bytes: null, mime: 'image/jpeg' }
+
+/**
+ * 读取当前壁纸（带缓存）。
+ * @returns {{bytes: Buffer, mime: string}|null} 读不到时返回 null。
+ */
+function readWallpaper() {
+  for (const path of wallpaperCandidates()) {
+    try {
+      if (!existsSync(path)) continue
+      const stats = statSync(path)
+      if (!stats.isFile() || stats.size === 0 || stats.size > WALLPAPER_MAX_BYTES) continue
+
+      if (wallpaperCache.bytes !== null && wallpaperCache.mtime === stats.mtimeMs) {
+        return wallpaperCache
+      }
+
+      const bytes = readFileSync(path)
+      const mime = detectImageMime(bytes)
+      if (mime === 'application/octet-stream') continue
+
+      wallpaperCache = { mtime: stats.mtimeMs, bytes, mime }
+      return wallpaperCache
+    } catch {
+      /* 换下一个候选 */
+    }
+  }
+  return null
+}
+
+/**
+ * 注册壁纸路由。
+ *
+ * 没有 webServer（TUI / headless profile）时静默跳过 —— 页面侧会自动
+ * 退回「渐变」背景，不会黑屏，也不影响主题本身。
+ *
+ * @param {object} ctx - Host plugin context.
+ */
+function registerWallpaperRoute(ctx) {
+  try {
+    ctx.inject(['webServer'], (hostCtx) => {
+      const dispose = hostCtx.webServer.register({
+        kind: 'exact',
+        path: WALLPAPER_ROUTE,
+        handler: (request, response) => {
+          if (request.method !== 'GET' && request.method !== 'HEAD') {
+            response.writeHead(405, { allow: 'GET, HEAD' })
+            response.end()
+            return
+          }
+          const found = readWallpaper()
+          if (found === null) {
+            response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+            response.end('wallpaper not found')
+            return
+          }
+          response.writeHead(200, {
+            'content-type': found.mime,
+            'content-length': String(found.bytes.length),
+            /* 用户随时可能换壁纸，不让浏览器长缓存。 */
+            'cache-control': 'no-cache',
+          })
+          if (request.method === 'HEAD') {
+            response.end()
+            return
+          }
+          response.end(found.bytes)
+        },
+      })
+      /* 插件卸载时注销路由，避免重复注册。 */
+      if (typeof ctx.on === 'function') {
+        ctx.on('dispose', () => {
+          try {
+            if (typeof dispose === 'function') dispose()
+          } catch {
+            /* 已注销 */
+          }
+        })
+      }
+    })
+  } catch (error) {
+    /* 拿不到 webServer 就降级：页面用渐变兜底，不影响主题。 */
+    try {
+      console.warn('[dsh-colorlab] 壁纸路由未注册：', error?.message ?? error)
+    } catch {
+      /* console 不可用 */
+    }
+  }
+}
+
 
 /**
  * profile 里的行 id；DSH 的 configForms 就是按它取表单。
@@ -73,6 +236,16 @@ const FIELD_DEFAULTS = {
   cardColor: '',
   /* 要高亮哪些过程行：JSON 数组，值是 ROW_VARIANTS 里的 variant。 */
   rowVariants: '["write","edit","bash","summary","turn"]',
+  /* "on" | "off" —— 玻璃界面总开关：面板/浮层/输入框变半透明，透出背后的背景层。 */
+  glass: 'on',
+  /* "wallpaper"（读 Windows 当前桌面壁纸）| "gradient"（用当前配色生成的柔和光斑）。 */
+  glassBackground: 'wallpaper',
+  /* 三列底色浓度百分比 0–30。0 = 完全通透，越大越接近实心面板。 */
+  glassTint: '10',
+  /* 浮层（菜单/提示/输入框/气泡）雾面浓度百分比 0–40。 */
+  glassFog: '16',
+  /* 玻璃背后的模糊半径 0–40 px。 */
+  glassBlur: '16',
 }
 
 /** 首屏画布色（standard 变体的 base）。客户端随后会用真实设置覆盖。 */
@@ -199,6 +372,11 @@ function buildConfig() {
     summaryColor: str(FIELD_DEFAULTS.summaryColor),
     cardColor: str(FIELD_DEFAULTS.cardColor),
     rowVariants: str(FIELD_DEFAULTS.rowVariants),
+    glass: str(FIELD_DEFAULTS.glass),
+    glassBackground: str(FIELD_DEFAULTS.glassBackground),
+    glassTint: str(FIELD_DEFAULTS.glassTint),
+    glassFog: str(FIELD_DEFAULTS.glassFog),
+    glassBlur: str(FIELD_DEFAULTS.glassBlur),
   })
 }
 
@@ -277,4 +455,7 @@ export function apply(ctx, config) {
     if (readField(config, 'enabled') === 'off') return
     table.push({ kind: 'style', text: bootStyle() })
   })
+
+  /* 壁纸路由：给「玻璃界面」提供被模糊的那张底图。 */
+  registerWallpaperRoute(ctx)
 }
