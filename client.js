@@ -999,8 +999,11 @@ function okContrastRatio(hexA, hexB) {
 
     /** 需要透明化才能露出背景层的结构（有背景层之后，这些是**必须**的）。 */
     const GLASS_TRANSPARENT = Object.freeze([
+      /* ⚠️ **窗口框架不在此列。** 它是唯一承载 alpha 的那一层 ——
+         把它的 background 清成 transparent，token 里的 rgba 就完全用不上，
+         半透明彻底失效（这正是"一点变化都没有"的直接原因）。
+         这里只清掉那些**压在 frame 之上、又不该有自己底色**的中间容器。 */
       'html', 'body', '#root',
-      '[data-windows-titlebar] [class*="frame"]',
       '[class*="scrollBody"]', '[class*="_scrollBody_"]',
       '[class*="viewArea"]', '[class*="Dc7zOa_root"]',
     ])
@@ -1209,19 +1212,19 @@ function okContrastRatio(hexA, hexB) {
         if (dDecls.length > 0) lines.push(DARK_SELECTOR + '{' + dDecls.join(';') + '}')
         if (lDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lDecls.join(';') + '}')
 
-        /* 布局列也要半透明（它们直接铺在自己的列上，不跟 token 走）。 */
+        /* ⚠️ **布局列必须完全透明，不能再叠 alpha。**
+         *
+         * 宿主背景是嵌套的：frame 铺满窗口，三列叠在它上面，每层都用同一个
+         * 不透明色。token 改成 rgba 后 frame **自动**半透明；这里若再给每列
+         * 设 rgba，alpha 会叠加（0.6 叠两层 = 0.84、三层 = 0.94），
+         * 屏幕上等于完全不透明 —— 这就是"改了也没变化"的原因。
+         *
+         * 列透明之后，frame 那一层唯一的 alpha 直接透到背景层。 */
         for (const col of LAYOUT_COLUMNS) {
-          const dColor = col.key === 'center' ? dark.base : dark.sidebar
-          const lColor = col.key === 'center' ? light.base : light.sidebar
-          const a = col.key === 'center' ? alpha : aSidebar
-          if (dColor) {
-            lines.push(DARK_SELECTOR + ' ' + col.sel
-              + '{background-color:' + hexToRgba(dColor, a) + ' !important}')
-          }
-          if (lColor) {
-            lines.push(LIGHT_SELECTOR + ' ' + col.sel
-              + '{background-color:' + hexToRgba(lColor, a) + ' !important}')
-          }
+          lines.push(DARK_SELECTOR + ' ' + col.sel
+            + '{background:transparent !important;background-color:transparent !important}')
+          lines.push(LIGHT_SELECTOR + ' ' + col.sel
+            + '{background:transparent !important;background-color:transparent !important}')
         }
       }
 
