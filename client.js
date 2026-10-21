@@ -186,8 +186,8 @@ window.__ModuleLoader__.load({
       glass: 'on',
       /* "wallpaper" | "gradient" —— 玻璃背后的背景来源。 */
       glassBackground: 'wallpaper',
-      /* 三列底色浓度 0–30。 */
-      glassTint: '10',
+      /* 三列底色浓度 0–100。 */
+      glassTint: '65',
       /* 浮层雾面浓度 0–40。 */
       glassFog: '16',
       /* 模糊半径 0–40 px。 */
@@ -1148,7 +1148,11 @@ window.__ModuleLoader__.load({
      *
      * @param {boolean} needed - 是否需要背景层。
      */
-    function syncWallpaperLayer(needed) {
+    /** 当前生效的模糊半径（由 syncGlassSheet 写入）。 */
+    let wallpaperBlur = 16
+
+    function syncWallpaperLayer(needed, blur) {
+      if (typeof blur === 'number') wallpaperBlur = blur
       if (typeof document === 'undefined') return
       if (typeof document.getElementById !== 'function') return
       const existing = document.getElementById(WALLPAPER_LAYER_ID)
@@ -1168,6 +1172,15 @@ window.__ModuleLoader__.load({
         el.id = WALLPAPER_LAYER_ID
         el.setAttribute('aria-hidden', 'true')
         /* fixed 铺满、z-index 0（在内容之下）、pointer-events none（不挡点击）。 */
+        /* ⚠️ **模糊在这里做，且只做这一次。**
+         *
+         * 上一版把 backdrop-filter 加在三列上，结果是「只有中栏糊、侧栏右栏是实的」——
+         * 因为列内部还有自己的不透明背景层，外层糊了里层照样实色。
+         *
+         * 把 filter 放在壁纸层自己身上，模糊的是「那张底图」本身：
+         * 糊好的底图透到上层，不管上面盖多少层、什么颜色，观感都统一。
+         *
+         * scale 略放大，抵消 blur 在边缘产生的透明晕边（否则四边会露黑）。 */
         el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
           + 'width:100vw;height:100vh;pointer-events:none;z-index:0;overflow:hidden;'
           + 'transition:background .25s ease'
@@ -1182,7 +1195,34 @@ window.__ModuleLoader__.load({
       } else {
         wallpaperEl = existing
       }
+      applyWallpaperFilter()
       paintWallpaperLayer()
+    }
+
+    /**
+     * 把模糊写到壁纸层上。
+     *
+     * ⚠️ **这是整个玻璃效果的关键**：模糊必须作用在「底图」本身，
+     * 而不是上层面板的 backdrop-filter。
+     *
+     * 原因（上一版实测）：给三列加 backdrop-filter 后，只有中栏糊了，
+     * 侧栏和右栏仍是实色 —— 因为那两列内部还有自己的不透明背景层，
+     * 外层糊了、里层照样铺实色。页面里到底有多少层背景数不完，
+     * 逐个枚举注定漏。
+     *
+     * 换成「底图自己先糊」之后，透上去的永远是同一张糊好的图，
+     * 上面叠多少层都不影响「背后是糊的」这件事。
+     *
+     * scale 略放大抵消 blur 在边缘产生的透明晕边（否则窗口四边会露黑）。
+     */
+    function applyWallpaperFilter() {
+      if (wallpaperEl === null) return
+      const blur = Math.max(0, Math.min(40, wallpaperBlur))
+      const value = blur > 0 ? 'blur(' + blur + 'px)' : 'none'
+      if (wallpaperEl.__dmtFilter === value) return
+      wallpaperEl.__dmtFilter = value
+      wallpaperEl.style.filter = value
+      wallpaperEl.style.transform = blur > 0 ? 'scale(1.08)' : 'none'
     }
 
     /**
@@ -1199,56 +1239,79 @@ window.__ModuleLoader__.load({
       const s = state || {}
       if (s.glass !== 'on') return ''
       const surf = surfaces || {}
-      const tint = parsePercent(s.glassTint, 0, 30, 10) / 100
-      const fog = parsePercent(s.glassFog, 0, 40, 16) / 100
+      const alpha = parsePercent(s.glassTint, 0, 100, 65) / 100
       const blur = parsePercent(s.glassBlur, 0, 40, 16)
       const g = 'html[' + GLASS_ATTR + '] '
-      const lines = ['/* dsh-colorlab —— 玻璃界面（壁纸层 + 单层 alpha） */']
+      const lines = ['/* dsh-colorlab —— 玻璃界面 */']
 
-      /* ① 容器层全部清成透明，让背景层透上来。
-       * ⚠️ `html` 是属性所在的元素本身，**不能**加 `html[...] ` 前缀 ——
-       * 那会变成「html 的后代」，永远匹配不到。 */
-      lines.push('html[' + GLASS_ATTR + '],'
-        + g + 'body,'
-        + g + '#root{background:transparent !important;background-image:none !important}')
-      /* ② #root 必须抬到背景层之上，否则内容被背景盖住。 */
-      lines.push(g + '#root{position:relative !important;z-index:1 !important}')
-      /* ③ 窗口框架与标题栏拖动区：它们被涂了侧栏色，不清掉就会「上面一条实心、下面透」。 */
-      lines.push(g + '[class*="_frame"]:has(> [class*="_sidebarCol"], > [class*="_centerCol"]){'
-        + 'background:transparent !important;background-image:none !important}')
-      lines.push(g + '[class*="_frame"]:has(> [class*="_sidebarCol"], > [class*="_centerCol"])::before{'
-        + 'background:transparent !important;background-image:none !important}')
-      /* ④ 主面板内部容器：只清背景，不动布局（它们负责 composerSeat 的定位与渐变）。 */
-      lines.push(g + '[class*="Dc7zOa_root"],' + g + '[class*="Dc7zOa_composerSeat"],'
-        + g + '[class*="xz4KEq_root"],' + g + '[class*="xz4KEq_frame"],'
-        + g + '[class*="xz4KEq_scroll"]{background:transparent !important;background-image:none !important}')
-
-      /* ⑤ **核心：只在三列各铺一次低 alpha。**
+      /* ══ 为什么模糊不放在面板上 ══════════════════════════════════════
        *
-       * 这是唯一铺色的地方。颜色从当前表面色派生（不写死），
-       * 所以「背景变体」与自定义配色依然生效。
+       * 上一版给三列各加 backdrop-filter，结果是「只有中栏糊了，侧栏和右栏
+       * 还是实的」。原因：侧栏/右栏内部还有自己的不透明背景层，
+       * 外层糊了、里层照样实色。
+       *
+       * 一个页面有多少层背景根本数不完，逐个加注定漏。
+       * 所以模糊**只做一次，做在背景层自己身上** —— 背景层被 filter 糊过
+       * 之后，就成了「已经模糊的底图」，无论上面叠多少层、什么颜色，
+       * 透出来的都是同一张糊好的底。这是结构上的解法，不靠枚举选择器。
        */
-      const colAlpha = tint
+
+      /* ① 容器清透明，让模糊后的背景透上来。 */
+      lines.push('html[' + GLASS_ATTR + '],'
+        + g + 'body{background:transparent !important;background-image:none !important}')
+      lines.push(g + '#root{position:relative !important;z-index:1 !important;'
+        + 'background:transparent !important}')
+
+      /* ② 窗口框架与标题栏拖动区：被涂了侧栏色，不清掉会「上面一条实心」。 */
+      lines.push(g + '[class*="_frame"]{background:transparent !important;'
+        + 'background-image:none !important}')
+      lines.push(g + '[class*="_frame"]::before{background:transparent !important;'
+        + 'background-image:none !important}')
+
+      /* ③ 三列：**带 alpha 的主题色**，这是 Mariana 保住的地方。
+       *
+       * 这不是「透明」，而是「主题色半透明」——
+       * 不同于上一版给 10%（等于把主题色丢掉），
+       * 这里默认 65%，深色 Mariana 仍是主调，壁纸只透出明暗与色相变化。
+       *
+       * ⚠️ 三列**不加** backdrop-filter：模糊已由背景层完成，
+       * 这里再加一次只会重复计算，还会引入包含块副作用。 */
       const sidebarColor = surf.sidebar || surf.layer1 || surf.base
       const centerColor = surf.base || surf.layer1
-      const glassFilter = blur > 0
-        ? 'backdrop-filter:blur(' + blur + 'px) !important;-webkit-backdrop-filter:blur(' + blur + 'px) !important;'
-        : 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;'
       if (sidebarColor) {
         lines.push(g + '[class*="_sidebarCol"]{'
-          + 'background:' + hexToRgba(sidebarColor, colAlpha) + ' !important;'
-          + 'border-right:.5px solid ' + hexToRgba(isDark ? '#FFFFFF' : '#0F1115', 0.07) + ' !important;'
-          + glassFilter
-          + '}')
+          + 'background:' + hexToRgba(sidebarColor, alpha) + ' !important;'
+          + 'border-right:.5px solid ' + hexToRgba(isDark ? '#FFFFFF' : '#0F1115', 0.06) + ' !important}')
       }
       if (centerColor) {
         lines.push(g + '[class*="_centerCol"],' + g + '[class*="_rightbarCol"]{'
-          + 'background:' + hexToRgba(centerColor, colAlpha) + ' !important;'
-          + glassFilter
-          + '}')
+          + 'background:' + hexToRgba(centerColor, alpha) + ' !important}')
       }
 
-      void fog
+      /* ④ 主内容区内部容器：清透明，否则会把三列的 alpha 又盖回实色。
+       *    ⚠️ **不含 composerSeat** —— 它是输入栏座，清透明会让聊天正文
+       *    滚到输入框区域里来（实测就是这样）。 */
+      lines.push(g + '[class*="Dc7zOa_root"],'
+        + g + '[class*="xz4KEq_root"],' + g + '[class*="xz4KEq_frame"],'
+        + g + '[class*="xz4KEq_scroll"]{background:transparent !important;'
+        + 'background-image:none !important}')
+
+      /* ⑤ 压暗层：盖在背景层之上、内容之下，把亮壁纸压回可读范围。
+       *
+       * 这是「文字看不清」的根因所在：深色主题的文字是浅灰白，
+       * 压在亮粉色壁纸上对比度会崩。压暗层让背景无论壁纸多亮，
+       * 都落在一个固定的暗度上，文字对比度就稳定了。
+       *
+       * 放在 #root 的 ::before 上（fixed、z-index 0），
+       * 与背景层（z-index 0，在 #root 之外）不冲突：它盖在背景之上，
+       * 又在内容（#root z-index 1）之下。 */
+      const veilColor = surf.base || (isDark ? '#343D46' : '#FFFFFF')
+      const veilAlpha = isDark ? 0.55 : 0.45
+      lines.push(g + '#root::before{content:"" !important;position:fixed !important;'
+        + 'inset:0 !important;background:' + hexToRgba(veilColor, veilAlpha) + ' !important;'
+        + 'pointer-events:none !important;z-index:0 !important}')
+
+      void blur
       return lines.join('\n')
     }
 
@@ -1278,7 +1341,8 @@ window.__ModuleLoader__.load({
        * 反过来的话，一旦建层失败（DOM 异常），总闸已经打开、
        * 容器全透明却没有背景 → 露出 Electron 窗口黑底，就是「主面板纯黑」。
        * 先建层能保证「开了就一定有东西可看」。 */
-      syncWallpaperLayer(on)
+      const blurValue = parsePercent(state && state.glassBlur, 0, 40, 16)
+      syncWallpaperLayer(on, blurValue)
       if (on && state.glassBackground !== 'gradient') {
         loadWallpaper()
       } else if (on) {
@@ -4247,13 +4311,13 @@ function makeColorizer(scheme) {
           Row,
           {
             title: '表面浓度',
-            hint: '三列的底色浓度。0% 完全通透，越大越接近实心面板。',
+            hint: '三列的底色浓度。100% = 原生 Mariana；越低壁纸越明显，但主题色会被冲淡。建议 60–85。',
           },
           h(Slider, {
             label: '表面浓度',
             min: 0,
-            max: 30,
-            value: parsePercent(snapshot.glassTint, 0, 30, 10),
+            max: 100,
+            value: parsePercent(snapshot.glassTint, 0, 100, 65),
             suffix: '%',
             disabled: snapshot.glass === 'off',
             onChange: (next) => updateDraft({ glassTint: String(next) }),
