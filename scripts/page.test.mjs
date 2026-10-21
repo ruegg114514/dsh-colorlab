@@ -216,7 +216,7 @@ function main() {
   check((byClass.get('dmt-colorInput') || 0) === 3, '颜色选择器 3 个（工具行 + 汇总行 + 卡片头部）', String(byClass.get('dmt-colorInput') || 0))
   check((byClass.get('dmt-checkGroup') || 0) === 2, '过程行分类分 2 组', String(byClass.get('dmt-checkGroup') || 0))
   check((byClass.get('dmt-checkGrid') || 0) === 2, '过程行分类网格 2 个', String(byClass.get('dmt-checkGrid') || 0))
-  /* 11 个分类复选框（summary/turn + 8 个工具行 + 毛玻璃开关） */
+  /* 10 个分类复选框（summary/turn + 8 个工具行） */
   check((byClass.get('dmt-check') || 0) === 10, '过程行分类 10 个', String(byClass.get('dmt-check') || 0))
   check((byClass.get('dmt-rowPreview') || 0) === 1, '过程行预览容器存在')
   /* 默认勾 5 项 = 3 工具行 + 2 汇总类，各按自己的宿主结构渲染 */
@@ -595,7 +595,7 @@ function main() {
       const checkboxes = nodes3.filter(
         (node) => node.type === 'input' && node.props.type === 'checkbox',
       )
-      check(checkboxes.length === 11, '写盘场景：11 个分类复选框', String(checkboxes.length))
+      check(checkboxes.length === 10, '写盘场景：10 个分类复选框', String(checkboxes.length))
       if (checkboxes.length === 10) {
         const before = writes.length
         checkboxes[5].props.onChange({})
