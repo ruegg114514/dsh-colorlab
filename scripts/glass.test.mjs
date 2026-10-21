@@ -209,6 +209,94 @@ console.log('  G. 压暗层')
 }
 
 /* ------------------------------------------------------------------ *
+ * G2. 整窗覆盖：所有表面令牌都要半透明
+ *
+ * 只改三列时，卡片/代码块/思考块/输入框/菜单仍是实心板，
+ * 视觉上「只有中栏是玻璃」。要让整个窗口透着玻璃感，
+ * 必须把这些表面令牌一起换成半透明。
+ *
+ * 判定标准不是「有没有声明」，而是**浓度是否落在可透区间**：
+ *   too low（< 0.3）→ 几乎全透，字读不清
+ *   too high（> 0.95）→ 实心板，玻璃感消失
+ * ------------------------------------------------------------------ */
+
+console.log('  G2. 整窗覆盖（所有表面令牌）')
+
+{
+  const tokenLine = lines.find((l) => l.includes('--dsw-alias-bg-layer-1'))
+  const decls = tokenLine === undefined ? [] : (tokenLine.match(/--[a-z0-9-]+:[^;}]+/g) || [])
+  const getAlpha = (name) => {
+    const d = decls.find((x) => x.startsWith(name + ':'))
+    if (d === undefined) return null
+    const m = /rgba\([^)]*?,\s*([\d.]+)\)/.exec(d)
+    return m === null ? null : Number(m[1])
+  }
+
+  /* 必须覆盖的表面令牌 */
+  const REQUIRED = [
+    ['--dsw-alias-bg-layer-1', '面板层1'],
+    ['--dsw-alias-bg-layer-2', '面板层2'],
+    ['--dsw-alias-bg-layer-3', '面板层3'],
+    ['--dsw-alias-bg-overlay', '浮层'],
+    ['--dsw-specific-bubble', '气泡'],
+    ['--dsw-specific-menu', '菜单'],
+    ['--dsw-specific-tip', '提示'],
+    ['--dsw-specific-input-major', '输入框'],
+    ['--dsw-alias-markdown-code-block', '代码块'],
+    ['--changes-fill', '变更卡片'],
+    ['--deliverable-fill', '交付卡片'],
+    ['--plan-card-fill', '计划卡片'],
+    ['--card-fill', '排程卡片'],
+  ]
+  for (const [name, label] of REQUIRED) {
+    check(decls.some((d) => d.startsWith(name + ':')), '覆盖 ' + label, name)
+  }
+
+  /* 浓度必须在可透区间 */
+  const alphas = REQUIRED.map(([name, label]) => ({ label, a: getAlpha(name) }))
+    .filter((x) => x.a !== null)
+  check(alphas.every((x) => x.a >= 0.3), '所有表面浓度 ≥ 30%（否则字读不清）',
+    alphas.filter((x) => x.a < 0.3).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
+  check(alphas.every((x) => x.a <= 0.95), '所有表面浓度 ≤ 95%（否则成实心板，没有玻璃感）',
+    alphas.filter((x) => x.a > 0.95).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
+
+  /* 浮层应比底板略浓，但不能浓太多 */
+  const layer1 = getAlpha('--dsw-alias-bg-layer-1')
+  const input = getAlpha('--dsw-specific-input-major')
+  if (layer1 !== null && input !== null) {
+    check(input >= layer1, '浮层浓度 ≥ 底板（浮层需要略实，否则读不清）',
+      '底板 ' + layer1 + ' / 输入框 ' + input)
+    check(input - layer1 <= 0.2, '浮层不比底板浓超过 20 个百分点（否则玻璃感消失）',
+      '差 ' + (input - layer1).toFixed(2))
+  }
+
+  /* 代码块必须最实（长段代码要读） */
+  const codeBlock = getAlpha('--dsw-alias-markdown-code-block')
+  if (codeBlock !== null) {
+    check(codeBlock >= 0.6, '代码块浓度 ≥ 60%（保证长段可读）', String(codeBlock))
+  }
+
+  /* 侧栏令牌必须 transparent（它同时决定标题栏颜色） */
+  check(decls.some((d) => d === '--dsw-specific-sidebar-fill:transparent !important'),
+    '侧栏令牌 = transparent（同时决定标题栏）')
+  check(decls.some((d) => d === '--dsw-alias-bg-base:transparent !important'),
+    '整页底令牌 = transparent（让背景层透上来）')
+}
+
+/* 深色模式文字必须提亮 */
+{
+  const textLine = lines.find((l) => l.includes('--dsw-alias-label-primary'))
+  check(textLine !== undefined, '有文字提亮规则')
+  if (textLine !== undefined) {
+    check(textLine.includes('--dsw-alias-label-primary:rgb(255, 255, 255)'),
+      'label-primary 提亮到纯白')
+    check(textLine.includes('--dsw-alias-label-tertiary'), 'label-tertiary 也提亮')
+    check(textLine.includes('--dsw-static-neutral-bluish-400'),
+      '底层静态色 bluish-400 一并提亮（引用者多，只改 label 会漏）')
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * H. 设置项
  * ------------------------------------------------------------------ */
 
