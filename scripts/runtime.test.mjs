@@ -717,6 +717,69 @@ function main() {
     )
   }
 
+  /* ---- 场景：主题应用抛错时，设置页注册不能被拖死 ----
+   *
+   * 曾经的写法是 apply() 第一行裸调 `applyNow()`，而 `applyNow` 只有
+   * try/finally、**没有 catch** —— 它一抛错异常就穿出 apply，
+   * 后面的 `registerSectionWhenReady` 永远不执行。
+   * 用户看到的现象是「设置里整个 ColorLab 分区消失」，而主题本身没有任何提示。
+   * 主题坏了最多是没配色，绝不该让设置项一起消失。
+   */
+  {
+    const dom = createFakeDom()
+    const registered = []
+    const slots = {
+      injected: null,
+      inject(name, factory) {
+        this.injected = name
+        const result = factory()
+        return () => result
+      },
+      register(descriptor, component) {
+        registered.push({ descriptor, component })
+        return { descriptor }
+      },
+    }
+    /* 主题服务故意抛错，模拟真实环境里某次令牌推送失败。 */
+    const brokenTheme = {
+      getTheme() {
+        return { preference: 'dark', active: { id: 'dark', colorScheme: 'dark', tokens: {} } }
+      },
+      overrideTokens() {
+        throw new Error('boom')
+      },
+      on() {
+        return () => {}
+      },
+    }
+    const ctx = createFakeCtx({
+      services: { theme: brokenTheme, slots },
+      props: { theme: brokenTheme, slots },
+    })
+    const exports = loadPlugin(dom)
+
+    let threw = false
+    try {
+      exports.apply(ctx)
+    } catch {
+      threw = true
+    }
+
+    check(threw === false, 'overrideTokens 抛错时 apply 不向外抛（异常被吞并记录）')
+    check(registered.length === 1, 'overrideTokens 抛错时设置页仍然注册成功', String(registered.length))
+    check(
+      registered[0] !== undefined && registered[0].descriptor.id === 'mariana-theme',
+      '设置页 descriptor id = mariana-theme',
+      registered[0] === undefined ? '' : registered[0].descriptor.id,
+    )
+    check(
+      registered[0] !== undefined && registered[0].descriptor.label === 'ColorLab',
+      '设置页标签 = ColorLab',
+      registered[0] === undefined ? '' : String(registered[0].descriptor.label),
+    )
+    check(slots.injected === 'settings.section', '注册到 settings.section 槽位', String(slots.injected))
+  }
+
   const failed = results.filter((result) => !result.ok)
   console.log('─'.repeat(52))
   if (failed.length > 0) {
