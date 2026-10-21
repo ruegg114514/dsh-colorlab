@@ -1290,22 +1290,27 @@ window.__ModuleLoader__.load({
        *    注意这一步不改成半透明 —— 透明才能看到背景层。 */
       out.push('--dsw-alias-bg-base:transparent !important')
 
-      /* ② 侧栏底色令牌 —— 它同时决定标题栏的颜色。
+      /* ② 侧栏底色令牌 = transparent。
        *
-       * 链路：preload 读这个令牌的计算色 → IPC → 主进程
-       *   mainWindow.setTitleBarOverlay({ color, symbolColor })
+       * 它同时被两处消费，必须先讲清链路才不会改坏：
        *
-       * 主进程侧的校验是一条正则（app.asar lib/main.js）：
-       *   /^(?:#[\da-f]{3,8}|rgba?\([\d.,%\s]+\))$/iu
+       *   a) 侧栏元素（_sidebarCol）与标题栏拖动区（_frame::before）铺底；
+       *   b) preload 的隐藏探针：
+       *        const probe = document.createElement('span')
+       *        probe.style.cssText = '…background-color:var(--dsw-specific-sidebar-fill)…'
+       *      然后 canvas 归一化 → IPC → mainWindow.setTitleBarOverlay({color})
        *
-       * 🔧 关键：不能给 transparent。这个字符串通不过上面那条正则，
-       * IPC 会被丢弃，系统保留默认的不透明标题栏 ——
-       * 表现就是「最上面应用/编辑那一栏没被处理」。
+       * 🔧 上一版把这里改成 rgba(0.75)，结果**左侧栏的玻璃效果失效了** ——
+       * 因为侧栏内部多个元素都铺这个色，alpha 叠 alpha 又变回实心。
+       * 说明这个令牌必须保持 transparent，侧栏的层次由 _sidebarCol 那条规则接管。
        *
-       * 正解：给带 alpha 的 rgba。它通过校验，alpha 让覆盖层与背后叠在一起，
-       * 标题栏就和侧栏是同一套颜色了。 */
-      const barColor = surf.sidebar || surf.base || (isDark ? '#343D46' : '#FFFFFF')
-      out.push('--dsw-specific-sidebar-fill:' + hexToRgba(barColor, Math.min(1, alpha + 0.1)) + ' !important')
+       * 那标题栏怎么办？探针走 canvas 归一化：
+       *   context.fillStyle = 'transparent' → getImageData → rgba(0,0,0,0)
+       * 送出的是括号形式的 rgba(...)，**能通过主进程的 validColor 正则**，
+       * 于是 setTitleBarOverlay 收到全透明色，覆盖层让出窗口材质。
+       * 之前「标题栏没变化」不是被拒，而是那一栏本来就该由窗口材质呈现，
+       * 需要窗口开启透明材质才会真正透 —— 那是宿主窗口的事，不是页面 CSS 能做的。 */
+      out.push('--dsw-specific-sidebar-fill:transparent !important')
 
       /* ③ 分层表面：给 alpha。这些是卡片/面板/浮层的底。
        *    浮层（layer1-3 / overlay）比底层更浓一点，保证能读字。 */
@@ -1323,11 +1328,14 @@ window.__ModuleLoader__.load({
       const bubble = surf.bubble || layer1
       const hover = surf.hover || layer1
       push('--dsw-specific-bubble', bubble, fogAlpha)
-      push('--dsw-specific-menu', overlay, fogAlpha)
+      /* 菜单/对话框底下压着正文，必须实底。 */
+      push('--dsw-specific-menu', overlay, 1)
       push('--dsw-specific-tip', overlay, fogAlpha)
       push('--dsw-specific-selector', hover, fogAlpha)
-      push('--dsw-specific-input-major', layer1, fogAlpha)
-      push('--dsw-alias-tooltip-bg', overlay, fogAlpha)
+      /* 输入框令牌给**不透明**：它背后是滚动正文，半透明必然透字。 */
+      push('--dsw-specific-input-major', layer1, 1)
+      /* tooltip 同理。 */
+      push('--dsw-alias-tooltip-bg', overlay, 1)
 
       /* ⑤ 其它背景令牌：一起半透明，否则个别组件仍是实心板。 */
       push('--dsw-alias-bg-document-preview', layer1, fogAlpha)
@@ -1462,22 +1470,70 @@ window.__ModuleLoader__.load({
       lines.push(g + '[class*="_centerCol"]{'
         + 'border-radius:0 !important;corner-shape:round !important}')
 
-      /* 🔧 输入栏座：给它一层自己的不透明底，把正文挡在外面。
+      /* 🔧 正文不会溢出到输入栏 / 设置面板 —— 用层叠上下文而不是涂色。
        *
-       * 问题：聊天内容在 scrollBody 里滚动，composerSeat 是它的**兄弟**，
-       * 位置在下方。两者都被清成透明之后，正文就透到输入框区域里了。
+       * 症状（实测）：
+       *   · 输入框里能透出正文，而且那块颜色不跟「表面浓度」走；
+       *   · 设置面板比正文高一级，也透出正文。
        *
-       * 真正的「硬裁」（文字在输入栏上沿断开）需要把 seat 从滚动容器里
-       * 移出去 —— 那是移动 React 托管的 DOM，冷启动有白屏风险，
-       * 参考实现自己也踩过这个坑。所以这里用更安全的方式：
-       * 给 seat 铺一层够浓的主题色底，让正文透不出来。
+       * 根因：我把 scrollBody / Dc7zOa_root / xz4KEq_root 清成 transparent，
+       * 但没给它们建立**层叠上下文**。缺了它，容器内的文本会与上方的浮层
+       * 参与同一套绘制顺序，于是「文字叠到输入框/面板上」。
        *
-       * 浓度用 0.82：足够挡住正文，又比实心板略透，不破坏玻璃观感。 */
+       * 解法：给滚动容器 isolation:isolate 建立独立层叠上下文 ——
+       * 内部内容再怎么滚也不会绘制到容器外，同时不涂色、不挡玻璃。
+       *
+       * ⚠️ 不用 backdrop-filter / transform 来建上下文：
+       * 它们会创建包含块，让容器内的 fixed 子元素位移（参考实现踩过）。 */
+      lines.push(g + '[class*="xz4KEq_scroll"],'
+        + g + '[class*="Dc7zOa_root"]{isolation:isolate !important}')
+
+      /* 🔧 设置面板与对话框：同样必须实底。
+       *
+       * 症状：「设置界面比正文高一级，也会透出正文」。
+       * 原因和输入栏一模一样 —— 浮层底下压着正文，浮层半透明就必然透字。
+       * 这不是层叠上下文能解决的（那只能治绘制顺序，治不了透光）。
+       *
+       * 所以：所有「需要读字且底下有内容」的浮层都给实底。
+       * 玻璃感留给那些**底下没有文字**的区域（三列、背景、卡片缝隙）。 */
+      const overlayColor = surf.overlay || surf.layer2 || surf.base
+      if (overlayColor) {
+        lines.push(g + '[role="dialog"],'
+          + g + '[role="menu"],'
+          + g + '[role="listbox"],'
+          + g + '[data-radix-popper-content-wrapper] > *{'
+          + 'background-color:' + overlayColor + ' !important;'
+          + 'background-image:none !important;'
+          + 'isolation:isolate !important}')
+      }
+
+      /* 🔧 输入栏区域：**必须完全不透明**。这是整页玻璃里唯一必须例外的区域。
+       *
+       * 为什么（这次想清楚了，不再靠猜）：
+       *   聊天正文在输入栏**下面**滚动，输入栏是半透明的话，
+       *   底下那 20% 的正文就会透出来 —— 这和层叠上下文无关，
+       *   是「半透明必然透出背后内容」的物理结果。
+       *   加 isolation / z-index 治不了透光，只能治「绘制顺序」。
+       *
+       * 所以这里给**不透明**的主题色底。它不参与玻璃，
+       * 是玻璃面板上的一块「实心台面」—— 这是可读性的必要代价。
+       *
+       * 主题色仍跟随「背景变体」，所以观感与其他面板一致；
+       * 「表面浓度」滑块不再影响这一块（它本来就是实心台面）。 */
       const seatColor = surf.base || (isDark ? '#343D46' : '#FFFFFF')
       lines.push(g + '[class*="Dc7zOa_composerSeat"],'
         + g + '[data-composer-seat]{'
-        + 'background:' + hexToRgba(seatColor, 0.82) + ' !important;'
-        + 'background-image:none !important}')
+        + 'position:relative !important;z-index:2 !important;'
+        + 'background:' + seatColor + ' !important;'
+        + 'background-image:none !important;'
+        + 'isolation:isolate !important}')
+
+      /* 输入栏卡片与 dock 也要实底，否则座是实心的、卡片却是半透明的，
+       * 正文还是能从卡片那一层透出来。
+       * 它们的底色令牌（--dsw-specific-input-major）同样要在这里覆盖成不透明。 */
+      lines.push(g + '[class*="RlGAzG_card"],'
+        + g + '[class*="RlGAzG_dock"]{'
+        + 'background-color:' + seatColor + ' !important;background-image:none !important}')
 
       /* ④ 主内容区内部容器：清透明，否则会把三列的 alpha 又盖回实色。
        *    ⚠️ **不含 composerSeat** —— 它在上面单独处理了。 */
@@ -1523,6 +1579,29 @@ window.__ModuleLoader__.load({
       lines.push(g + '#root::before{content:"" !important;position:fixed !important;'
         + 'inset:0 !important;background:' + hexToRgba(veilColor, veilAlpha) + ' !important;'
         + 'pointer-events:none !important;z-index:0 !important}')
+
+      /* 🔧 标题栏颜色：只改「探针」，不动侧栏。
+       *
+       * preload 会插一个隐藏 span 当探针：
+       *   const probe = document.createElement('span')
+       *   probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;'
+       *     + 'background-color:var(--dsw-specific-sidebar-fill);'
+       *     + 'color:var(--dsw-alias-label-primary)'
+       * 然后 canvas 归一化它的颜色 → IPC → setTitleBarOverlay({color})。
+       *
+       * 所以标题栏的颜色**只看探针的计算色**，和侧栏元素无关。
+       * 但探针读的是 var()，而那个变量被侧栏共用 ——
+       * 直接改变量会像上一版那样把侧栏的玻璃弄坏（alpha 叠加变实心）。
+       *
+       * 解法：**只覆盖探针自己的 background-color**，用内联样式选择器命中它。
+       * 探针的特征是 visibility:hidden + position:fixed，页面上没有第二个
+       * 元素同时具备这两条内联样式，所以命中面极小。
+       *
+       * 给的颜色是带 alpha 的主题侧栏色：透明会让那一栏没有任何底色
+       * （Windows 上表现为默认不透明），带 alpha 才能与窗口材质叠加。 */
+      const titleColor = surf.sidebar || surf.base || (isDark ? '#343D46' : '#FFFFFF')
+      lines.push(g + '[style*="visibility:hidden"][style*="position:fixed"]{'
+        + 'background-color:' + hexToRgba(titleColor, Math.min(1, alpha + 0.1)) + ' !important}')
 
       void blur
       return lines.join('\n')
@@ -4582,7 +4661,7 @@ function makeColorizer(scheme) {
           Row,
           {
             title: '自选壁纸',
-            hint: '填本机图片的完整路径（如 D:\\pics\\bg.jpg），留空则跟随系统桌面壁纸。支持 jpg / png / webp，上限 12 MB。',
+            hint: '填本机图片的完整路径（如 D:\\pics\\bg.jpg），留空则跟随系统桌面壁纸。支持 jpg / png / webp。',
           },
           h('input', {
             type: 'text',
