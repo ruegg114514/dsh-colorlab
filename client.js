@@ -4411,16 +4411,20 @@ function makeColorizer(scheme) {
       apply(ctx) {
         if (disposed) return
 
-        /* 主题：不依赖任何服务，立即按默认值生效一次（首屏就是 Mariana）。 */
-        applyNow()
-
+        /* ⚠️ **设置页注册必须放在主题应用之前，且主题失败不许影响它。**
+         *
+         * 原来这里第一行是裸的 `applyNow()`，而 `applyNow` 只有 try/finally、
+         * **没有 catch** —— 它一旦抛错，异常会穿出 `apply`，后面的
+         * `registerSectionWhenReady` 就永远不执行，表现为「设置里整个 ColorLab
+         * 分区消失」。主题出问题最多是没配色，绝不该让设置项一起消失。
+         */
         if (!bound) {
           bound = true
           bindWhenReady(ctx, 0)
           /* 设置页样式表不在这里装 —— 由 MarianaSettingsPage 首次渲染时按需安装，
              启动路径省掉一次 15 KB 的 CSS 解析（见 ensurePageStyles）。 */
           registerSectionWhenReady(ctx, 0)
-
+          /* 下面的 teardown effect 与 bound 同寿，只会注册一次。 */
           ctx.effect(
             () => () => {
               disposed = true
@@ -4534,6 +4538,17 @@ function makeColorizer(scheme) {
             },
             'mariana-theme: teardown',
           )
+        }
+
+        /* 主题：不依赖任何服务，立即按默认值生效一次（首屏就是 Mariana）。
+           **放在设置页注册之后**，且失败只记录、不向外抛 ——
+           主题出问题最多是没配色，绝不该让设置项一起消失。
+           （原来这里是裸的 `applyNow()` 在最前面，而它没有 catch，
+             抛错就会让后面的 registerSectionWhenReady 永远不执行。） */
+        try {
+          applyNow()
+        } catch (error) {
+          note('applyNow', error)
         }
       },
       /* 供 scripts/*.test.mjs 直接调用的纯函数与常量（不参与运行时）。 */
