@@ -65,7 +65,7 @@ async function main() {
   check(typeof mod.apply === 'function', 'apply 已导出')
   check(mod.SETTINGS_ENTRY === 'mariana-theme', 'SETTINGS_ENTRY = mariana-theme', mod.SETTINGS_ENTRY)
   check(mod.BOOT_BACKGROUND === '#343D46', 'BOOT_BACKGROUND = #343D46', mod.BOOT_BACKGROUND)
-  check(mod.FIELD_DEFAULTS && Object.keys(mod.FIELD_DEFAULTS).length === 15, 'FIELD_DEFAULTS 有 15 个字段', String(Object.keys(mod.FIELD_DEFAULTS || {}).length))
+  check(mod.FIELD_DEFAULTS && Object.keys(mod.FIELD_DEFAULTS).length === 19, 'FIELD_DEFAULTS 有 19 个字段', String(Object.keys(mod.FIELD_DEFAULTS || {}).length))
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.prose === 'on', 'FIELD_DEFAULTS.prose = on（默认开正文高亮）')
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseBoost === 'soft', 'FIELD_DEFAULTS.proseBoost = soft（默认提亮一档）', mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseBoost)
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseColors === '', 'FIELD_DEFAULTS.proseColors = 空串（正文颜色跟随派生）')
