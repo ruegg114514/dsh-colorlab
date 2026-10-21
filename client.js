@@ -182,6 +182,16 @@ window.__ModuleLoader__.load({
       cardColor: '',
       /* 要高亮哪些过程行：JSON 数组，值是 ROW_VARIANTS 里的 variant。 */
       rowVariants: '["write","edit","bash","summary","turn"]',
+      /* "on" | "off" —— 玻璃界面总开关。 */
+      glass: 'on',
+      /* "wallpaper" | "gradient" —— 玻璃背后的背景来源。 */
+      glassBackground: 'wallpaper',
+      /* 三列底色浓度 0–30。 */
+      glassTint: '10',
+      /* 浮层雾面浓度 0–40。 */
+      glassFog: '16',
+      /* 模糊半径 0–40 px。 */
+      glassBlur: '16',
     })
 
     /* ====================================================================== *
@@ -553,6 +563,11 @@ window.__ModuleLoader__.load({
         Object.freeze({ value: 'off', label: '原值', hint: 'Mariana 原版语法色' }),
         Object.freeze({ value: 'soft', label: '提亮', hint: '默认；标题 5.39:1、加粗 6.63:1、删除线 4.14:1' }),
         Object.freeze({ value: 'strong', label: '更亮', hint: '最亮一档；删除线也达 4.91:1' }),
+      ]),
+      /* 玻璃界面的背景来源。 */
+      glassBackground: Object.freeze([
+        Object.freeze({ value: 'wallpaper', label: '桌面壁纸', hint: '读取 Windows 当前壁纸铺进页面；换壁纸后自动跟着变' }),
+        Object.freeze({ value: 'gradient', label: '渐变', hint: '用当前配色生成柔和光斑；壁纸读不到时也自动用这个' }),
       ]),
     })
 
@@ -931,6 +946,382 @@ window.__ModuleLoader__.load({
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
     const MARKDOWN_SHEET_ID = 'dsh-colorlab/markdown.css'
     const LATEX_SHEET_ID = 'dsh-colorlab/latex.css'
+    const GLASS_SHEET_ID = 'dsh-colorlab/glass.css'
+
+    /* ====================================================================== *
+     * 二·六、玻璃界面：壁纸层 + 单层 alpha
+     *
+     * ## 这个功能的由来（重要，别再走回头路）
+     *
+     * 本插件曾经做过「表面不透明度 + 毛玻璃」，反复失败、最后整个回退。当时的判断是
+     * 「backdrop-filter 不起作用」，其实不是 ——
+     *
+     * **`backdrop-filter` 只能模糊「同一张画布里、位于它背后的像素」。**
+     * 窗口背后的真实桌面不在 Chromium 画布里，所以玻璃背后是空的，
+     * 无论怎么调 blur 或 alpha，屏幕上都看不出变化。
+     *
+     * 把背景图**铺进页面最底层**之后，它就成了画布内像素，玻璃才有东西可糊。
+     * 这一步不需要修改 `app.asar`，也不需要窗口透明。
+     *
+     * ## 分层铁律（上一轮失败的第二个原因）
+     *
+     * DSH 的背景是**嵌套**的，且每层都用同一个不透明色铺底：
+     *
+     *     .frame            background: var(--dsw-alias-bg-base)
+     *       .sidebarCol     background: var(--dsw-specific-sidebar-fill)
+     *       .centerCol      background: var(--dsw-alias-bg-base)
+     *       .rightbarCol    background: var(--dsw-specific-sidebar-fill)
+     *
+     * 如果给**每一层**都加 alpha，合成后的不透明度是 a + a(1-a) + a(1-a)² …
+     * —— 0.6 叠两层就是 0.84、三层 0.944，屏幕上等于完全不透明。
+     *
+     * 所以：**容器层全部清成透明，只在最上层三列各铺一次低 alpha。**
+     * 这也是参考实现（YSDLNGF/dsh-acrylic-light）在注释里写下的同一条结论。
+     *
+     * ## 开关方式
+     *
+     * 所有规则都挂在 `html[data-dsh-glass]` 属性下。关掉 = 摘属性 + 删背景层，
+     * 页面上不留任何残留样式。
+     * ====================================================================== */
+
+    /** 玻璃模式的总开关属性。摘掉它 = 完全恢复原样。 */
+    const GLASS_ATTR = 'data-dsh-glass'
+
+    /** 背景层元素 id。 */
+    const WALLPAPER_LAYER_ID = 'dmt-wallpaper'
+
+    /** 壁纸路由（由 Host 半体注册）。 */
+    const WALLPAPER_ROUTE = '/dsh-colorlab/wallpaper'
+
+    /**
+     * 解析 0–100 的百分比设置。
+     * @param {string|number|undefined} raw - 设置值。
+     * @param {number} min - 下界。
+     * @param {number} max - 上界。
+     * @param {number} fallback - 无法解析时的回落值。
+     * @returns {number} 范围内的数值。
+     */
+    function parsePercent(raw, min, max, fallback) {
+      if (raw === undefined || raw === null || raw === '') return fallback
+      const n = Number(String(raw).trim())
+      if (!Number.isFinite(n)) return fallback
+      return Math.max(min, Math.min(max, n))
+    }
+
+    /**
+     * hex → `rgba(r, g, b, a)`。
+     * 用 rgba 而不是 8 位 hex：精度更高，也便于和 alpha 计算混合。
+     * @param {string} hex - `#rgb` 或 `#rrggbb`。
+     * @param {number} alpha - 0..1。
+     * @returns {string} rgba() 文本；输入非法时原样返回。
+     */
+    function hexToRgba(hex, alpha) {
+      if (typeof hex !== 'string') return hex
+      let clean = hex.trim().replace('#', '')
+      if (clean.length === 3) clean = clean.split('').map((c) => c + c).join('')
+      if (!/^[0-9a-fA-F]{6}$/.test(clean)) return hex
+      const r = parseInt(clean.slice(0, 2), 16)
+      const g = parseInt(clean.slice(2, 4), 16)
+      const b = parseInt(clean.slice(4, 6), 16)
+      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return hex
+      /* 保留两位小数：JS 浮点会算出 0.6499999999999999 这种值。 */
+      const a = Math.round(Math.max(0, Math.min(1, alpha)) * 100) / 100
+      return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')'
+    }
+
+    /**
+     * 生成「渐变」背景：用当前表面色派生的柔和光斑。
+     *
+     * 只在两种情况下使用：用户显式选了「渐变」，或壁纸读不到时的兜底。
+     *
+     * ⚠️ 渐变的空间频率很低（一整个窗口只有两三个色斑），模糊之后还是那两三个色斑，
+     * 所以**渐变永远不如真实壁纸好看** —— 它只是保证"不会露出纯色或黑屏"。
+     * 真正让玻璃有效果的是照片壁纸的高频细节。
+     *
+     * @param {object} surfaces - 表面色。
+     * @param {boolean} isDark - 深色模式。
+     * @returns {string} 可直接写进 `background` 的值。
+     */
+    function buildGradientBackdrop(surfaces, isDark) {
+      const s = surfaces || {}
+      const base = s.base || (isDark ? '#343D46' : '#FFFFFF')
+      const layer1 = s.layer1 || base
+      const layer2 = s.layer2 || layer1
+      const sidebar = s.sidebar || layer1
+      const spot = (color, alpha) => hexToRgba(color, alpha)
+      return 'radial-gradient(circle at 18% 12%, ' + spot(sidebar, 0.9) + ' 0%, transparent 55%),'
+        + 'radial-gradient(circle at 82% 78%, ' + spot(layer2, 0.9) + ' 0%, transparent 58%),'
+        + 'radial-gradient(circle at 50% 50%, ' + spot(layer1, 0.7) + ' 0%, transparent 70%),'
+        + base
+    }
+
+    /** 壁纸 objectURL 缓存（避免重复 fetch 与内存泄漏）。 */
+    let wallpaperObjectUrl = null
+    /** 壁纸加载状态：'idle' | 'loading' | 'ready' | 'fallback'。 */
+    let wallpaperStatus = 'idle'
+    /** 壁纸层 DOM 元素。 */
+    let wallpaperEl = null
+
+    /**
+     * 加载壁纸：fetch Host 路由 → blob → objectURL。
+     *
+     * 用 objectURL 而不是 base64：1MB 图转 base64 会涨到 1.37MB 字符串，
+     * 而且要重新解析。
+     *
+     * 失败（404 / 网络错误 / Host 没有 webServer）时静默退回渐变。
+     */
+    function loadWallpaper() {
+      if (typeof fetch !== 'function' || typeof URL === 'undefined') {
+        wallpaperStatus = 'fallback'
+        return
+      }
+      if (wallpaperStatus === 'loading' || wallpaperStatus === 'ready') return
+      wallpaperStatus = 'loading'
+      try {
+        fetch(WALLPAPER_ROUTE, { cache: 'no-store' })
+          .then((response) => {
+            if (!response.ok) throw new Error('HTTP ' + response.status)
+            return response.blob()
+          })
+          .then((blob) => {
+            if (!blob || blob.size === 0) throw new Error('empty wallpaper')
+            if (wallpaperObjectUrl !== null) {
+              try {
+                URL.revokeObjectURL(wallpaperObjectUrl)
+              } catch {
+                /* 已释放 */
+              }
+            }
+            wallpaperObjectUrl = URL.createObjectURL(blob)
+            wallpaperStatus = 'ready'
+            diag.glass = 'wallpaper'
+            paintWallpaperLayer()
+          })
+          .catch(() => {
+            wallpaperStatus = 'fallback'
+            diag.glass = 'gradient'
+            paintWallpaperLayer()
+          })
+      } catch {
+        wallpaperStatus = 'fallback'
+        diag.glass = 'gradient'
+      }
+    }
+
+    /** 当前生效的表面色与深色判定（供背景层绘制使用）。 */
+    let wallpaperSurfaces = { dark: SURFACES.standard, isDark: true }
+
+    /**
+     * 把背景画到背景层元素上。
+     *
+     * 优先级：壁纸 objectURL > 渐变。
+     */
+    function paintWallpaperLayer() {
+      if (wallpaperEl === null) return
+      const { dark, isDark } = wallpaperSurfaces
+      if (wallpaperStatus === 'ready' && wallpaperObjectUrl !== null) {
+        const value = 'url("' + wallpaperObjectUrl + '")'
+        if (wallpaperEl.__dmtBackdrop !== value) {
+          wallpaperEl.__dmtBackdrop = value
+          wallpaperEl.style.backgroundImage = value
+          wallpaperEl.style.backgroundSize = 'cover'
+          wallpaperEl.style.backgroundPosition = 'center'
+          wallpaperEl.style.backgroundRepeat = 'no-repeat'
+          wallpaperEl.style.backgroundColor = 'transparent'
+        }
+        return
+      }
+      const gradient = buildGradientBackdrop(dark, isDark)
+      if (wallpaperEl.__dmtBackdrop !== gradient) {
+        wallpaperEl.__dmtBackdrop = gradient
+        wallpaperEl.style.backgroundImage = 'none'
+        wallpaperEl.style.background = gradient
+      }
+    }
+
+    /**
+     * 创建 / 移除背景层元素。
+     *
+     * ⚠️ 用真实 `<div>` 而不是 `body::before`：
+     * 层级关系更直白（背景层 z-index 0、`#root` z-index 1），
+     * 也不受伪元素与根背景绘制规则的影响。
+     *
+     * @param {boolean} needed - 是否需要背景层。
+     */
+    function syncWallpaperLayer(needed) {
+      if (typeof document === 'undefined') return
+      if (typeof document.getElementById !== 'function') return
+      const existing = document.getElementById(WALLPAPER_LAYER_ID)
+      if (!needed) {
+        if (existing !== null) {
+          try {
+            existing.remove()
+          } catch (error) {
+            note('remove wallpaper layer', error)
+          }
+        }
+        wallpaperEl = null
+        return
+      }
+      if (existing === null) {
+        const el = document.createElement('div')
+        el.id = WALLPAPER_LAYER_ID
+        el.setAttribute('aria-hidden', 'true')
+        /* fixed 铺满、z-index 0（在内容之下）、pointer-events none（不挡点击）。 */
+        el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
+          + 'width:100vw;height:100vh;pointer-events:none;z-index:0;overflow:hidden;'
+          + 'transition:background .25s ease'
+        try {
+          if (typeof document.body.prepend === 'function') document.body.prepend(el)
+          else document.body.insertBefore(el, document.body.firstChild)
+        } catch (error) {
+          note('prepend wallpaper layer', error)
+          return
+        }
+        wallpaperEl = el
+      } else {
+        wallpaperEl = existing
+      }
+      paintWallpaperLayer()
+    }
+
+    /**
+     * 生成玻璃样式表。
+     *
+     * 全部规则都要求 `html[data-dsh-glass]`，所以关掉开关时它们一律不命中。
+     *
+     * @param {object} state - 已生效设置。
+     * @param {object} surfaces - 当前深浅对应的表面色。
+     * @param {boolean} isDark - 深色模式。
+     * @returns {string} CSS 文本；功能关闭时为空串。
+     */
+    function buildGlassSheet(state, surfaces, isDark) {
+      const s = state || {}
+      if (s.glass !== 'on') return ''
+      const surf = surfaces || {}
+      const tint = parsePercent(s.glassTint, 0, 30, 10) / 100
+      const fog = parsePercent(s.glassFog, 0, 40, 16) / 100
+      const blur = parsePercent(s.glassBlur, 0, 40, 16)
+      const g = 'html[' + GLASS_ATTR + '] '
+      const lines = ['/* dsh-colorlab —— 玻璃界面（壁纸层 + 单层 alpha） */']
+
+      /* ① 容器层全部清成透明，让背景层透上来。
+       * ⚠️ `html` 是属性所在的元素本身，**不能**加 `html[...] ` 前缀 ——
+       * 那会变成「html 的后代」，永远匹配不到。 */
+      lines.push('html[' + GLASS_ATTR + '],'
+        + g + 'body,'
+        + g + '#root{background:transparent !important;background-image:none !important}')
+      /* ② #root 必须抬到背景层之上，否则内容被背景盖住。 */
+      lines.push(g + '#root{position:relative !important;z-index:1 !important}')
+      /* ③ 窗口框架与标题栏拖动区：它们被涂了侧栏色，不清掉就会「上面一条实心、下面透」。 */
+      lines.push(g + '[class*="_frame"]:has(> [class*="_sidebarCol"], > [class*="_centerCol"]){'
+        + 'background:transparent !important;background-image:none !important}')
+      lines.push(g + '[class*="_frame"]:has(> [class*="_sidebarCol"], > [class*="_centerCol"])::before{'
+        + 'background:transparent !important;background-image:none !important}')
+      /* ④ 主面板内部容器：只清背景，不动布局（它们负责 composerSeat 的定位与渐变）。 */
+      lines.push(g + '[class*="Dc7zOa_root"],' + g + '[class*="Dc7zOa_composerSeat"],'
+        + g + '[class*="xz4KEq_root"],' + g + '[class*="xz4KEq_frame"],'
+        + g + '[class*="xz4KEq_scroll"]{background:transparent !important;background-image:none !important}')
+
+      /* ⑤ **核心：只在三列各铺一次低 alpha。**
+       *
+       * 这是唯一铺色的地方。颜色从当前表面色派生（不写死），
+       * 所以「背景变体」与自定义配色依然生效。
+       */
+      const colAlpha = tint
+      const sidebarColor = surf.sidebar || surf.layer1 || surf.base
+      const centerColor = surf.base || surf.layer1
+      const glassFilter = blur > 0
+        ? 'backdrop-filter:blur(' + blur + 'px) !important;-webkit-backdrop-filter:blur(' + blur + 'px) !important;'
+        : 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;'
+      if (sidebarColor) {
+        lines.push(g + '[class*="_sidebarCol"]{'
+          + 'background:' + hexToRgba(sidebarColor, colAlpha) + ' !important;'
+          + 'border-right:.5px solid ' + hexToRgba(isDark ? '#FFFFFF' : '#0F1115', 0.07) + ' !important;'
+          + glassFilter
+          + '}')
+      }
+      if (centerColor) {
+        lines.push(g + '[class*="_centerCol"],' + g + '[class*="_rightbarCol"]{'
+          + 'background:' + hexToRgba(centerColor, colAlpha) + ' !important;'
+          + glassFilter
+          + '}')
+      }
+
+      void fog
+      return lines.join('\n')
+    }
+
+    /** 玻璃样式表元素。 */
+    let glassEl = null
+
+    /**
+     * 按当前设置维护「玻璃界面」。
+     *
+     * 顺序：先决定要不要 → 加/摘总闸属性 → 维护背景层 → 挂/卸样式表。
+     *
+     * 总闸属性放在 `<html>` 上而不是 body：#root、frame 等元素在 body 内，
+     * 但只要属性在 html 上，`html[data-dsh-glass] xxx` 就能命中整页；
+     * 摘掉它时所有规则同时失效，不留残留。
+     */
+    function syncGlassSheet() {
+      if (typeof document === 'undefined') return
+      const on = state.enabled !== 'off' && state.glass === 'on' && shouldApply()
+      const custom = parseCustom(state && state.custom)
+      const isDark = resolvedScheme() !== 'light'
+      const surfaces = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
+
+      /* 记录当前表面色，供背景层绘制（背景色跟随配色走）。 */
+      wallpaperSurfaces = { dark: surfaces, isDark }
+
+      /* ⚠️ 顺序：**先建背景层，再开总闸**。
+       * 反过来的话，一旦建层失败（DOM 异常），总闸已经打开、
+       * 容器全透明却没有背景 → 露出 Electron 窗口黑底，就是「主面板纯黑」。
+       * 先建层能保证「开了就一定有东西可看」。 */
+      syncWallpaperLayer(on)
+      if (on && state.glassBackground !== 'gradient') {
+        loadWallpaper()
+      } else if (on) {
+        wallpaperStatus = 'fallback'
+        diag.glass = 'gradient'
+      }
+
+      /* 总闸：开就加属性，关就摘掉。 */
+      try {
+        if (on) document.documentElement.setAttribute(GLASS_ATTR, '')
+        else document.documentElement.removeAttribute(GLASS_ATTR)
+      } catch (error) {
+        note('toggle glass attribute', error)
+      }
+
+      const css = on ? buildGlassSheet(state, surfaces, isDark) : ''
+      if (css === '') {
+        if (glassEl !== null) {
+          try {
+            glassEl.remove()
+          } catch (error) {
+            note('remove glass sheet', error)
+          }
+          glassEl = null
+        }
+        diag.glass = 'off'
+        return
+      }
+      try {
+        if (glassEl === null) {
+          glassEl = document.createElement('style')
+          glassEl.dataset.plugin = 'dsh-colorlab'
+          glassEl.dataset.pluginCss = GLASS_SHEET_ID
+          document.head.appendChild(glassEl)
+        }
+        writeSheet(glassEl, css)
+        if (diag.glass === 'off') diag.glass = 'on'
+      } catch (error) {
+        note('install glass sheet', error)
+        diag.glass = 'error'
+      }
+    }
+
 
     /* ====================================================================== *
      * 二·七、LaTeX 代码块：让配色回到 Sublime 的样子
@@ -2227,6 +2618,10 @@ function makeColorizer(scheme) {
 /* 草稿条：有未应用的颜色改动时出现 */
 .dmt-draftBar{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-state-warn-primary)}
 .dmt-draftText{flex:1;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-warn-primary)}
+.dmt-sliderRow{display:inline-flex;align-items:center;gap:10px;flex:none}
+.dmt-slider{width:132px;height:20px;accent-color:var(--dsw-alias-state-business-primary,#5FB3B3);cursor:pointer}
+.dmt-sliderValue{min-width:46px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}
+.dmt-slider[disabled]{opacity:.45;cursor:default}
 `
 
     /* ====================================================================== *
@@ -2294,7 +2689,7 @@ function makeColorizer(scheme) {
 
     const state = { ...DEFAULTS }
     const store = createStore({ ...DEFAULTS, status: initialStatus() })
-    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off', latex: 0 }
+    const diag = { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', markdown: 'off', latex: 0, glass: 'off' }
 
     /**
      * 未确认的颜色改动；空对象 = 无草稿。
@@ -2927,6 +3322,7 @@ function makeColorizer(scheme) {
       syncRowSheet()
       syncCardSheet()
       syncLatexSheet()
+      syncGlassSheet()
       publish()
     }
 
@@ -3268,6 +3664,32 @@ function makeColorizer(scheme) {
         'aria-label': props.label,
         onClick: props.onToggle,
       })
+    }
+
+    /**
+     * 滑块 + 数值显示。
+     *
+     * 用原生 `<input type="range">`：键盘可达、读屏可读、不需要额外 JS。
+     * 拖动时只写草稿（和其它控件一致），点「应用更改」才落到全局。
+     */
+    function Slider(props) {
+      const disabled = props.disabled === true
+      return h(
+        'span',
+        { className: 'dmt-sliderRow' },
+        h('input', {
+          type: 'range',
+          className: 'dmt-slider',
+          min: String(props.min),
+          max: String(props.max),
+          step: String(props.step === undefined ? 1 : props.step),
+          value: String(props.value),
+          disabled,
+          'aria-label': props.label,
+          onChange: (event) => props.onChange(Number(event.target.value)),
+        }),
+        h('span', { className: 'dmt-sliderValue' }, props.value + (props.suffix === undefined ? '' : props.suffix)),
+      )
     }
 
     /** 分段选择。 */
@@ -3783,6 +4205,118 @@ function makeColorizer(scheme) {
             options: OPTIONS.accent,
             onChange: setField('accent'),
           }),
+        ),
+
+        /* ---- 透明与壁纸 ---------------------------------------------------- *
+         * 玻璃界面的原理：把一张背景图铺进页面最底层，它就成了「画布内像素」，
+         * 上面的 backdrop-filter 才有东西可糊。只靠 CSS 是糊不到桌面壁纸的 ——
+         * 那张图在 Chromium 画布之外，永远采不到。 */
+        h(
+          'div',
+          { className: 'dmt-customGroup' },
+          h('div', { className: 'dmt-customGroupTitle' }, '透明与壁纸'),
+        ),
+
+        /* 玻璃界面：总开关。关掉即恢复完全不透明，且移除背景层。 */
+        h(
+          Row,
+          {
+            title: '玻璃界面',
+            hint: '让面板、浮层与输入框变成半透明玻璃，透出背后的壁纸。关闭后恢复完全不透明。',
+          },
+          h(Switch, { on: snapshot.glass !== 'off', label: '玻璃界面', onToggle: toggle('glass') }),
+        ),
+
+        /* 背景来源：桌面壁纸 / 渐变。 */
+        h(
+          Row,
+          {
+            title: '背景来源',
+            hint: '「桌面壁纸」读取 Windows 当前壁纸并铺进页面；「渐变」用当前配色生成柔和光斑。取不到壁纸时自动使用渐变。',
+          },
+          h(Segmented, {
+            label: '背景来源',
+            value: snapshot.glassBackground,
+            options: OPTIONS.glassBackground,
+            onChange: setField('glassBackground'),
+          }),
+        ),
+
+        /* 表面浓度：三列的 alpha。只在玻璃开启时可调。 */
+        h(
+          Row,
+          {
+            title: '表面浓度',
+            hint: '三列的底色浓度。0% 完全通透，越大越接近实心面板。',
+          },
+          h(Slider, {
+            label: '表面浓度',
+            min: 0,
+            max: 30,
+            value: parsePercent(snapshot.glassTint, 0, 30, 10),
+            suffix: '%',
+            disabled: snapshot.glass === 'off',
+            onChange: (next) => updateDraft({ glassTint: String(next) }),
+          }),
+        ),
+
+        /* 浮层浓度：菜单/提示/输入框等。 */
+        h(
+          Row,
+          {
+            title: '浮层浓度',
+            hint: '菜单、提示、输入框、气泡等浮层的雾面浓度。太低会看不清字。',
+          },
+          h(Slider, {
+            label: '浮层浓度',
+            min: 0,
+            max: 40,
+            value: parsePercent(snapshot.glassFog, 0, 40, 16),
+            suffix: '%',
+            disabled: snapshot.glass === 'off',
+            onChange: (next) => updateDraft({ glassFog: String(next) }),
+          }),
+        ),
+
+        /* 模糊半径。 */
+        h(
+          Row,
+          {
+            title: '模糊半径',
+            hint: '玻璃背后的模糊半径。0 = 不模糊。',
+          },
+          h(Slider, {
+            label: '模糊半径',
+            min: 0,
+            max: 40,
+            value: parsePercent(snapshot.glassBlur, 0, 40, 16),
+            suffix: 'px',
+            disabled: snapshot.glass === 'off',
+            onChange: (next) => updateDraft({ glassBlur: String(next) }),
+          }),
+        ),
+
+        /* 壁纸状态：只读，省得再出现「看不出效果但不知道是哪一步断了」。 */
+        h(
+          Row,
+          {
+            title: '壁纸状态',
+            hint: '壁纸是否成功读取。读不到时自动退回渐变背景，玻璃效果仍然生效。',
+          },
+          h(
+            'span',
+            {
+              className: 'dmt-sliderValue',
+              style: { minWidth: '0', color: 'var(--dsw-alias-label-secondary)' },
+            },
+            snapshot.glass === 'off'
+              ? '未启用'
+              : status.glass === 'wallpaper'
+                ? '已加载桌面壁纸'
+                : status.glass === 'gradient'
+                  ? '使用渐变背景'
+                  : '正在读取…',
+          ),
         ),
 
         /* 代码高亮 */
@@ -4491,6 +5025,32 @@ function makeColorizer(scheme) {
                 markdownEl = null
               }
               diag.markdown = 'off'
+              /* 玻璃界面：摘总闸属性 + 移除背景层 + 卸样式表，三样都要做，
+                 否则禁用插件后页面仍是半透明、背景层还留着一张壁纸。 */
+              try {
+                document.documentElement.removeAttribute(GLASS_ATTR)
+              } catch {
+                /* 无 DOM */
+              }
+              if (glassEl !== null) {
+                try {
+                  glassEl.remove()
+                } catch (error) {
+                  note('teardown glass sheet', error)
+                }
+                glassEl = null
+              }
+              diag.glass = 'off'
+              syncWallpaperLayer(false)
+              if (wallpaperObjectUrl !== null) {
+                try {
+                  URL.revokeObjectURL(wallpaperObjectUrl)
+                } catch {
+                  /* 已释放 */
+                }
+                wallpaperObjectUrl = null
+              }
+              wallpaperStatus = 'idle'
               disposeLatexObserver()
               if (latexEl !== null) {
                 try {
@@ -4577,6 +5137,14 @@ function makeColorizer(scheme) {
         PROSE_COLOR_KEYS,
         parseProseColors,
         CARD_SHEET_ID,
+        GLASS_SHEET_ID,
+        GLASS_ATTR,
+        WALLPAPER_LAYER_ID,
+        WALLPAPER_ROUTE,
+        buildGlassSheet,
+        buildGradientBackdrop,
+        hexToRgba,
+        parsePercent,
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
