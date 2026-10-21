@@ -237,6 +237,22 @@ console.log('  F. 背景层（模糊的"内容"来源）')
   check(img.includes('radial-gradient'), '背景是**渐变**而不是纯色（纯色模糊后还是纯色）')
   check(img.includes('rgba('), '渐变里用 rgba（带透明度才能叠出光晕）')
   check(img.includes('#343D46'), '底色仍是当前配色的 base')
+  /* 【关键回归】背景层必须和表面色**拉开明暗差**，否则半透明看不出效果。
+     第一版用了同色系的低透明度光斑：原始 rgb(52,61,70) → 显示 rgb(48,56,65)，
+     通道差只有 14，肉眼完全无感 —— 表现为"开了和没开一样"。
+     这条断言把「可辨识度」变成可测的：光斑色与底色的通道差必须够大。 */
+  {
+    const m = /rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/.exec(img)
+    check(m !== null, '背景图里能解析出光斑色')
+    if (m !== null) {
+      const spot = [Number(m[1]), Number(m[2]), Number(m[3])]
+      const baseRgb = [52, 61, 70] /* #343D46 */
+      const diff = Math.abs(spot[0] - baseRgb[0]) + Math.abs(spot[1] - baseRgb[1]) + Math.abs(spot[2] - baseRgb[2])
+      check(diff >= 40, '光斑色与底色通道差 ≥ 40（低于这个值肉眼看不出半透明）',
+        '通道差 ' + diff)
+    }
+  }
+
   const img2 = t.buildBackdropImage(lightSurf, false)
   check(img2.includes('#FFFFFF'), '浅色模式用浅色底')
   check(t.BACKDROP_ID === 'dmt-backdrop', '背景层元素 id', t.BACKDROP_ID)
