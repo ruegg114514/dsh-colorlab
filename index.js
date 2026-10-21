@@ -71,13 +71,13 @@ const FIELD_DEFAULTS = {
   /* 卡片底色：「已编辑 N 个文件」的头部横带 + 「交付文件」「计划」「排程」卡片的整张底色。
      空串 = 跟随宿主中性灰。 */
   cardColor: '',
-  /* 表面不透明度 0–100。100 = 不透明；调低后表面半透明，宿主窗口的原生亚克力材质透出来。 */
+  /* 表面不透明度 0–100。100 = 不透明。 */
   surfaceOpacity: '100',
-  /* 毛玻璃：'on' / 'off'。给页面内层叠表面加 backdrop-filter。 */
+  /* 毛玻璃开关：'on' / 'off'。 */
   glass: 'off',
-  /* 毛玻璃模糊半径（0–40 px）。 */
+  /* 毛玻璃模糊半径 0–40 px。 */
   glassBlur: '16',
-  /* 毛玻璃饱和度（100–220 %）。 */
+  /* 毛玻璃饱和度 100–220 %。 */
   glassSaturate: '120',
   /* 要高亮哪些过程行：JSON 数组，值是 ROW_VARIANTS 里的 variant。 */
   rowVariants: '["write","edit","bash","summary","turn"]',
