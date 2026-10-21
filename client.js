@@ -192,6 +192,8 @@ window.__ModuleLoader__.load({
       glassFog: '16',
       /* 模糊半径 0–40 px。 */
       glassBlur: '16',
+      /* 白雾浓度 0–100。*/
+      glassHaze: '8',
       /* 自选壁纸路径；空串 = 跟随系统桌面壁纸。 */
       glassWallpaperPath: '',
     })
@@ -1074,6 +1076,27 @@ window.__ModuleLoader__.load({
      */
     /** 上一次加载用的壁纸来源签名（路径 + 来源模式）。变了就要重新拉。 */
     let wallpaperSignature = null
+    /** 请求序号：用于丢弃过期响应（快速换路径时旧请求可能后到）。 */
+    let wallpaperRequestSeq = 0
+    /** 最后一次壁纸请求的诊断信息（设置页直接显示，省得再猜哪一步断了）。 */
+    let wallpaperDiag = { url: '', status: 0, error: '', size: 0 }
+
+    /**
+     * 带壁纸路径的请求地址。
+     *
+     * ⚠️ 为什么要把路径放进 query，而不是让 Host 自己读配置：
+     *   Host 的 config 是 apply() 那一刻的快照，设置改完它**不会更新**，
+     *   于是 Host 一直用旧路径 —— 表现为「要提交第二次才显示上一次选的图」。
+     *   query 参数由页面在每次请求时给出，永远是最新值。
+     *
+     * @param {string} customPath - 当前设置里的自选壁纸路径。
+     * @returns {string} 请求 URL。
+     */
+    function wallpaperUrl(customPath) {
+      const clean = typeof customPath === 'string' ? customPath : ''
+      if (clean === '') return WALLPAPER_ROUTE
+      return WALLPAPER_ROUTE + '?path=' + encodeURIComponent(clean)
+    }
 
     function loadWallpaper(signature) {
       if (typeof fetch !== 'function' || typeof URL === 'undefined') {
@@ -1084,17 +1107,25 @@ window.__ModuleLoader__.load({
        * 状态仍是 ready，会一直显示旧图。所以按「来源签名」判断 ——
        * 签名变了就重新拉，同一签名才短路。 */
       const sig = signature === undefined ? '' : String(signature)
-      if (wallpaperStatus === 'loading') return
+      /* 同一签名已经加载好 → 跳过。 */
       if (wallpaperStatus === 'ready' && wallpaperSignature === sig) return
+      /* 🔧 loading 期间换了签名，必须**继续发起新请求**。
+       * 原来这里直接 return，导致"快速改两次路径只生效第一次"。
+       * 用序号丢弃过期响应，避免旧请求回来覆盖新图。 */
       wallpaperSignature = sig
       wallpaperStatus = 'loading'
+      const requestSeq = (wallpaperRequestSeq += 1)
+      wallpaperDiag = { url: wallpaperUrl(signature), status: 0, error: '', size: 0 }
       try {
-        fetch(WALLPAPER_ROUTE, { cache: 'no-store' })
+        fetch(wallpaperUrl(signature), { cache: 'no-store' })
           .then((response) => {
+            wallpaperDiag.status = response.status
             if (!response.ok) throw new Error('HTTP ' + response.status)
             return response.blob()
           })
           .then((blob) => {
+            /* 过期响应直接丢弃（期间用户又换了路径）。 */
+            if (requestSeq !== wallpaperRequestSeq) return null
             if (!blob || blob.size === 0) throw new Error('empty wallpaper')
             if (wallpaperObjectUrl !== null) {
               try {
@@ -1103,12 +1134,15 @@ window.__ModuleLoader__.load({
                 /* 已释放 */
               }
             }
+            if (blob === null) return
+            wallpaperDiag.size = blob.size
             wallpaperObjectUrl = URL.createObjectURL(blob)
             wallpaperStatus = 'ready'
             diag.glass = 'wallpaper'
             paintWallpaperLayer()
           })
-          .catch(() => {
+          .catch((error) => {
+            wallpaperDiag.error = String(error && error.message ? error.message : error)
             wallpaperStatus = 'fallback'
             wallpaperSignature = null
             diag.glass = 'gradient'
@@ -1328,14 +1362,12 @@ window.__ModuleLoader__.load({
       const bubble = surf.bubble || layer1
       const hover = surf.hover || layer1
       push('--dsw-specific-bubble', bubble, fogAlpha)
-      /* 菜单/对话框底下压着正文，必须实底。 */
-      push('--dsw-specific-menu', overlay, 1)
+      push('--dsw-specific-menu', overlay, fogAlpha)
       push('--dsw-specific-tip', overlay, fogAlpha)
       push('--dsw-specific-selector', hover, fogAlpha)
-      /* 输入框令牌给**不透明**：它背后是滚动正文，半透明必然透字。 */
-      push('--dsw-specific-input-major', layer1, 1)
-      /* tooltip 同理。 */
-      push('--dsw-alias-tooltip-bg', overlay, 1)
+      /* 输入框令牌回到半透明：挡字靠上层的强模糊，不靠涂死。 */
+      push('--dsw-specific-input-major', layer1, fogAlpha)
+      push('--dsw-alias-tooltip-bg', overlay, fogAlpha)
 
       /* ⑤ 其它背景令牌：一起半透明，否则个别组件仍是实心板。 */
       push('--dsw-alias-bg-document-preview', layer1, fogAlpha)
@@ -1365,6 +1397,14 @@ window.__ModuleLoader__.load({
       push('--deliverable-fill', layer2, fogAlpha)
       push('--plan-card-fill', layer2, fogAlpha)
       push('--card-fill', layer2, fogAlpha)
+      /* 另外三种卡片/表面令牌（扫 app.asar 找到的，之前漏了）：
+       *   settings-card-fill → agent-preset 的「智能体预设」卡片
+       *   onboarding-card-fill → settings-account 的引导卡
+       *   menu-surface-fill → ui-theme 的菜单表面
+       * 不补它们，这几处会保持宿主不透明底，看起来是「一块没处理的板」。 */
+      push('--dsw-alias-settings-card-fill', layer2, fogAlpha)
+      push('--dsw-alias-onboarding-card-fill', layer2, fogAlpha)
+      push('--dsw-menu-surface-fill', overlay, fogAlpha)
 
       return out
     }
@@ -1438,8 +1478,48 @@ window.__ModuleLoader__.load({
       /* ② 窗口框架与标题栏拖动区：被涂了侧栏色，不清掉会「上面一条实心」。 */
       lines.push(g + '[class*="_frame"]{background:transparent !important;'
         + 'background-image:none !important}')
-      lines.push(g + '[class*="_frame"]::before{background:transparent !important;'
-        + 'background-image:none !important}')
+      /* ══ 标题栏：让原生覆盖层透明，页面内的拖动区做玻璃 ══════════
+       *
+       * 顶部那 40px 是**两层**叠出来的：
+       *
+       *   1. Electron 的 titleBarOverlay（原生覆盖层）—— 颜色由
+       *      preload 的隐藏探针读取 → IPC → setTitleBarOverlay 决定。
+       *      只要它的 color 不透明，它就会把下面全部盖住，
+       *      所以页面里怎么改都看不出变化。
+       *      → 探针必须送 rgba(0,0,0,0)，让覆盖层完全透明。
+       *
+       *   2. .BynINW_frame::before（页面内伪元素，全宽 40px 的拖动区）——
+       *      这个在页面里，**可以加 backdrop-filter**。
+       *      preload 插的 Shadow DOM 菜单栏（应用/编辑按钮）本身无背景，
+       *      就浮在它上面。
+       *
+       * 所以：覆盖层透明 + 拖动区玻璃 = 顶部和主体一样的玻璃效果。
+       */
+      /* ══ 顶部 40px：必须用**渐变**，不能是单色 ══════════════════════
+       *
+       * 顶部那条横跨全宽，但它下面是**两种颜色**：
+       *   左边 280px  是侧栏   (surf.sidebar = #23292E)
+       *   右边 1000px 是内容区 (surf.base    = #343D46)
+       *
+       * 实测数据（Console 探针）：
+       *   frame::before  background = rgba(35, 41, 46, 0.78)   ← 用 sidebar 色
+       *   三列           background = rgba(52, 61, 70, 0.65)   ← 用 base 色
+       * 顶部和主体**基色不同、浓度也不同** → 看起来就是「那一行没处理过、是一坨」。
+       *
+       * 正确做法：
+       *   · 浓度和主体完全一致（同一个 alpha）
+       *   · 基色用渐变：左侧 sidebar 色 → 右侧 base 色，
+       *     这样左边接侧栏、右边接内容区，两边都连续。
+       *
+       * 侧栏宽度占比用 CSS 变量控制，默认约 22%（280/1282）。
+       */
+      const stripLeft = hexToRgba(surf.sidebar || surf.base, alpha)
+      const stripRight = hexToRgba(surf.base || surf.sidebar, alpha)
+      lines.push(g + '[class*="_frame"]::before{'
+        + 'background:linear-gradient(to right,' + stripLeft + ' 0%,'
+        + stripLeft + ' 21%,' + stripRight + ' 23%,' + stripRight + ' 100%) !important;'
+        + 'backdrop-filter:blur(' + blur + 'px) saturate(120%) !important;'
+        + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(120%) !important}')
 
       /* ③ 三列：**带 alpha 的主题色**，这是 Mariana 保住的地方。
        *
@@ -1488,52 +1568,251 @@ window.__ModuleLoader__.load({
       lines.push(g + '[class*="xz4KEq_scroll"],'
         + g + '[class*="Dc7zOa_root"]{isolation:isolate !important}')
 
-      /* 🔧 设置面板与对话框：同样必须实底。
+      /* ══ 浮层与输入栏：靠「模糊」挡住背后的文字，不靠涂死 ══════════
        *
-       * 症状：「设置界面比正文高一级，也会透出正文」。
-       * 原因和输入栏一模一样 —— 浮层底下压着正文，浮层半透明就必然透字。
-       * 这不是层叠上下文能解决的（那只能治绘制顺序，治不了透光）。
+       * 走过的弯路，都记在这里：
        *
-       * 所以：所有「需要读字且底下有内容」的浮层都给实底。
-       * 玻璃感留给那些**底下没有文字**的区域（三列、背景、卡片缝隙）。 */
+       *   ① 半透明 → 正文直接透出来，能读字（用户报的问题）
+       *   ② 改不透明实底 → 一整条死板色块，和周围玻璃对不上，很丑（用户报的问题）
+       *
+       * 两次都错，因为都只在「透 vs 不透」这一根轴上选。
+       *
+       * 正确的轴是**背后那几行字能不能读清**：
+       *   给浮层开 backdrop-filter 并调大 —— 背后的正文被糊成光影，
+       *   不再可读，但底依然是半透明的，和周围玻璃是同一套。
+       *
+       * 这才是毛玻璃该有的行为：玻璃后面有东西、但看不清。
+       * （这也是参考实现最核心的一句：模糊是给"背后的内容"用的。）
+       *
+       * ⚠️ 半径要比其它玻璃**大 10px**：要压住的是文字（高频细节），
+       * 普通 16px 不足以让它不可读。 */
+      /* ══ 白雾浓度 ══════════════════════════════════════════════════
+       *
+       * 磨砂的「厚度感」来自这层极淡的白，**不是来自模糊**。
+       * 模糊只能让背后的东西变糊，不会让表面显得有材质。
+       *
+       * 上游实测（同一位置只改这一个值）：
+       *   白雾  0% → 边缘能量 0.23
+       *   白雾 10% → 边缘能量 0.61
+       *   白雾 28% → 边缘能量 1.03   ← 糊掉的细节被白雾重新填平
+       *   白雾 50% → 边缘能量 1.37
+       * 所以默认 8%（滑块可调 0–100）。
+       */
+      const haze = parsePercent(s.glassHaze, 0, 100, 8) / 100
+
+      /* 白雾层：顶部稍亮、向下渐隐 —— 模拟"光从上方来"的板子。
+       * 用 background-image 而不是 background-color，这样**不覆盖**
+       * 底层那个半透明主题色。 */
+      const hazeLayer = haze > 0
+        ? 'linear-gradient(to bottom,'
+          + 'rgba(255, 255, 255, ' + (haze).toFixed(3) + ') 0%,'
+          + 'rgba(255, 255, 255, ' + (haze * 0.35).toFixed(3) + ') 40%,'
+          + 'rgba(255, 255, 255, 0) 100%)'
+        : 'none'
+
+      /* ══ 玻璃的「边缘三件套」══════════════════════════════════════
+       *
+       * 照抄上游 dsh-acrylic-light 的 box-shadow 四层写法：
+       *   ① inset 0 1px 0      上缘高光（光打在板子上沿）
+       *   ② inset 0 -1px 0     下缘微光（厚度暗示）
+       *   ③ inset 0 0 0 .5px   发丝内描边（交代"这里有一块板"的边界）
+       *   ④ 0 10px 32px -10px  外投影（把它从背景里抬起来）
+       *
+       * 静置与聚焦的层数必须一致，浏览器才能逐层插值 —— 否则聚焦是"跳变"。 */
+      const edgeLight = isDark ? '255, 255, 255' : '15, 17, 21'
+      const glassShadow = [
+        'inset 0 1px 0 rgba(' + edgeLight + ', 0.16)',
+        'inset 0 -1px 0 rgba(' + edgeLight + ', 0.06)',
+        'inset 0 0 0 0.5px rgba(' + edgeLight + ', 0.08)',
+        '0 10px 32px -10px rgba(0, 0, 0, 0.18)',
+      ].join(',')
+
+      /* 白雾 + 阴影 + 描边，合成一段可复用的声明串（给浮层/卡片用）。 */
+      const glassSurface = 'background-image:' + hazeLayer + ' !important;'
+        + 'box-shadow:' + glassShadow + ' !important;'
+        + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
+
+      const frosted = Math.min(40, blur + 10)
+      const frostedFilter = 'backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
+        + '-webkit-backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
+
+      /* 对话框 / 菜单 / 列表：半透明 + 强模糊。 */
       const overlayColor = surf.overlay || surf.layer2 || surf.base
       if (overlayColor) {
         lines.push(g + '[role="dialog"],'
           + g + '[role="menu"],'
           + g + '[role="listbox"],'
           + g + '[data-radix-popper-content-wrapper] > *{'
-          + 'background-color:' + overlayColor + ' !important;'
-          + 'background-image:none !important;'
+          + 'background-color:' + hexToRgba(overlayColor, Math.min(1, alpha + 0.12)) + ' !important;'
+          + glassSurface + ';'
+          + frostedFilter
           + 'isolation:isolate !important}')
       }
 
-      /* 🔧 输入栏区域：**必须完全不透明**。这是整页玻璃里唯一必须例外的区域。
+      /* ══ 输入区由**两部分**组成，必须分开处理 ══════════════════════
        *
-       * 为什么（这次想清楚了，不再靠猜）：
-       *   聊天正文在输入栏**下面**滚动，输入栏是半透明的话，
-       *   底下那 20% 的正文就会透出来 —— 这和层叠上下文无关，
-       *   是「半透明必然透出背后内容」的物理结果。
-       *   加 isolation / z-index 治不了透光，只能治「绘制顺序」。
+       * 用户指出的结构（这是关键，我之前一直当成一个东西）：
        *
-       * 所以这里给**不透明**的主题色底。它不参与玻璃，
-       * 是玻璃面板上的一块「实心台面」—— 这是可读性的必要代价。
+       *   ┌─────────────────────────────────────────┐
+       *   │ composerSeat（座，卡片周边那一圈）        │ ← 和背景同色
+       *   │   ┌─────────────────────────────────┐   │   比正文高一层
+       *   │   │ composerCard（输入卡片本体）     │   │   用来"覆盖正文"
+       *   │   │  ┌───────────────────────────┐  │   │
+       *   │   │  │ RlGAzG_input（文本框）    │  │   │
+       *   │   │  └───────────────────────────┘  │   │
+       *   │   └─────────────────────────────────┘   │
+       *   └─────────────────────────────────────────┘
        *
-       * 主题色仍跟随「背景变体」，所以观感与其他面板一致；
-       * 「表面浓度」滑块不再影响这一块（它本来就是实心台面）。 */
+       * 上一版把**座**也涂成 rgba(0.65)，于是那一圈变成了"蓝白色半透明片" ——
+       * 用户看到的正是它。
+       *
+       * 正确做法：
+       *   · 座 → **完全透明**，让玻璃背景直接透上来（它只需要"覆盖正文"，
+       *          而这个覆盖由卡片本身承担）；同时保留强模糊糊掉背后正文。
+       *   · 卡片 → 半透明玻璃（和周围一致），它才是"输入框"的那块板。
+       */
       const seatColor = surf.base || (isDark ? '#343D46' : '#FFFFFF')
       lines.push(g + '[class*="Dc7zOa_composerSeat"],'
         + g + '[data-composer-seat]{'
-        + 'position:relative !important;z-index:2 !important;'
-        + 'background:' + seatColor + ' !important;'
+        + 'background:transparent !important;'
         + 'background-image:none !important;'
+        + frostedFilter
         + 'isolation:isolate !important}')
 
-      /* 输入栏卡片与 dock 也要实底，否则座是实心的、卡片却是半透明的，
-       * 正文还是能从卡片那一层透出来。
-       * 它们的底色令牌（--dsw-specific-input-major）同样要在这里覆盖成不透明。 */
-      lines.push(g + '[class*="RlGAzG_card"],'
-        + g + '[class*="RlGAzG_dock"]{'
-        + 'background-color:' + seatColor + ' !important;background-image:none !important}')
+      /* 🔧 其余表面也要有毛玻璃 —— 之前只改了颜色没加模糊。
+       *
+       * 症状（用户报）：代码块没有毛玻璃，看着只是一块半透明色块。
+       * 原因：模糊只加给了对话框/输入栏，其它表面只有 rgba 底色，
+       * 于是「半透明但不会糊」—— 视觉上就是一层薄色片，没有玻璃质感。
+       *
+       * 这里按「表面类型」统一补模糊。半径用基础值（不用输入栏那档更浓的），
+       * 因为这些表面背后通常是背景，不是成段的正文。 */
+      const surfaceFilter = 'backdrop-filter:blur(' + blur + 'px) saturate(120%) !important;'
+        + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(120%) !important;'
+
+      /* 代码块与它的横带：长段代码要能读，所以模糊不能太大，
+         但必须有 —— 否则就是一块实色片贴在壁纸上。 */
+      /* ══ 代码块与行间代码：它们**自己带实色底**，必须先打掉 ══════════
+       *
+       * 实测 DOM（Console 探针，2026-10-22）：
+       *
+       *   代码块：
+       *     div[data-code-wrap].md-code-block  bg=rgba(46,54,63,0.85) bf=blur(16px)
+       *       div[data-code-block-content]      bg=transparent
+       *         pre._plain_7gxqk_103            bg=rgba(46,54,63,0.85)  ← 元凶
+       *
+       *   行间代码：
+       *     code  bg=rgba(46,54,63,0.85)  ← 元凶（它自己就是那层实色）
+       *
+       * 也就是说：我给外层加了模糊，但 **pre / code 自己铺着 0.85 的实色**，
+       * 玻璃全被它们盖住了 —— 这就是「代码块和行间代码没有毛玻璃」的真正原因。
+       *
+       * 修法：把 pre / code 自己的底色**降到和玻璃同一浓度**，
+       * 它们才能透出后面的模糊背景。浓度用 alpha，和其它表面一致。
+       */
+      /* 每个选择器都必须带总闸前缀，否则关掉玻璃后仍会生效。 */
+      /* ⚠️ 不能只用 data-code-wrap —— 那是「自动换行」开关的标记，
+       * 正文代码块默认**不带**它（实测渲染代码：只有开启换行时才赋这个属性）。
+       *
+       * 稳定的选择器（从 app.asar 的渲染代码里读出来的）：
+       *   .md-code-block            字面类名，宿主直接写在 className 里
+       *   [data-code-block-banner]  顶部横带
+       *   [data-code-preview]       侧栏文档预览里的代码块
+       *   [data-code-block-content] 内容区（侧栏）
+       * 另外保留 data-code-wrap 作为补充（换行开启时也会命中，不冲突）。 */
+      lines.push(
+        g + '.md-code-block,'
+        + g + '[data-code-wrap],'
+        + g + '[data-code-block-content],'
+        + g + '[data-code-block-banner],'
+        + g + '[data-code-preview]{'
+        + surfaceFilter + glassSurface + '}')
+      /* ══ pre 与行间 code：把它们的实色底**完全去掉** ════════════════
+       *
+       * 实测（Console 探针）：
+       *   pre ._plain_7gxqk_103              bg=rgba(46,54,63,0.85)  ← 实色
+       *   code（行间）                        bg=rgba(46,54,63,0.85)  ← 实色
+       *
+       * 它们自己在最内层铺了一层 0.85 的实色，
+       * 把外层 data-code-wrap 的模糊**完全挡住了** —— 所以看不出玻璃。
+       *
+       * 上一版我只把 0.85 降到 0.77，仍然是实色，照样挡。
+       * 必须**彻底透明**，让外层那层玻璃透出来。
+       *
+       * 可读性由外层承担：data-code-wrap 已经是 rgba(0.73) + blur(16px)，
+       * 长段代码压在那上面仍然能读。 */
+      lines.push(g + 'pre,'
+        + g + 'pre code,'
+        + g + 'code:not(pre code){'
+        + 'background:transparent !important;'
+        + 'background-color:transparent !important;'
+        + 'background-image:none !important}')
+
+      /* 卡片（四类）与气泡：它们都在玻璃之上，也该有玻璃质感。 */
+      /* 卡片选择器。
+       *
+       * 已知四种文件/计划类卡片的类名（哈希前缀）来自 CARD_TARGETS 的检测；
+       * 这里再补两类**真实类名**（从 app.asar 的 CSS Module 映射读出）：
+       *   KZf9OG_card  agent-preset 的「智能体预设」卡片
+       *   j_8BDW_card  approval 的审批卡
+       * 用 [class*="_card"] 收尾能覆盖它们，但会误命中输入卡片
+       * （RlGAzG_card 单独处理过，加 :not() 排除）。 */
+      const cardTargets = [
+        '[class*="kuvljq_card"]',
+        '[class*="flL80G_file"]',
+        '[class*="KuQXFq_card"]',
+        '[class*="QSKnSa_card"]',
+        '[class*="KZf9OG_card"]',
+        '[class*="j_8BDW_card"]',
+        '[class*="bubble"]',
+      ].join(',')
+      lines.push(g + cardTargets + '{' + surfaceFilter + glassSurface + '}')
+
+      /* 输入栏卡片与 dock 跟随座的颜色，不再单独涂死。 */
+      /* ══ 输入区：玻璃放在**卡片**上，不是放在整条底栏上 ═══════════════
+       *
+       * 实测 DOM（Console 探针，2026-10-22）：
+       *   div.RlGAzG_root    995x129 @(280,693)  ← 整条底栏！
+       *     div.RlGAzG_card  858x98  @(348,693)  ← 真正的输入卡片
+       *       div.RlGAzG_scroll {data-input-scroll}
+       *         div.RlGAzG_grow
+       *           div.RlGAzG_input {data-composer-input}
+       *
+       * 上一版把玻璃铺在 **root** 上 —— 那是一条 995px 宽、129px 高的整幅底栏，
+       * 于是用户看到「输入框旁边一坨蓝色」。
+       *
+       * 正确做法：root 完全透明，玻璃只给 card（858x98 那个方框）。
+       * 这样玻璃的形状就是输入框的形状。
+       */
+
+      /* 整条底栏：透明，不要底色也不要模糊。 */
+      lines.push(g + '[class*="RlGAzG_root"],'
+        + g + '[class*="Dc7zOa_composerStack"],'
+        + g + '[data-composer-seat]{'
+        + 'background:transparent !important;'
+        + 'background-color:transparent !important;'
+        + 'background-image:none !important;'
+        + 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}')
+
+      /* 输入卡片：玻璃铺在这里（形状=输入框）。 */
+      lines.push(g + '[class*="RlGAzG_card"]{'
+        + 'background-color:' + hexToRgba(seatColor, alpha) + ' !important;'
+        + glassSurface + ';'
+        + frostedFilter
+        + 'isolation:isolate !important}')
+
+      /* 卡片内层：全透明（否则会在玻璃上再叠一层）。 */
+      lines.push(g + '[class*="RlGAzG_input"],'
+        + g + '[class*="RlGAzG_grow"],'
+        + g + '[class*="RlGAzG_scroll"],'
+        + g + '[class*="RlGAzG_dock"],'
+        + g + '[class*="RlGAzG_hero"],'
+        + g + '[class*="RlGAzG_accessory"],'
+        + g + '[class*="RlGAzG_tools"]{'
+        + 'background:transparent !important;'
+        + 'background-color:transparent !important;'
+        + 'background-image:none !important;'
+        + 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}')
 
       /* ④ 主内容区内部容器：清透明，否则会把三列的 alpha 又盖回实色。
        *    ⚠️ **不含 composerSeat** —— 它在上面单独处理了。 */
@@ -1599,9 +1878,52 @@ window.__ModuleLoader__.load({
        *
        * 给的颜色是带 alpha 的主题侧栏色：透明会让那一栏没有任何底色
        * （Windows 上表现为默认不透明），带 alpha 才能与窗口材质叠加。 */
-      const titleColor = surf.sidebar || surf.base || (isDark ? '#343D46' : '#FFFFFF')
-      lines.push(g + '[style*="visibility:hidden"][style*="position:fixed"]{'
-        + 'background-color:' + hexToRgba(titleColor, Math.min(1, alpha + 0.1)) + ' !important}')
+      /* 原生覆盖层必须**完全透明**，才能露出页面里的玻璃拖动区。
+       *
+       * 探针走 canvas 归一化：fillStyle 设成 transparent 时，
+       * getImageData 读回来是 rgba(0, 0, 0, 0) —— 括号形式，
+       * 能通过主进程的 validColor 正则，setTitleBarOverlay 收到全透明色。 */
+      const titleColor = 'transparent'
+      /* 选择器必须用**内联样式里的变量名**，不能用 visibility:hidden。
+       *
+       * 浏览器会把 inline style 序列化成 visibility 冒号空格 hidden 的写法，
+       * 所以 [style*="visibility:hidden"]（无空格）永远匹配失败 ——
+       * 这正是标题栏一直没生效的原因。
+       *
+       * 探针的独有特征是 style 里带 var(--dsw-specific-sidebar-fill)，
+       * 全页面只有它一个元素这样写。 */
+      lines.push(g + '[style*="sidebar-fill"]{'
+        + 'background-color:' + titleColor + ' !important}')
+      /* ══ 无障碍：系统要求「减少透明效果」时退回实色 ══════════════
+       *
+       * 照上游的写法（它们只处理输入卡片）：
+       *   @media (prefers-reduced-transparency: reduce) {
+       *     [card] { background: rgb(... / 88%); backdrop-filter: none }
+       *   }
+       *
+       * 这里扩到**所有半透明表面**：三列、输入卡片、浮层、代码块。
+       * 白雾与描边保留（不影响可读性，反而增强边界）。
+       *
+       * 这是无障碍要求，不是可选项：前庭功能敏感的用户会因透明/模糊不适。 */
+      const solidBase = surf.base || (isDark ? '#343D46' : '#FFFFFF')
+      const solidOverlay = surf.overlay || surf.layer2 || solidBase
+      lines.push('@media (prefers-reduced-transparency: reduce){'
+        /* 三列 → 88% 实色 */
+        + g + '[class*="_sidebarCol"],'
+        + g + '[class*="_centerCol"],'
+        + g + '[class*="_rightbarCol"]{'
+        + 'background-color:' + hexToRgba(solidBase, 0.88) + ' !important;'
+        + 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}'
+        /* 输入卡片与浮层 → 88% 实色、无模糊 */
+        + g + '[class*="RlGAzG_card"],'
+        + g + '[role="dialog"],' + g + '[role="menu"],' + g + '[role="listbox"]{'
+        + 'background-color:' + hexToRgba(solidOverlay, 0.88) + ' !important;'
+        + 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}'
+        /* 代码块 → 92%（要读字，更实一点） */
+        + g + '.md-code-block,' + g + '[data-code-preview]{'
+        + 'background-color:' + hexToRgba(surf.code || solidOverlay, 0.92) + ' !important;'
+        + 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}'
+        + '}')
 
       void blur
       return lines.join('\n')
@@ -4671,7 +4993,27 @@ function makeColorizer(scheme) {
             value: snapshot.glassWallpaperPath,
             'aria-label': '自选壁纸路径',
             spellcheck: false,
+            /* 和其它设置项一致：先进草稿，点「应用更改」才生效。 */
             onChange: (event) => updateDraft({ glassWallpaperPath: event.target.value }),
+          }),
+        ),
+
+        /* 白雾浓度：磨砂的"厚度感"来自这层薄白，不是来自模糊。
+           默认 8%，上游实测的平衡点（0% 太薄、28% 会把模糊盖平）。 */
+        h(
+          Row,
+          {
+            title: '白雾浓度',
+            hint: '表面那层极淡的白，负责"厚度感"。0% 只剩模糊、缺少材质感；超过 30% 会把背后的模糊盖平。',
+          },
+          h(Slider, {
+            label: '白雾浓度',
+            min: 0,
+            max: 100,
+            value: parsePercent(snapshot.glassHaze, 0, 100, 8),
+            suffix: '%',
+            disabled: snapshot.glass === 'off',
+            onChange: (next) => updateDraft({ glassHaze: String(next) }),
           }),
         ),
 
@@ -4691,9 +5033,9 @@ function makeColorizer(scheme) {
             snapshot.glass === 'off'
               ? '未启用'
               : status.glass === 'wallpaper'
-                ? '已加载桌面壁纸'
+                ? '已加载壁纸'
                 : status.glass === 'gradient'
-                  ? '使用渐变背景'
+                  ? '读取失败，用渐变兜底'
                   : '正在读取…',
           ),
         ),
@@ -5522,6 +5864,7 @@ function makeColorizer(scheme) {
         WALLPAPER_ROUTE,
         buildGlassSheet,
         buildGradientBackdrop,
+        getWallpaperDiag: () => wallpaperDiag,
         hexToRgba,
         parsePercent,
         CARD_TARGETS,
