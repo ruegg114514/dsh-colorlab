@@ -933,7 +933,12 @@ function okContrastRatio(hexA, hexB) {
      * `_centerCol_1ypvv_12`），可读部分（`centerCol`）跨构建稳定。
      */
 
-    /** 布局列（没有对应令牌，只能按类名片段命中）。 */
+    /**
+     * 布局列（没有对应令牌，只能按类名片段命中）。
+     *
+     * 它们的角色是**被透明化**：真正铺满窗口的是外层的 frame，
+     * 这些列叠在它上面。让它们透明，外层的半透明才透得出来。
+     */
     const LAYOUT_COLUMNS = Object.freeze([
       Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]', label: '左侧栏' }),
       Object.freeze({ key: 'center', sel: '[class*="centerCol"]', label: '会话栏' }),
@@ -1098,20 +1103,46 @@ function okContrastRatio(hexA, hexB) {
       if (darkDecls.length > 0) lines.push(DARK_SELECTOR + '{' + darkDecls.join(';') + '}')
       if (lightDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lightDecls.join(';') + '}')
 
-      /* 布局列：只设令牌不够，中列/侧栏真正铺底的是列内元素。 */
+      /* ⚠️ **alpha 不能层层叠加** —— 这是"开了和没开一样"的根因。
+       *
+       * 宿主的窗口结构是**嵌套**的，而且每一层都用同一个不透明色铺底：
+       *
+       *     .BynINW_frame      { background: var(--dsw-alias-bg-base) }   ← 铺满整个窗口
+       *       .BynINW_sidebarCol { background: var(--dsw-specific-sidebar-fill) }
+       *       .BynINW_centerCol  { background: var(--dsw-alias-bg-base) }
+       *       .BynINW_rightbarCol{ background: var(--dsw-specific-sidebar-fill) }
+       *
+       * 如果给**每一层**都加 alpha，合成后的不透明度是
+       *   a + a(1-a) + a(1-a)² … —— 0.6 叠两层就是 0.84、三层 0.944，
+       * 肉眼看等于完全不透明。实测正是这个症状。
+       *
+       * 正确做法：**只让最外层（frame）带 alpha**，内层全部设成 transparent，
+       * 让外层的半透明直接透到窗口材质上。这样合成后就是设定的那一个 alpha。
+       */
       if (wantAlpha) {
+        /* 最外层：窗口框架，唯一需要带 alpha 的一层。
+           ⚠️ **不能用 `[class*="frame"]`** —— 宿主里有 14 个 `_frame` 类
+           （`xpvNua_frame` 轮次导航器、`source_frame` 代码视图、`filmstrip__frame`…），
+           那个片段会把它们全部染上背景，直接糊掉界面。
+           窗口框架的特征是它**在 `[data-windows-titlebar]` 之下**，
+           用属性 + 片段双重限定才唯一。 */
+        const frameSel = '[data-windows-titlebar] [class*="frame"]'
+        if (dark.base) {
+          lines.push(DARK_SELECTOR + ' ' + frameSel
+            + '{background-color:' + hexToRgba(dark.base, aBase) + ' !important;'
+            + 'background:' + hexToRgba(dark.base, aBase) + ' !important}')
+        }
+        if (light.base) {
+          lines.push(LIGHT_SELECTOR + ' ' + frameSel
+            + '{background-color:' + hexToRgba(light.base, aBase) + ' !important;'
+            + 'background:' + hexToRgba(light.base, aBase) + ' !important}')
+        }
+        /* 内层：全部透明，否则会把外层的半透明盖回实色。 */
         for (const col of LAYOUT_COLUMNS) {
-          const dColor = col.key === 'center' ? dark.base : dark.sidebar
-          const lColor = col.key === 'center' ? light.base : light.sidebar
-          const a = col.key === 'center' ? aBase : aSidebar
-          if (dColor) {
-            lines.push(DARK_SELECTOR + ' ' + col.sel
-              + '{background-color:' + hexToRgba(dColor, a) + ' !important}')
-          }
-          if (lColor) {
-            lines.push(LIGHT_SELECTOR + ' ' + col.sel
-              + '{background-color:' + hexToRgba(lColor, a) + ' !important}')
-          }
+          lines.push(DARK_SELECTOR + ' ' + col.sel
+            + '{background:transparent !important;background-color:transparent !important}')
+          lines.push(LIGHT_SELECTOR + ' ' + col.sel
+            + '{background:transparent !important;background-color:transparent !important}')
         }
       }
 
