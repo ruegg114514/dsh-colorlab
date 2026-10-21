@@ -184,20 +184,27 @@ check(glass.includes('backdrop-filter:blur(20px) saturate(150%)'), '模糊半径
   'blur(20px) saturate(150%)')
 check(glass.includes('-webkit-backdrop-filter'), '带 -webkit- 前缀（Safari/旧 Chromium）')
 
-/* 关键：外层必须先透明 */
-check(glass.includes('html,body,#root'), '外层容器（html/body/#root）被透明化')
-const transparentRule = glass.split('\n').find((l) => l.startsWith('html,body,#root'))
-check(transparentRule !== undefined && transparentRule.includes('background:transparent'),
-  '外层规则里是 background:transparent')
-check(transparentRule !== undefined && transparentRule.includes('background-color:transparent'),
-  '外层规则里也清了 background-color')
-check(glass.includes('[class*="scrollBody"]'), 'scrollBody 被透明化')
-check(glass.includes('[class*="composerSeat"]'), 'composerSeat 被透明化')
+/* 【关键回归】**不许透明化外层容器**。
+   这条曾经写成"必须透明化"，结果真机上上半屏直接变黑 ——
+   因为我们背后没有自己的背景层（别人有全屏壁纸容器，透明掉才好看），
+   透明化只会露出 Electron 窗口的黑底。 */
+check(!glass.includes('html,body,#root'), '不透明化 html/body/#root（否则露黑底）')
+check(!glass.includes('[class*="scrollBody"]'), '不透明化 scrollBody')
+check(!glass.includes('[class*="composerSeat"]'), '不透明化 composerSeat')
+check(!/background:transparent !important/.test(glass),
+  '整张样式表里没有 background:transparent 规则')
+check(glass.split('\n').every((line) => !/^html\b|^body\b|^#root/.test(line)),
+  '没有任何以 html/body/#root 开头的规则')
 
 /* 容器要加 backdrop-filter */
 check(glass.includes('[class*="sidebarCol"]'), '侧栏加模糊')
 check(glass.includes('[class*="kuvljq_card"]'), '卡片加模糊')
 check(glass.includes('[class*="bubble"]'), '气泡加模糊')
+/* 选择器必须收窄：宽选择器（aside/nav/泛 sidebar/message）会糊掉大量不该模糊的元素。 */
+check(!/\baside\b/.test(glass) && !/\bnav\b/.test(glass), '不含 aside / nav 这类宽选择器')
+check(!glass.includes('[class*="message"]'), '不含 [class*="message"]（会命中消息内每一行）')
+check(!glass.includes('[class*="sidebar"]') || glass.includes('[class*="sidebarCol"]'),
+  '侧栏只命中 sidebarCol，不用泛 sidebar 片段')
 
 /* 全部目标都出现 */
 for (const target of GLASS_TARGETS) {
@@ -209,7 +216,9 @@ for (const target of GLASS_TARGETS) {
 const both = buildGlassSheet({ surfaceOpacity: '70', glass: 'on', glassBlur: '12' }, darkSurf, lightSurf)
 check(both.includes('rgba(52, 61, 70, 0.7)'), '同时开：alpha 生效')
 check(both.includes('backdrop-filter:blur(12px)'), '同时开：模糊生效')
-check(both.includes('--dsw-specific-input-major:transparent'), '同时开：输入框实体透明（让材质透出来）')
+/* 输入框**不许**被设成透明：真机上那样做会让输入框丢底色、和周围糊在一起。 */
+check(!both.includes('--dsw-specific-input-major:transparent'),
+  '不把输入框设成 transparent（否则它没底色）')
 
 /* ------------------------------------------------------------------ *
  * F. 常量合理性
@@ -220,8 +229,8 @@ console.log('  F. 常量')
 check(Array.isArray(GLASS_TARGETS) && GLASS_TARGETS.length >= 5, '毛玻璃目标 ≥ 5 组', String(GLASS_TARGETS.length))
 check(Array.isArray(LAYOUT_COLUMNS) && LAYOUT_COLUMNS.length === 3, '布局列 3 个（左/中/右）')
 check(LAYOUT_COLUMNS.every((c) => c.sel.includes('[class*=')), '布局列全部用类名片段选择器')
-check(Array.isArray(GLASS_TRANSPARENT) && GLASS_TRANSPARENT.length >= 5, '透明化容器 ≥ 5 个')
-check(GLASS_TRANSPARENT.includes('html') && GLASS_TRANSPARENT.includes('body'), '透明化列表含 html/body')
+check(Array.isArray(GLASS_TRANSPARENT) && GLASS_TRANSPARENT.length === 0,
+  '透明化容器列表为空（我们背后没有背景层）', String(GLASS_TRANSPARENT.length))
 check(GLASS_SHEET_ID === 'dsh-colorlab/glass.css', '样式表 id', GLASS_SHEET_ID)
 check(DARK_SELECTOR.includes('[data-ds-dark-theme][data-ds-dark-theme]'),
   '深色选择器把属性写两遍提权（不靠 !important）', DARK_SELECTOR)
