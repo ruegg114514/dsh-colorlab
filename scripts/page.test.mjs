@@ -203,7 +203,7 @@ function main() {
   check((byClass.get('dmt-row') || 0) >= 4, '设置行 ≥ 4 个', String(byClass.get('dmt-row') || 0))
   check((byClass.get('dmt-switch') || 0) >= 2, '开关 ≥ 2 个（启用 + 代码高亮）', String(byClass.get('dmt-switch') || 0))
   /* 两个分段选择：套用范围（2 项）+ 正文高亮亮度（3 项） */
-  check((byClass.get('dmt-seg') || 0) === 2, '分段选择 2 个（套用范围 + 正文亮度）', String(byClass.get('dmt-seg') || 0))
+  check((byClass.get('dmt-seg') || 0) === 3, '分段选择 3 个（套用范围 + 正文亮度 + 背景来源）', String(byClass.get('dmt-seg') || 0))
   check((byClass.get('dmt-swatch') || 0) === 6, '色块 6 个（3 背景 + 3 强调）', String(byClass.get('dmt-swatch') || 0))
   check((byClass.get('dmt-card') || 0) === 14, '色板预览 14 张卡', String(byClass.get('dmt-card') || 0))
   check((byClass.get('dmt-preview') || 0) === 1, '代码样例存在')
@@ -244,8 +244,8 @@ function main() {
 
   /* 自定义配色 + 正文颜色共用同一套槽位组件：18 + 9 = 27 */
   check((byClass.get('dmt-custom') || 0) === 2, '颜色容器 2 个（正文颜色 + 自定义配色）', String(byClass.get('dmt-custom') || 0))
-  check((byClass.get('dmt-customGroup') || 0) === 3, '自定义配色分 3 组', String(byClass.get('dmt-customGroup') || 0))
-  check((byClass.get('dmt-customGroupTitle') || 0) === 3, '3 个分组标题')
+  check((byClass.get('dmt-customGroup') || 0) === 4, '分组 4 个（界面底色/文字/语法色 + 透明与壁纸）', String(byClass.get('dmt-customGroup') || 0))
+  check((byClass.get('dmt-customGroupTitle') || 0) === 4, '4 个分组标题')
   check((byClass.get('dmt-slot') || 0) === 27, '颜色槽位 27 个（18 自定义 + 9 正文）', String(byClass.get('dmt-slot') || 0))
   check((byClass.get('dmt-slotSwatch') || 0) === 27, '27 个取色按钮', String(byClass.get('dmt-slotSwatch') || 0))
   check((byClass.get('dmt-slotHex') || 0) === 27, '27 个 hex 输入框', String(byClass.get('dmt-slotHex') || 0))
@@ -439,7 +439,7 @@ function main() {
       /* 改套用范围：点 "深浅都套用"。分段按钮总数 = 2（套用范围）+ 3（正文亮度）= 5。
          顺序由 OPTIONS 决定：前两个是 schemeMode，后三个是 proseBoost。 */
       const segButtons = nodes3.filter((node) => node.props && node.props.className === 'dmt-segBtn')
-      check(segButtons.length === 5, '写盘场景：5 个分段按钮（2 套用范围 + 3 正文亮度）', String(segButtons.length))
+      check(segButtons.length === 7, '写盘场景：7 个分段按钮（2 套用范围 + 3 正文亮度 + 2 背景来源）', String(segButtons.length))
       if (segButtons.length === 5) {
         const before = writes.length
         segButtons[1].props.onClick()
@@ -464,7 +464,7 @@ function main() {
 
       /* 正文高亮开关：点它必须写 prose 字段。 */
       const switches3 = nodes3.filter((node) => node.props && node.props.className === 'dmt-switch')
-      check(switches3.length === 4, '写盘场景：4 个开关（启用/代码高亮/正文高亮/过程行高亮）', String(switches3.length))
+      check(switches3.length === 5, '写盘场景：5 个开关（启用/代码高亮/正文高亮/过程行高亮/玻璃界面）', String(switches3.length))
       const proseSwitch = switches3.find((node) => node.props['aria-label'] === '正文高亮')
       check(proseSwitch !== undefined, '写盘场景：找到正文高亮开关')
       if (proseSwitch !== undefined) {
