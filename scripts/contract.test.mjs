@@ -279,13 +279,17 @@ function main() {
       '没有任何一行把插件设成 disabled: true（否则启动即被跳过）',
       disablingRows.length === 0 ? '' : JSON.stringify(disablingRows.map((r) => r.raw.slice(0, 60))),
     )
+    /* ⚠️ 不要求「恰好一条」：插件市场开关插件时会自己追加一条
+       `- id: mariana-theme` + `disabled: false` + 它自己的 config 块。
+       同 id 多条 patch 行按顺序叠加是宿主支持的语义，不是错误。
+       真正要守的是：**至少一条带 config**（用户设置确实落盘了）。 */
     const withConfig = configRows.filter((candidate) => candidate.hasConfig)
     check(
-      withConfig.length === 1,
-      '恰好一条 patch 行带 config 块（用户设置已落盘）',
+      withConfig.length >= 1,
+      '至少一条 patch 行带 config 块（用户设置已落盘）',
       `${withConfig.length} 行`,
     )
-    if (withConfig.length === 1) {
+    if (withConfig.length >= 1) {
       /* 该行下面应当带 config 块，且字段与 FIELD_DEFAULTS 同名。 */
       const blockMatch = /-\s+id:\s*mariana-theme[\s\S]*?(?=\n- |\n#|$)/.exec(hostPatch)
       const block = blockMatch !== null ? blockMatch[0] : ''
