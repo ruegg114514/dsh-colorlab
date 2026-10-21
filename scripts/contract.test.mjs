@@ -16,11 +16,27 @@
 
 import { readFileSync, existsSync, lstatSync, readlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
-const profile = process.env.DSH_PROFILE_DIR || 'C:\\Users\\15623\\.dsh\\profiles\\desktop'
+
+/**
+ * 目标 profile 目录。
+ *
+ * 优先取 `DSH_PROFILE_DIR`；否则按 `DSH_HOME`（缺省为 `os.homedir()/.dsh`）
+ * 拼出 `profiles/desktop`。
+ *
+ * **这里刻意不写死绝对路径** —— 曾经硬编码成某个用户的主目录，
+ * 结果既跑不了别人的机器，又把本机用户名带进了公开仓库。
+ */
+function resolveProfile() {
+  if (process.env.DSH_PROFILE_DIR) return process.env.DSH_PROFILE_DIR
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'profiles', process.env.DSH_PROFILE_NAME || 'desktop')
+}
+const profile = resolveProfile()
 
 const results = []
 function check(ok, name, detail) {
@@ -33,6 +49,34 @@ function readJson(path) {
 }
 
 /** 极简 YAML 取值：只为读出 `id:` 与 `name:` 行，不引依赖。 */
+/**
+ * 按**顶层块**读 patch 行，并记录每块里出现过哪些键。
+ *
+ * `readInsertRows` 只取 id/name；这里需要知道某一行有没有 `config:` 块、
+ * 有没有 `disabled: true` —— 这两件事决定了插件会不会被跳过。
+ *
+ * 做法：用 `^-\s+`（行首无缩进）切块，再在块内检测键名。
+ *
+ * @param {string} yamlText - patch 层 YAML 文本。
+ * @returns {Array<{id: string|null, hasConfig: boolean, disabledTrue: boolean, raw: string}>}
+ */
+function readTopLevelRows(yamlText) {
+  const blocks = yamlText.split(/\n(?=-[ \t])/)
+  const rows = []
+  for (const raw of blocks) {
+    const text = raw.replace(/^\s*#[^\n]*$/gm, '')
+    const idMatch = /^-[ \t]+id:[ \t]*['"]?([^'"\s]+)['"]?/m.exec(text)
+    if (idMatch === null) continue
+    rows.push({
+      id: idMatch[1],
+      hasConfig: /^[ \t]+config:[ \t]*$/m.test(text),
+      disabledTrue: /^[ \t]+disabled:[ \t]*true[ \t]*$/m.test(text),
+      raw: text,
+    })
+  }
+  return rows
+}
+
 function readInsertRows(yamlText) {
   const rows = []
   let current = null
@@ -213,14 +257,35 @@ function main() {
       duplicates.length === 0 ? '' : JSON.stringify(duplicates),
     )
 
-    /* 反过来：配置覆盖行应当存在（说明用户设置真的落盘了）。这是"存进去了"的正向证据。 */
-    const configRows = readInsertRows(hostPatch).filter((candidate) => candidate.id === 'mariana-theme')
+    /* 反过来：配置覆盖行应当存在（说明用户设置真的落盘了）。这是"存进去了"的正向证据。
+     *
+     * ⚠️ **不要求恰好一条。** 插件市场启用/禁用插件时会自己往这个 patch 层追加
+     * `- id: mariana-theme` + `disabled: false/true` 的行 —— 同一 id 的多条 patch
+     * 对宿主是合法的（按顺序叠加）。所以真正要守的不变量是：
+     *   1. 至少有一条 id=mariana-theme 的行
+     *   2. **没有任何一条把它设成 disabled: true**
+     *   3. 恰好一条带 config 块（用户设置）
+     * 曾经这里断言"恰好 1 条"，市场一追加行测试就红，属于断言写死了实现细节。
+     */
+    const configRows = readTopLevelRows(hostPatch).filter((candidate) => candidate.id === 'mariana-theme')
     check(
-      configRows.length === 1,
-      '宿主 cordis.patch.yml 有本插件的配置覆盖行（用户设置已落盘）',
-      configRows.length === 1 ? 'id=mariana-theme' : `${configRows.length} 行`,
+      configRows.length >= 1,
+      '宿主 cordis.patch.yml 有本插件的 patch 行',
+      `${configRows.length} 行`,
     )
-    if (configRows.length === 1) {
+    const disablingRows = configRows.filter((candidate) => candidate.disabledTrue)
+    check(
+      disablingRows.length === 0,
+      '没有任何一行把插件设成 disabled: true（否则启动即被跳过）',
+      disablingRows.length === 0 ? '' : JSON.stringify(disablingRows.map((r) => r.raw.slice(0, 60))),
+    )
+    const withConfig = configRows.filter((candidate) => candidate.hasConfig)
+    check(
+      withConfig.length === 1,
+      '恰好一条 patch 行带 config 块（用户设置已落盘）',
+      `${withConfig.length} 行`,
+    )
+    if (withConfig.length === 1) {
       /* 该行下面应当带 config 块，且字段与 FIELD_DEFAULTS 同名。 */
       const blockMatch = /-\s+id:\s*mariana-theme[\s\S]*?(?=\n- |\n#|$)/.exec(hostPatch)
       const block = blockMatch !== null ? blockMatch[0] : ''
