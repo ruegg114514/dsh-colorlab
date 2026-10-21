@@ -229,37 +229,6 @@ npm test        # 9 suites, offline
 npm run check   # syntax check
 ```
 
-## Credits
-
-The **surface opacity and frosted glass** feature is a port of
-[yaanlaan/deepseek-colorful](https://github.com/yaanlaan/deepseek-colorful)
-(MIT), specifically its `lib/theme-engine.js`. What was taken is the mechanism,
-not just the idea -- and the mechanism is three things that only work together:
-
-1. **The plugin prepends its own full-viewport background layer** (`position:
-   fixed`, `inset: 0`, `z-index: 0`, `pointer-events: none`). `backdrop-filter`
-   blurs whatever sits behind the element; with nothing behind it, the blur is
-   invisible. The reference states this directly: without a background it sets
-   alpha to 1 and does no translucency at all.
-2. **The window structure is made transparent** (html, body, #root, frame,
-   scrollBody, composer containers) and #root is lifted to `z-index: 1`, so the
-   layer shows through.
-3. **Surfaces then carry rgba alpha plus `backdrop-filter`**, blurring the layer.
-
-Earlier versions of this plugin did (3) alone and changed nothing on screen.
-
-The **OKLCH conversion** in `tools/oklch.mjs` is an independent implementation of
-Björn Ottosson's published matrices; the backdrop gradient uses it to shift
-lightness so the layer differs visibly from the surfaces above it.
-
-The **per-region background overrides and mode-scoped selectors** follow
-[Alicex7777/dsh-theme-colors](https://github.com/Alicex7777/dsh-theme-colors)
-(MIT), `lib/palette.js`, in particular raising specificity by repeating the
-dark-mode attribute instead of reaching for `!important`.
-
-No code is copied verbatim; what is taken is the approach, reimplemented against
-this plugin's architecture.
-
 ## License
 
 MIT. The Mariana palette originates from Sublime Text
@@ -461,31 +430,6 @@ WCAG 对比度，不是估算。
 npm test        # 11 个套件，离线可跑
 npm run check   # 语法检查
 ```
-
-## 致谢
-
-**表面不透明度与毛玻璃**是
-[yaanlaan/deepseek-colorful](https://github.com/yaanlaan/deepseek-colorful)（MIT）
-的 `lib/theme-engine.js` 的移植。取的是**机制**而不是点子，而这个机制必须三件事同时成立：
-
-1. **插件自己 prepend 一层全屏背景**（`position: fixed`、`inset: 0`、
-   `z-index: 0`、`pointer-events: none`）。`backdrop-filter` 模糊的是元素背后的东西，
-   背后什么都没有时，模糊在屏幕上等于没做。原项目的注释写得很直白：
-   没有背景时 alpha 直接取 1，根本不做半透明。
-2. **把窗口结构透明化**（html / body / #root / frame / scrollBody / 输入框容器），
-   并把 #root 抬到 `z-index: 1`，让那层背景露出来。
-3. **表面带 rgba alpha + `backdrop-filter`**，模糊背景层。
-
-本插件早先的版本只做了第 3 件，所以「一点变化都没有」。
-
-**OKLCH 换算**（`tools/oklch.mjs`）是按 Björn Ottosson 公开矩阵独立实现的，
-背景渐变用它拉开明暗差，否则透过半透明看到的还是自己。
-
-**按区域覆盖背景与按模式限定选择器**参考了
-[Alicex7777/dsh-theme-colors](https://github.com/Alicex7777/dsh-theme-colors)（MIT）
-的 `lib/palette.js`，尤其是「把深色属性写两遍来提权、而不是直接上 `!important`」这个手法。
-
-没有逐字复制代码 —— 取的是思路，按本插件自己的架构重新实现。
 
 ## 许可
 
