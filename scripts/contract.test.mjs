@@ -116,6 +116,43 @@ function main() {
   const bundles = (profilePkg.dsh && profilePkg.dsh.profile && profilePkg.dsh.profile.bundles) || []
   check(bundles.includes('dsh-colorlab'), 'dsh.profile.bundles 里有 dsh-colorlab', String(bundles.length) + ' 项')
 
+  /* ---- 1.5 插件市场的持久化禁用表 ----
+   *
+   * 这是最难查的一处状态。插件市场（dsh-market）把「关掉的插件」记在
+   * `.dsh-market/state.json` 的 `disabled` 数组里，之后**每次启动**都会：
+   *
+   *   1. 把该包从 `dsh.profile.bundles` 里摘掉
+   *      （日志原文："dsh.profile.bundles removed so the official page's
+   *        package switch agrees (#696)"）
+   *   2. 把 `cordis.patch.yml` 里对应的行设成 `disabled`
+   *   3. 日志写 "plugin kept off: <name>"
+   *
+   * 表现是插件彻底消失：设置里没有它、bundles 里没有它、patch 行被禁用，
+   * 而代码本身完全正常。手工改 bundles / patch 都会被下一次启动覆盖回去 ——
+   * 必须同时清掉这张表。
+   */
+  {
+    const marketState = join(profile, '.dsh-market', 'state.json')
+    if (existsSync(marketState)) {
+      let disabled = []
+      let parsed = true
+      try {
+        const raw = JSON.parse(readFileSync(marketState, 'utf8'))
+        disabled = Array.isArray(raw.disabled) ? raw.disabled : []
+      } catch {
+        parsed = false
+      }
+      check(parsed, '.dsh-market/state.json 可解析')
+      check(
+        parsed && !disabled.includes('dsh-colorlab'),
+        '插件市场 disabled 表里没有 dsh-colorlab（否则每次启动都会被强制关闭）',
+        disabled.length === 0 ? '表为空' : disabled.join(', '),
+      )
+    } else {
+      check(true, '插件市场状态文件不存在（未装过 market 或从未启用）', '跳过')
+    }
+  }
+
   /* ---- 2. 软链 ---- */
   const linkPath = join(profile, 'node_modules', 'dsh-colorlab')
   check(existsSync(linkPath), 'node_modules 里已安装')
