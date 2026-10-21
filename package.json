@@ -50,6 +50,7 @@
     "scripts/page.test.mjs",
     "scripts/card.test.mjs",
     "scripts/latex.test.mjs",
+    "scripts/glass.test.mjs",
     "scripts/contract.test.mjs",
     "scripts/loader.test.mjs",
     "scripts/host.test.mjs",
