@@ -941,28 +941,39 @@ function okContrastRatio(hexA, hexB) {
     ])
 
     /** 要加 backdrop-filter 的容器（类名片段）。 */
+    /**
+     * 要加 `backdrop-filter` 的表面容器。
+     *
+     * **选择器刻意收窄**：只命中确切的容器类名片段。
+     * 早先用过 `aside`、`nav`、`[class*="sidebar"]`、`[class*="message"]`
+     * 这类宽选择器 —— 它们会命中几十个本不该模糊的元素（导航器框架、消息内的
+     * 每一行…），既糊掉内容又拖慢渲染。宁可少模糊几个，也不要糊成一片。
+     */
     const GLASS_TARGETS = Object.freeze([
-      Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"], [class*="sidebar"], aside, nav' }),
+      Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]' }),
       Object.freeze({ key: 'center', sel: '[class*="centerCol"]' }),
-      Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"], [class*="Rightbar"]' }),
+      Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"]' }),
       Object.freeze({ key: 'card', sel: '[class*="kuvljq_card"], [class*="flL80G_file"], [class*="KuQXFq_card"], [class*="QSKnSa_card"]' }),
-      Object.freeze({ key: 'bubble', sel: '[class*="bubble"], [class*="chat-node"], [class*="message"]' }),
-      Object.freeze({ key: 'composer', sel: '[class*="RlGAzG_card"], [class*="composer"]' }),
+      Object.freeze({ key: 'bubble', sel: '[class*="bubble"]' }),
     ])
 
     /**
-     * 开毛玻璃时必须透明化的外层容器 —— 不透明就看不见模糊。
-     * 只列**结构性容器**（frame / scrollBody / composerSeat 之类），
-     * 不给内容元素加，避免把该有底色的东西弄透明。
+     * ⚠️ **不再透明化任何外层容器。**
+     *
+     * 这是抄错了别人的一处做法，代价很直观：上半屏直接变黑。
+     *
+     * 别人（yaanlaan/deepseek-colorful）会**自己插入一个全屏背景容器**
+     * （`position: fixed`、`z-index: 0`、壁纸或渐变），所以它把
+     * `html/body/#root` 透明化是对的 —— 底下有它自己铺的东西。
+     *
+     * 我们**没有背景层**。把窗口结构透明掉之后，露出来的是 **Electron 窗口
+     * 自己的黑底** —— 于是"毛玻璃"实际效果是「上半屏发黑、只有少数自带底色的
+     * 区块正常」。这条已整个删除。
+     *
+     * 现在毛玻璃只做一件事：给**表面容器**加 `backdrop-filter`。
+     * 半透明由「表面不透明度」改 token 提供，两者各司其职。
      */
-    const GLASS_TRANSPARENT = Object.freeze([
-      'html', 'body', '#root',
-      '[class*="frame"]', '[class*="_frame_"]',
-      '[class*="scrollBody"]', '[class*="_scrollBody_"]',
-      '[class*="composerSeat"]', '[class*="_composerSeat_"]',
-      '[class*="composerStack"]', '[class*="composerHero"]',
-      '[class*="viewArea"]', '[class*="Dc7zOa_root"]',
-    ])
+    const GLASS_TRANSPARENT = Object.freeze([])
 
     /**
      * 解析 0–100 的「表面不透明度」。无效值按 100（不透明）处理。
@@ -1076,8 +1087,9 @@ function okContrastRatio(hexA, hexB) {
         if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)) + important)
         if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)) + important)
         if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1) + important)
-        /* 输入框实体：让它完全透明，交给毛玻璃与底下的材质 */
-        if (wantGlass) out.push('--dsw-specific-input-major:transparent' + important)
+        /* ⚠️ 曾经在这里把输入框设成 transparent —— 结果是输入框直接没底色、
+           和周围糊在一起。**不要这样做**：输入框需要自己的可读底。
+           毛玻璃只负责模糊，不改它的颜色。 */
         return out
       }
 
@@ -1094,22 +1106,22 @@ function okContrastRatio(hexA, hexB) {
           const a = col.key === 'center' ? aBase : aSidebar
           if (dColor) {
             lines.push(DARK_SELECTOR + ' ' + col.sel
-              + '{background:' + hexToRgba(dColor, a) + ' !important;'
-              + 'background-color:' + hexToRgba(dColor, a) + ' !important}')
+              + '{background-color:' + hexToRgba(dColor, a) + ' !important}')
           }
           if (lColor) {
             lines.push(LIGHT_SELECTOR + ' ' + col.sel
-              + '{background:' + hexToRgba(lColor, a) + ' !important;'
-              + 'background-color:' + hexToRgba(lColor, a) + ' !important}')
+              + '{background-color:' + hexToRgba(lColor, a) + ' !important}')
           }
         }
       }
 
       if (wantGlass) {
-        /* 1) 先把外层结构透明化，否则底下不透、模糊看不见 */
-        lines.push(GLASS_TRANSPARENT.join(',')
-          + '{background:transparent !important;background-color:transparent !important}')
-        /* 2) 再给容器加 backdrop-filter */
+        /* 外层容器**不透明化**（见 GLASS_TRANSPARENT 的注释：我们背后没有背景层，
+           透明掉只会露出 Electron 的黑底）。列表为空时这段直接跳过。 */
+        if (GLASS_TRANSPARENT.length > 0) {
+          lines.push(GLASS_TRANSPARENT.join(',')
+            + '{background:transparent !important;background-color:transparent !important}')
+        }
         const filter = 'backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important;'
           + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important'
         for (const target of GLASS_TARGETS) {
@@ -3128,6 +3140,25 @@ function makeColorizer(scheme) {
       const darkSurfaces = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
       const lightSurfaces = withOverrides(LIGHT, custom.surface)
       const css = wanted ? buildGlassSheet(state, darkSurfaces, lightSurfaces) : ''
+      /* 临时诊断：把实际参与渲染的值暴露出来（查完即删）。 */
+      try {
+        if (typeof document !== 'undefined') {
+          document.__dmtGlassDebug = {
+            wanted,
+            surfaceOpacity: state.surfaceOpacity,
+            glass: state.glass,
+            glassBlur: state.glassBlur,
+            glassSaturate: state.glassSaturate,
+            parsedOpacity: parseSurfaceOpacity(state.surfaceOpacity),
+            cssLength: css.length,
+            darkBase: darkSurfaces.base,
+            lightBase: lightSurfaces.base,
+            calls: ((document.__dmtGlassDebug && document.__dmtGlassDebug.calls) || 0) + 1,
+          }
+        }
+      } catch {
+        /* 诊断失败不影响功能 */
+      }
       if (css === '') {
         if (glassEl !== null) {
           try {
