@@ -71,8 +71,13 @@ const WALLPAPER_MAX_BYTES = 12 * 1024 * 1024
  * 按优先级列出壁纸候选路径。
  * @returns {string[]} 可能存在的壁纸文件路径。
  */
-function wallpaperCandidates() {
+function wallpaperCandidates(customPath) {
   const out = []
+  /* 用户自选壁纸优先：设置里指定了路径就用它，不再读系统壁纸。 */
+  if (typeof customPath === 'string' && customPath.trim() !== '') {
+    out.push(customPath.trim())
+    return out
+  }
   const appData = process.env.APPDATA
   if (appData) {
     out.push(join(appData, 'Microsoft', 'Windows', 'Themes', 'TranscodedWallpaper'))
@@ -110,14 +115,17 @@ let wallpaperCache = { mtime: 0, bytes: null, mime: 'image/jpeg' }
  * 读取当前壁纸（带缓存）。
  * @returns {{bytes: Buffer, mime: string}|null} 读不到时返回 null。
  */
-function readWallpaper() {
-  for (const path of wallpaperCandidates()) {
+function readWallpaper(customPath) {
+  for (const path of wallpaperCandidates(customPath)) {
     try {
       if (!existsSync(path)) continue
       const stats = statSync(path)
       if (!stats.isFile() || stats.size === 0 || stats.size > WALLPAPER_MAX_BYTES) continue
 
-      if (wallpaperCache.bytes !== null && wallpaperCache.mtime === stats.mtimeMs) {
+      /* 缓存键带上路径：换壁纸（或改设置后指向别的文件）必须立刻生效，
+         不能只比 mtime —— 两个文件可能 mtime 相同。 */
+      if (wallpaperCache.bytes !== null && wallpaperCache.mtime === stats.mtimeMs
+        && wallpaperCache.path === path) {
         return wallpaperCache
       }
 
@@ -142,7 +150,7 @@ function readWallpaper() {
  *
  * @param {object} ctx - Host plugin context.
  */
-function registerWallpaperRoute(ctx) {
+function registerWallpaperRoute(ctx, getCustomPath) {
   try {
     ctx.inject(['webServer'], (hostCtx) => {
       const dispose = hostCtx.webServer.register({
@@ -154,7 +162,7 @@ function registerWallpaperRoute(ctx) {
             response.end()
             return
           }
-          const found = readWallpaper()
+          const found = readWallpaper(typeof getCustomPath === 'function' ? getCustomPath() : '')
           if (found === null) {
             response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
             response.end('wallpaper not found')
@@ -247,6 +255,9 @@ const FIELD_DEFAULTS = {
   glassFog: '16',
   /* 玻璃背后的模糊半径 0–40 px。 */
   glassBlur: '16',
+  /* 自选壁纸的绝对路径；空串 = 跟随系统桌面壁纸。
+     指向本机图片文件时优先使用它，Host 会校验存在性与大小。 */
+  glassWallpaperPath: '',
 }
 
 /** 首屏画布色（standard 变体的 base）。客户端随后会用真实设置覆盖。 */
@@ -378,6 +389,7 @@ function buildConfig() {
     glassTint: str(FIELD_DEFAULTS.glassTint),
     glassFog: str(FIELD_DEFAULTS.glassFog),
     glassBlur: str(FIELD_DEFAULTS.glassBlur),
+    glassWallpaperPath: str(FIELD_DEFAULTS.glassWallpaperPath),
   })
 }
 
@@ -457,6 +469,8 @@ export function apply(ctx, config) {
     table.push({ kind: 'style', text: bootStyle() })
   })
 
-  /* 壁纸路由：给「玻璃界面」提供被模糊的那张底图。 */
-  registerWallpaperRoute(ctx)
+  /* 壁纸路由：给「玻璃界面」提供被模糊的那张底图。
+     传入读配置的闭包 —— 用户在设置里换了自选壁纸路径后，
+     下一次请求就会用新路径，不需要重启。 */
+  registerWallpaperRoute(ctx, () => readField(config, 'glassWallpaperPath'))
 }
