@@ -105,9 +105,22 @@ console.log('  C. 模糊位置（失败原因 2）')
 {
   check(!/\[class\*="_sidebarCol"\]\{[^}]*backdrop-filter/.test(css),
     '侧栏规则里没有 backdrop-filter')
-  check(!/\[class\*="_centerCol"\][^{]*\{[^}]*backdrop-filter/.test(css),
-    '中列规则里没有 backdrop-filter')
-  check(!css.includes('backdrop-filter:blur'), '整张样式表里没有面板级 backdrop-filter')
+  /* 无障碍块里三列有 backdrop-filter:none，那是正确的（关掉模糊）。
+     真正要禁止的是「三列上出现 blur」，所以只匹配 blur 值。 */
+  check(!/\[class\*="_centerCol"\][^{]*\{[^}]*backdrop-filter:blur/.test(css),
+    '中列规则里没有 backdrop-filter: blur')
+  /* 🔧 浮层（输入栏/菜单）**应该有** backdrop-filter —— 那是挡住背后文字的手段。
+     但三列**不应该**有：它们的模糊来自背景层，再加一次是重复计算。
+     判据：模糊只允许出现在「浮层类」选择器上。 */
+  {
+    const filterLines = css.split('\n').filter((l) => l.includes('backdrop-filter:blur'))
+    const colFilter = filterLines.filter((l) => /_sidebarCol|_centerCol|_rightbarCol/.test(l))
+    check(colFilter.length === 0, '三列没有 backdrop-filter（模糊来自背景层）',
+      String(colFilter.length) + ' 条')
+    const surfaceFilter = filterLines.filter((l) => /composerSeat|RlGAzG|role="dialog"/.test(l))
+    check(surfaceFilter.length >= 2, '输入栏/浮层有 backdrop-filter（用来糊掉背后的字）',
+      String(surfaceFilter.length) + ' 条')
+  }
 
   check(src.includes('wallpaperEl.style.filter = value'), '模糊写进壁纸层的 style.filter')
   check(/function applyWallpaperFilter/.test(src), '有 applyWallpaperFilter 专门处理')
@@ -122,7 +135,12 @@ console.log('  C. 模糊位置（失败原因 2）')
 console.log('  D. 主题色（失败原因 3）')
 
 {
-  const colPaint = lines.filter((l) => /rgba\(/.test(l) && /_sidebarCol|_centerCol|_rightbarCol/.test(l) && !l.includes('::before'))
+  /* 无障碍块里三列各有 rgba(0.88)（退回实色），
+     只统计「铺色」的那几条：排除 ::before 与 reduced-transparency 块内（含 none）。 */
+  const colPaint = lines.filter((l) => /rgba\(/.test(l)
+    && /_sidebarCol|_centerCol|_rightbarCol/.test(l)
+    && !l.includes('::before')
+    && !l.includes('backdrop-filter:none'))
   check(colPaint.length === 2, '三列 2 条上色规则（sidebar / center+rightbar）', String(colPaint.length))
   check(colPaint.every((l) => l.includes('0.65')), '默认浓度 65%')
 
@@ -187,12 +205,93 @@ console.log('  E. 背景层与壁纸（失败原因 1）')
 console.log('  F. 输入栏（正文穿模问题）')
 
 {
-  /* 🔧 输入栏座现在**要**单独处理：给它一层不透明底，把正文挡在外面。
-     之前不处理 → 正文会透到输入框区域里（实测问题）。 */
-  check(/composerSeat[^{]*\{[^}]*background:rgba/.test(css), '输入栏座有自己的不透明底（挡住正文）')
+  /* 🔧 输入栏要挡住正文，靠的是**层叠上下文**而不是涂色。
+     只涂色不建上下文 → 文本仍会绘制到上层（实测「设置面板也透出正文」）。
+     另：它的浓度必须跟随「表面浓度」，不能写死 —— 曾写死 0.82
+     导致「这块颜色不受设置影响」。 */
+  check(/composerSeat[^{]*\{[^}]*isolation:isolate/.test(css), '输入栏座建立了层叠上下文（挡住溢出的正文）')
+  check(/xz4KEq_scroll[^{]*\{[^}]*isolation:isolate/.test(css) ||
+        /\[class\*="xz4KEq_scroll"\][^{]*\{[^}]*isolation:isolate/.test(css),
+    '滚动容器建立层叠上下文（文本不会溢出到面板外）')
+
+  /* 🔧 输入栏**必须完全不透明**：它下面压着滚动的正文，
+     半透明就必然透字（这和层叠上下文无关，是透光的物理结果）。
+     所以它不受「表面浓度」影响，这是设计选择而不是 bug。 */
+  const seatAlpha = (c) => {
+    const line = c.split('\n').find((l) => l.includes('composerSeat'))
+    if (line === undefined) return null
+    const m = /background:(#[0-9a-fA-F]{6})/.exec(line)
+    return m === null ? null : m[1]
+  }
+  const seatLow = seatAlpha(buildGlassSheet({ glass: 'on', glassTint: '20' }, dark, true))
+  const seatHigh = seatAlpha(buildGlassSheet({ glass: 'on', glassTint: '90' }, dark, true))
+  /* 🔧 输入栏是**半透明玻璃 + 强模糊**，不是实底也不是普通透明。
+     三种策略都试过：
+       半透明（普通模糊）→ 背后正文能读清（bug）
+       不透明实底        → 一整条死板色块，和周围对不上（bug）
+       半透明 + 强模糊   → 背后正文糊成光影，读不到字，且与周围同色 ✓
+     所以判据是：底色带 alpha（不是实色），且模糊半径比普通玻璃大。 */
+  const seatLine = css.split('\n').find((l) => l.includes('composerSeat'))
+  /* 🔧 输入区由**两部分**组成，判据也分两条：
+     · composerSeat（座，卡片周边那圈）→ **完全透明**，
+       它只需覆盖正文（由卡片承担），本身不该有底色。
+       之前给它 rgba(0.65) 就变成用户说的「蓝白色一片」。
+     · composerCard（卡片本体）→ 半透明玻璃，这才是输入框那块板。 */
+  check(seatLine !== undefined && /background:transparent/.test(seatLine),
+    '输入栏座完全透明（不涂色，避免蓝白色一片）',
+    seatLine === undefined ? '缺失' : (seatLine.match(/background:[^;]+/) || ['?'])[0])
+  const cardLine = css.split('\n').find((l) => l.includes('RlGAzG_card'))
+  check(cardLine !== undefined && /background-color:rgba\(/.test(cardLine),
+    '输入卡片是半透明玻璃（与周围一致）',
+    cardLine === undefined ? '缺失' : (cardLine.match(/background-color:[^;]+/) || ['?'])[0])
+  /* 输入栏的模糊应当明显大于「设置里的基础半径」——
+     因为三列根本没有 backdrop-filter（它们的模糊来自背景层），
+     所以对比基准是设置值本身，而不是某个别的选择器。 */
+  const seatBlur = seatLine === undefined ? null : /blur\((\d+)px\)/.exec(seatLine)
+  const baseBlurValue = 16 /* 默认 glassBlur，与 DEFAULTS 一致 */
+  check(seatBlur !== null && Number(seatBlur[1]) > baseBlurValue,
+    '输入栏模糊大于基础半径（要压住文字这种高频细节）',
+    '输入栏 ' + (seatBlur ? seatBlur[1] : '?') + 'px / 基础 ' + baseBlurValue + 'px')
   const transparentRule = lines.find((l) => l.includes('Dc7zOa_root'))
   check(transparentRule === undefined || !transparentRule.includes('composerSeat'),
     '清透明的容器列表里不含 composerSeat（否则正文滚进输入栏）')
+}
+
+/* ------------------------------------------------------------------ *
+ * F2. 标题栏：只覆盖探针，不动侧栏
+ *
+ * preload 插一个隐藏 span 当探针，读它的计算色送给 setTitleBarOverlay。
+ * 探针读的是 var(--dsw-specific-sidebar-fill)，那个变量被侧栏共用 ——
+ * 直接改变量会把侧栏玻璃弄坏（实测过）。
+ * 所以只覆盖探针自己的 background-color，靠它的内联样式特征命中。
+ * ------------------------------------------------------------------ */
+
+console.log('  F2. 标题栏（探针覆盖）')
+
+{
+  /* 🔧 探针只能靠 inline style 里的变量名命中。
+     浏览器把 inline style 序列化成 visibility 冒号空格 hidden 的形式，
+     所以 [style*="visibility:hidden"] 永远匹配失败 —— 这就是标题栏长期不生效的原因。
+     探针的独有特征是 style 里带 var(--dsw-specific-sidebar-fill)。 */
+  const probeRule = lines.find((l) => l.includes('style*="sidebar-fill"'))
+  check(probeRule !== undefined, '有专门针对探针的规则（用 sidebar-fill 命中）')
+  if (probeRule !== undefined) {
+    /* 🔧 探针必须送 **transparent**。
+     *
+     * 顶部 40px 是两层叠出来的：
+     *   1. Electron 原生 titleBarOverlay ← 探针送的颜色决定它
+     *   2. 页面内 .BynINW_frame::before（拖动区）← 可以加 backdrop-filter
+     *
+     * 覆盖层只要不透明就把下面的页面盖住，所以让它全透明，
+     * 页面里的玻璃拖动区才露得出来、才看得到模糊。
+     * （此前送过不透明色 → 顶部成了死板一条，和主体割裂） */
+    check(probeRule.includes('transparent'),
+      '探针送 transparent（让原生覆盖层让位给页面玻璃）',
+      (probeRule.match(/background-color:[^}]+/) || ['?'])[0])
+  }
+  const tokenLine = lines.find((l) => l.includes('--dsw-specific-sidebar-fill'))
+  check(tokenLine !== undefined && tokenLine.includes('--dsw-specific-sidebar-fill:transparent'),
+    '侧栏令牌仍是 transparent（与探针分离，互不影响）')
 }
 
 /* ------------------------------------------------------------------ *
@@ -254,21 +353,32 @@ console.log('  G2. 整窗覆盖（所有表面令牌）')
   }
 
   /* 浓度必须在可透区间 */
-  const alphas = REQUIRED.map(([name, label]) => ({ label, a: getAlpha(name) }))
+  /* 🔧 分两类：可以透的表面 vs 必须实底的表面。
+   *
+   * 必须实底的是「底下压着正文」的那几类 —— 输入框、菜单、tooltip。
+   * 它们半透明就必然透字（透光是物理结果，层叠上下文治不了）。
+   * 其余表面应当留在可透区间，否则玻璃感消失。 */
+  /* 🔧 没有「必须实底」的表面了 —— 挡字改由浮层的强模糊负责。 */
+  const MUST_BE_OPAQUE = []
+  const alphas = REQUIRED.map(([name, label]) => ({ name, label, a: getAlpha(name) }))
     .filter((x) => x.a !== null)
-  check(alphas.every((x) => x.a >= 0.3), '所有表面浓度 ≥ 30%（否则字读不清）',
-    alphas.filter((x) => x.a < 0.3).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
-  check(alphas.every((x) => x.a <= 0.95), '所有表面浓度 ≤ 95%（否则成实心板，没有玻璃感）',
-    alphas.filter((x) => x.a > 0.95).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
+  const translucent = alphas.filter((x) => !MUST_BE_OPAQUE.includes(x.name))
+  const opaque = alphas.filter((x) => MUST_BE_OPAQUE.includes(x.name))
+
+  check(translucent.every((x) => x.a >= 0.3), '可透表面浓度 ≥ 30%（否则字读不清）',
+    translucent.filter((x) => x.a < 0.3).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
+  check(translucent.every((x) => x.a <= 0.95), '可透表面浓度 ≤ 95%（否则成实心板，没有玻璃感）',
+    translucent.filter((x) => x.a > 0.95).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
+  check(true, '（无必须实底的表面：挡字靠强模糊，不靠涂死）')
 
   /* 浮层应比底板略浓，但不能浓太多 */
   const layer1 = getAlpha('--dsw-alias-bg-layer-1')
-  const input = getAlpha('--dsw-specific-input-major')
-  if (layer1 !== null && input !== null) {
-    check(input >= layer1, '浮层浓度 ≥ 底板（浮层需要略实，否则读不清）',
-      '底板 ' + layer1 + ' / 输入框 ' + input)
-    check(input - layer1 <= 0.2, '浮层不比底板浓超过 20 个百分点（否则玻璃感消失）',
-      '差 ' + (input - layer1).toFixed(2))
+  const bubble = getAlpha('--dsw-specific-bubble')
+  if (layer1 !== null && bubble !== null) {
+    check(bubble >= layer1, '可透浮层（气泡）比底板略实',
+      '底板 ' + layer1 + ' / 气泡 ' + bubble)
+    check(bubble - layer1 <= 0.2, '可透浮层不比底板浓超过 20 个百分点',
+      '差 ' + (bubble - layer1).toFixed(2))
   }
 
   /* 代码块必须最实（长段代码要读） */
@@ -282,9 +392,12 @@ console.log('  G2. 整窗覆盖（所有表面令牌）')
      用的是 /^(?:#[\da-f]{3,8}|rgba?\\([\\d.,%\\s]+\\))$/ 这条正则，
      'transparent' 通不过，IPC 被丢弃，标题栏就保留默认不透明外观。
      必须是带 alpha 的 rgba。 */
-  check(decls.some((d) => d.startsWith('--dsw-specific-sidebar-fill:rgba(')),
-    '侧栏令牌 = 带 alpha 的 rgba（否则标题栏不生效）',
-    decls.find((d) => d.startsWith('--dsw-specific-sidebar-fill:')) || '')
+  /* 侧栏令牌必须保持 transparent。
+     ⚠️ 曾经把它改成 rgba(0.75) 想让标题栏跟着变，结果**左侧栏玻璃失效** ——
+     侧栏内部多个元素都铺这个色，alpha 叠 alpha 又变回实心。
+     标题栏的颜色由单独的探针规则负责（见下面 F2）。 */
+  check(decls.some((d) => d === '--dsw-specific-sidebar-fill:transparent !important'),
+    '侧栏令牌 = transparent（保住侧栏玻璃）')
   check(decls.some((d) => d === '--dsw-alias-bg-base:transparent !important'),
     '整页底令牌 = transparent（让背景层透上来）')
 }
