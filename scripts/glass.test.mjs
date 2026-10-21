@@ -131,10 +131,13 @@ const half = buildGlassSheet({ surfaceOpacity: '50', glass: 'off' }, darkSurf, l
 check(half !== '', '50% 产生样式')
 check(half.includes(DARK_SELECTOR), '有深色模式规则', DARK_SELECTOR)
 check(half.includes(LIGHT_SELECTOR), '有浅色模式规则', LIGHT_SELECTOR)
-check(half.includes('--dsw-alias-bg-base:rgba(52, 61, 70, 0.5)'), '深色底色带 0.5 alpha',
-  'rgba(52, 61, 70, 0.5)')
-check(half.includes('--dsw-specific-sidebar-fill:rgba(46, 54, 63, 0.54)'), '侧栏 alpha 略高（1.08×）')
-check(half.includes('--dsw-alias-bg-layer-2:rgba(66, 75, 85, 0.59)'), 'layer2 alpha 更高（1.18×）')
+check(half.includes('--dsw-alias-bg-base:rgba(52, 61, 70, 0.5) !important'),
+  '深色底色带 0.5 alpha，且带 !important',
+  'rgba(52, 61, 70, 0.5) !important')
+check(half.includes('--dsw-specific-sidebar-fill:rgba(46, 54, 63, 0.54) !important'),
+  '侧栏 alpha 略高（1.08×）且带 !important')
+check(half.includes('--dsw-alias-bg-layer-2:rgba(66, 75, 85, 0.59) !important'),
+  'layer2 alpha 更高（1.18×）且带 !important')
 check(!half.includes('#343D46'), '不再出现原始 6 位 hex（已换成 rgba）')
 check(!/#[0-9a-fA-F]{8}\b/.test(half), '不含 8 位 hex（统一走 rgba）')
 
@@ -143,6 +146,26 @@ check(half.includes('[class*="centerCol"]'), '给中列类名片段上色')
 check(half.includes('[class*="sidebarCol"]'), '给左栏类名片段上色')
 check(half.includes('[class*="rightbarCol"]'), '给右栏类名片段上色')
 check((half.match(/!important/g) || []).length > 0, '布局列覆盖带 !important（压过宿主）')
+
+/* 【关键回归】token 声明必须**全部**带 !important。
+   宿主 ThemePresenter 用 body.style.setProperty(...) 写这些 token ——
+   内联样式压过普通样式表规则，不加 !important 的话整段覆盖层完全无效。
+   实测症状：不透明度拖到底毫无变化，只有 backdrop-filter 生效。 */
+{
+  const tokenDecls = half.split('\n')
+    .filter((line) => line.includes('--dsw-'))
+    .flatMap((line) => (line.match(/--dsw-[a-z0-9-]+:[^;!}]+/g) || []))
+  check(tokenDecls.length >= 7, 'token 声明数量 ≥ 7', String(tokenDecls.length))
+  const missing = half.split('\n')
+    .filter((line) => line.includes('--dsw-'))
+    .filter((line) => {
+      /* 找出这条规则里没有跟 !important 的声明 */
+      const decls = line.match(/--dsw-[a-z0-9-]+:[^;}]+/g) || []
+      return decls.some((d) => !d.includes('!important'))
+    })
+  check(missing.length === 0, '每条 token 声明都带 !important（否则被宿主内联样式压掉）',
+    missing.length === 0 ? '' : missing[0].slice(0, 60))
+}
 
 /* 0% = 完全透明 */
 const zero = buildGlassSheet({ surfaceOpacity: '0', glass: 'off' }, darkSurf, lightSurf)
