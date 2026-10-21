@@ -180,15 +180,13 @@ window.__ModuleLoader__.load({
       summaryColor: '#FAC863',
       /* 文件卡片头部横带颜色；空串 = 跟随卡片底色（宿主默认中性灰）。 */
       cardColor: '',
-      /* 表面不透明度（0–100，字符串）。100 = 完全不透明；调低后表面变半透明，
-         宿主窗口的**原生亚克力材质**（Windows `backgroundMaterial: "acrylic"`）
-         就会透出来。只作用于「表面」类 token，不碰文字/边框/菜单。 */
+      /* 表面不透明度 0–100。100 = 不透明。 */
       surfaceOpacity: '100',
-      /* 毛玻璃开关：'on' / 'off'。给页面内的层叠表面加 `backdrop-filter`。 */
+      /* 毛玻璃开关：'on' / 'off'。 */
       glass: 'off',
-      /* 毛玻璃模糊半径（0–40px）。 */
+      /* 毛玻璃模糊半径 0–40 px。 */
       glassBlur: '16',
-      /* 毛玻璃饱和度（100–220%）。低于 100 会让背景发灰。 */
+      /* 毛玻璃饱和度 100–220 %。 */
       glassSaturate: '120',
       /* 要高亮哪些过程行：JSON 数组，值是 ROW_VARIANTS 里的 variant。 */
       rowVariants: '["write","edit","bash","summary","turn"]',
@@ -581,12 +579,643 @@ window.__ModuleLoader__.load({
      * @param {object} state - `{ enabled, schemeMode, surface, accent, syntax, prose, custom }`
      * @returns {Record<string, {light: string, dark: string}>}
      */
+    function resolveTokens(state) {
+      const custom = parseCustom(state && state.custom)
+      /* 自定义配色只覆盖深色那一套；浅色保持插件自带的派生值（见 CUSTOM_SLOTS 注释）。 */
+      const PALETTE = withOverrides(PALETTE_BASE, custom.palette)
+      const s = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
+      const a = ACCENTS[state && state.accent] || ACCENTS.teal
+      const syntax = !state || state.syntax !== 'off'
+
+      /* ---- 深色值 ---- */
+      const dark = {
+        /* 底色 */
+        '--dsw-alias-bg-base': s.base,
+        '--dsw-alias-bg-document-preview': s.layer1,
+        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #6699CC 40%, transparent)',
+        '--dsw-alias-label-document-preview': PALETTE.dim,
+        '--dsw-alias-bg-layer-1': s.layer1,
+        '--dsw-alias-bg-layer-2': s.layer2,
+        '--dsw-alias-bg-layer-3': s.layer3,
+        '--dsw-alias-bg-module-platform': '#38424C',
+        '--dsw-alias-bg-multi-select': '#38424C',
+        '--dsw-alias-bg-overlay': s.overlay,
+        '--dsw-alias-bg-skeleton': '#D8DEE914',
+        /* 遮罩：纯黑半透明与色相无关，保持宿主值 */
+        '--dsw-alias-bg-mask-1': '#00000080',
+        '--dsw-alias-bg-mask-2': '#0003',
+        '--dsw-alias-bg-mask-3': '#0000007a',
+        '--dsw-alias-bg-mask-photo': '#000000e0',
+        '--dsw-alias-bg-mask-drop': '#272730b3',
+        /* 边框 */
+        '--dsw-alias-border-inverted': '#0000',
+        '--dsw-alias-border-inverted2': '#0000',
+        '--dsw-alias-border-l1': '#D8DEE90F',
+        '--dsw-alias-border-l2-darkmode-thin': '#D8DEE90F',
+        '--dsw-alias-border-l2': '#D8DEE91F',
+        '--dsw-alias-border-l3': '#D8DEE929',
+        '--dsw-alias-border-l4': '#D8DEE933',
+        /* 品牌（DSH 的"反色"语义，必须保持中性） */
+        '--dsw-alias-brand-primary': PALETTE.fg,
+        '--dsw-alias-brand-primary-invert': PALETTE.fg,
+        '--dsw-alias-brand-text': PALETTE.fg,
+        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.dark,
+        /* 文字 */
+        '--dsw-alias-label-primary': PALETTE.fg,
+        '--dsw-alias-label-primary-dimmed': '#C3CBD8',
+        '--dsw-alias-label-primary-bluish': '#C9D6E6',
+        '--dsw-alias-label-primary-foreground': '#1B2229',
+        '--dsw-alias-label-primary-inverted': '#2B333C',
+        '--dsw-alias-label-secondary': PALETTE.dim,
+        '--dsw-alias-label-tertiary': '#8792A2',
+        '--dsw-alias-label-caption': PALETTE.faintUi,
+        '--dsw-alias-label-dimmed': '#B4BCC8',
+        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #FFFFFF 45%, transparent)',
+        '--dsw-alias-label-deep-diving': PALETTE.teal,
+        '--dsw-alias-label-deep-diving-shimmer': '#92D6D6',
+        '--dsw-alias-menu-icon': '#C3CBD8',
+        '--dsw-alias-link': PALETTE.blueUi,
+        /* 交互层 */
+        '--dsw-alias-interactive-bg-hover': '#D8DEE914',
+        '--dsw-alias-interactive-bg-hover-solid': s.hover,
+        '--dsw-alias-interactive-bg-hover-accent': '#D8DEE929',
+        '--dsw-alias-interactive-bg-hover-danger': '#EC5F6726',
+        '--dsw-alias-interactive-bg-active': '#D8DEE91F',
+        /* 按钮 */
+        '--dsw-alias-button-contrast-fill': PALETTE.fg,
+        '--dsw-alias-button-elevated-fill': s.bubble,
+        '--dsw-alias-button-floating-fill': s.code,
+        '--dsw-alias-button-floating-hover': '#38424C',
+        '--dsw-alias-button-ghost-active-border': '#5A6773',
+        '--dsw-alias-button-ghost-active-fill': s.bubble,
+        '--dsw-alias-button-ghost-active-hover': s.bubbleHi,
+        '--dsw-alias-button-info-fill': PALETTE.blue,
+        '--dsw-alias-button-info-hover': '#7FA9D6',
+        '--dsw-alias-button-primary-dimmed': '#38424C',
+        '--dsw-alias-button-primary-fill': PALETTE.fg,
+        '--dsw-alias-button-primary-hover': '#E6EBF2',
+        /* 工具栏按钮：宿主自带灰罩，与色相无关，保持 */
+        '--dsw-alias-button-tool-bar-fill': '#54555780',
+        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
+        '--dsw-alias-button-tool-bar-hover': '#54555799',
+        /* Markdown / 代码 */
+        '--dsw-alias-markdown-citation': s.layer1,
+        '--dsw-alias-markdown-code-block': s.code,
+        '--dsw-alias-markdown-code-block-banner': s.layer3,
+        '--dsw-alias-markdown-code-segment-selected': s.bubble,
+        '--dsw-alias-markdown-code-segment-unselected': s.code,
+        '--dsw-alias-markdown-inline-code': s.bubble,
+        '--dsw-alias-markdown-placeholder': s.layer2,
+        '--dsw-alias-markdown-tag': s.bubble,
+        /* 滚动条 */
+        '--dsw-alias-scrollbar-bg-l1': '#4F5B66',
+        '--dsw-alias-scrollbar-bg-l2': '#5A6773',
+        '--dsw-alias-scrollbar-hover-l1': PALETTE.faint,
+        '--dsw-alias-scrollbar-hover-l2': '#72808C',
+        /* 状态色 */
+        '--dsw-alias-state-business-primary': a.dark,
+        '--dsw-alias-state-business-tertiary': a.darkSoft,
+        '--dsw-alias-state-error-primary': PALETTE.red,
+        '--dsw-alias-state-error-secondary': '#F27C82',
+        '--dsw-alias-state-idle-primary': PALETTE.faint,
+        '--dsw-alias-state-success-primary': PALETTE.green,
+        '--dsw-alias-state-success-secondary': '#A9D4A4',
+        '--dsw-alias-state-success-tertiary': '#26382A',
+        '--dsw-alias-state-warn-primary': PALETTE.orange,
+        '--dsw-alias-state-warn-secondary': PALETTE.yellow,
+        '--dsw-alias-state-warn-tertiary': '#3A2E22',
+        '--dsw-alias-state-warn-label': '#FAB763',
+        /* diff */
+        '--dsw-alias-code-diff-added': '#99C7941F',
+        '--dsw-alias-code-diff-deleted': '#EC5F671F',
+        '--dsw-alias-file-diff-added-bg': '#263A2B',
+        '--dsw-alias-file-diff-added-gutter': '#1F2F23',
+        '--dsw-alias-file-diff-added-marker': PALETTE.green,
+        '--dsw-alias-file-diff-deleted-bg': '#3A2427',
+        '--dsw-alias-file-diff-deleted-gutter': '#2C1B1E',
+        '--dsw-alias-file-diff-deleted-marker': PALETTE.red,
+        /* 浮层 */
+        '--dsw-alias-switch-thumb': PALETTE.dim,
+        '--dsw-alias-toast-bg': PALETTE.bg1,
+        '--dsw-alias-toast-label': '#E6EBF2',
+        '--dsw-alias-tooltip-bg': PALETTE.bg2,
+        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #1D1E22, white 18%)',
+        '--dsw-alias-turn-trigger-bg': s.code,
+        '--dsw-alias-turn-trigger-bg-hover': '#38424C',
+        '--dsw-alias-menu-group-header-fill': '#23292EF0',
+        /* 菜单材质（README 明确这是共享令牌，值必须接近不透明，否则菜单文字发糊） */
+        '--dsw-menu-surface-fill': '#23292EB8',
+        '--dsw-specific-menu': '#23292EB8',
+        /* 侧栏与气泡 */
+        '--dsw-specific-sidebar-fill': s.sidebar,
+        '--dsw-specific-sidebar-nav-item-active': s.bubble,
+        '--dsw-specific-sidebar-nav-item-active-accent': '#5FB3B355',
+        '--dsw-specific-sidebar-nav-item-hover': s.layer1,
+        '--dsw-specific-bubble': s.bubble,
+        '--dsw-specific-bubble-highlight': s.bubbleHi,
+        '--dsw-specific-input-major': s.code,
+        '--dsw-specific-login-input': s.layer3,
+        '--dsw-specific-selector': s.selector,
+        '--dsw-specific-tip': s.layer1,
+        /* 宿主笔误补丁：终端状态栏 CSS 写的是 var(--dsw-alias-bg-l2)，
+           真名是 --dsw-alias-bg-layer-2；补一个同名别名把那条规则救回来。 */
+        '--dsw-alias-bg-l2': s.layer2,
+      }
+
+      /* ---- 浅色值 ---- */
+      const light = {
+        '--dsw-alias-bg-base': LIGHT.base,
+        '--dsw-alias-bg-document-preview': LIGHT.layer1,
+        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #4A7FB5 40%, transparent)',
+        '--dsw-alias-label-document-preview': LIGHT.dim,
+        '--dsw-alias-bg-layer-1': LIGHT.layer1,
+        '--dsw-alias-bg-layer-2': LIGHT.layer2,
+        '--dsw-alias-bg-layer-3': LIGHT.layer3,
+        '--dsw-alias-bg-module-platform': LIGHT.layer3,
+        '--dsw-alias-bg-multi-select': LIGHT.layer3,
+        '--dsw-alias-bg-overlay': LIGHT.overlay,
+        '--dsw-alias-bg-skeleton': '#0000000a',
+        '--dsw-alias-bg-mask-1': '#0000003d',
+        '--dsw-alias-bg-mask-2': '#0000001f',
+        '--dsw-alias-bg-mask-3': '#0000007a',
+        '--dsw-alias-bg-mask-photo': '#000000e0',
+        '--dsw-alias-bg-mask-drop': '#ffffffb3',
+        '--dsw-alias-border-inverted': '#0000',
+        '--dsw-alias-border-inverted2': '#0000',
+        '--dsw-alias-border-l1': '#0000000a',
+        '--dsw-alias-border-l2-darkmode-thin': '#0000001a',
+        '--dsw-alias-border-l2': '#0000001a',
+        '--dsw-alias-border-l3': '#0000001f',
+        '--dsw-alias-border-l4': '#00000029',
+        '--dsw-alias-brand-primary': LIGHT.fg,
+        '--dsw-alias-brand-primary-invert': LIGHT.fg,
+        '--dsw-alias-brand-text': LIGHT.fg,
+        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.light,
+        '--dsw-alias-label-primary': LIGHT.fg,
+        '--dsw-alias-label-primary-dimmed': '#3B454F',
+        '--dsw-alias-label-primary-bluish': LIGHT.fg,
+        '--dsw-alias-label-primary-foreground': '#FFFFFF',
+        '--dsw-alias-label-primary-inverted': '#FFFFFF',
+        '--dsw-alias-label-secondary': LIGHT.dim,
+        '--dsw-alias-label-tertiary': LIGHT.faint,
+        '--dsw-alias-label-caption': LIGHT.caption,
+        '--dsw-alias-label-dimmed': '#C7CFDA',
+        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #000000 30%, transparent)',
+        '--dsw-alias-label-deep-diving': a.light,
+        '--dsw-alias-label-deep-diving-shimmer': a.light,
+        '--dsw-alias-menu-icon': '#3B454F',
+        '--dsw-alias-link': LIGHT.link,
+        '--dsw-alias-interactive-bg-hover': '#2631480f',
+        '--dsw-alias-interactive-bg-hover-solid': LIGHT.layer2,
+        '--dsw-alias-interactive-bg-hover-accent': '#26314824',
+        '--dsw-alias-interactive-bg-hover-danger': '#ec13130d',
+        '--dsw-alias-interactive-bg-active': '#2631481a',
+        '--dsw-alias-button-contrast-fill': LIGHT.fg,
+        '--dsw-alias-button-elevated-fill': '#FFFFFF',
+        '--dsw-alias-button-floating-fill': '#FFFFFF',
+        '--dsw-alias-button-floating-hover': LIGHT.layer2,
+        '--dsw-alias-button-ghost-active-border': PALETTE.dim,
+        '--dsw-alias-button-ghost-active-fill': LIGHT.layer3,
+        '--dsw-alias-button-ghost-active-hover': '#DDE4EC',
+        '--dsw-alias-button-info-fill': '#4A7FB5',
+        '--dsw-alias-button-info-hover': '#3E6E9E',
+        '--dsw-alias-button-primary-dimmed': LIGHT.layer3,
+        '--dsw-alias-button-primary-fill': LIGHT.fg,
+        '--dsw-alias-button-primary-hover': '#1B2229',
+        '--dsw-alias-button-tool-bar-fill': '#54555780',
+        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
+        '--dsw-alias-button-tool-bar-hover': '#54555799',
+        '--dsw-alias-markdown-citation': LIGHT.layer2,
+        '--dsw-alias-markdown-code-block': LIGHT.code,
+        '--dsw-alias-markdown-code-block-banner': LIGHT.layer3,
+        '--dsw-alias-markdown-code-segment-selected': '#FFFFFF',
+        '--dsw-alias-markdown-code-segment-unselected': LIGHT.layer3,
+        '--dsw-alias-markdown-inline-code': LIGHT.code,
+        '--dsw-alias-markdown-placeholder': LIGHT.layer3,
+        '--dsw-alias-markdown-tag': LIGHT.layer3,
+        '--dsw-alias-scrollbar-bg-l1': '#CFD3D6',
+        '--dsw-alias-scrollbar-bg-l2': '#C0C5CE',
+        '--dsw-alias-scrollbar-hover-l1': PALETTE.dim,
+        '--dsw-alias-scrollbar-hover-l2': '#979DA6',
+        '--dsw-alias-state-business-primary': a.light,
+        '--dsw-alias-state-business-tertiary': a.lightSoft,
+        '--dsw-alias-state-error-primary': '#C4464F',
+        '--dsw-alias-state-error-secondary': '#D4686F',
+        '--dsw-alias-state-idle-primary': '#CFD3D6',
+        '--dsw-alias-state-success-primary': '#4E8A4A',
+        '--dsw-alias-state-success-secondary': '#5E9C58',
+        '--dsw-alias-state-success-tertiary': '#E6FAED',
+        '--dsw-alias-state-warn-primary': '#C97A2B',
+        '--dsw-alias-state-warn-secondary': '#E08C34',
+        '--dsw-alias-state-warn-tertiary': '#FEF5E7',
+        '--dsw-alias-state-warn-label': '#B36A1E',
+        '--dsw-alias-code-diff-added': '#22c55e14',
+        '--dsw-alias-code-diff-deleted': '#f25a5a14',
+        '--dsw-alias-file-diff-added-bg': '#E6F4E7',
+        '--dsw-alias-file-diff-added-gutter': '#EDF7ED',
+        '--dsw-alias-file-diff-added-marker': '#01A241',
+        '--dsw-alias-file-diff-deleted-bg': '#FCE6E2',
+        '--dsw-alias-file-diff-deleted-gutter': '#FDECE9',
+        '--dsw-alias-file-diff-deleted-marker': '#BA2723',
+        '--dsw-alias-switch-thumb': '#FFFFFF',
+        '--dsw-alias-toast-bg': '#38424C',
+        '--dsw-alias-toast-label': '#FFFFFF',
+        '--dsw-alias-tooltip-bg': '#38424C',
+        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #38424C, white 18%)',
+        '--dsw-alias-turn-trigger-bg': LIGHT.code,
+        '--dsw-alias-turn-trigger-bg-hover': LIGHT.layer3,
+        '--dsw-alias-menu-group-header-fill': '#F8F9FAF0',
+        '--dsw-menu-surface-fill': '#F8F9FAF0',
+        '--dsw-specific-menu': '#F8F9FAF0',
+        '--dsw-specific-sidebar-fill': LIGHT.sidebar,
+        '--dsw-specific-sidebar-nav-item-active': LIGHT.layer3,
+        '--dsw-specific-sidebar-nav-item-active-accent': a.lightSoft,
+        '--dsw-specific-sidebar-nav-item-hover': LIGHT.layer2,
+        '--dsw-specific-bubble': LIGHT.bubble,
+        '--dsw-specific-bubble-highlight': LIGHT.bubbleHi,
+        '--dsw-specific-input-major': LIGHT.code,
+        '--dsw-specific-login-input': LIGHT.layer3,
+        '--dsw-specific-selector': LIGHT.selector,
+        '--dsw-specific-tip': LIGHT.layer2,
+        '--dsw-alias-bg-l2': LIGHT.layer2,
+      }
+
+      /* ---- 静态色阶（前端 CSS 有 9 处直接引用，用于文件类型图标/内联动作）---- */
+      const staticTokens = {
+        '--dsw-static-deepseek-500': { dark: PALETTE.teal, light: a.light },
+        '--dsw-static-deepseek-450': { dark: '#7FC7C7', light: '#5A9E9E' },
+        '--dsw-static-deepseek-400': { dark: '#7FC7C7', light: '#5A9E9E' },
+        '--dsw-static-green-500': { dark: PALETTE.green, light: '#4E8A4A' },
+        '--dsw-static-amber-400': { dark: PALETTE.yellow, light: '#E08C34' },
+        '--dsw-static-amber-500': { dark: PALETTE.orange, light: '#C97A2B' },
+        '--dsw-static-red-600': { dark: PALETTE.red, light: '#C4464F' },
+        '--dsw-static-neutral-bluish-00': { dark: '#F7F9FB', light: '#FFFFFF' },
+        '--dsw-static-neutral-bluish-300': { dark: PALETTE.dim, light: '#A7ADBA' },
+      }
+
+      /* ---- Shiki 语法色（css-variables 主题，前缀 --shiki-）---- */
+      const shikiTokens = syntax
+        ? {
+            '--shiki-foreground': { dark: PALETTE.fg, light: LIGHT.fg },
+            '--shiki-background': { dark: s.code, light: LIGHT.code },
+            '--shiki-token-constant': { dark: PALETTE.orange, light: '#C97A2B' },
+            '--shiki-token-string': { dark: PALETTE.green, light: '#4E8A4A' },
+            '--shiki-token-comment': { dark: '#8792A2', light: '#6B7686' },
+            '--shiki-token-keyword': { dark: PALETTE.purple, light: '#8A5E8A' },
+            '--shiki-token-parameter': { dark: PALETTE.orange, light: '#C97A2B' },
+            /* function 令牌 = Mariana 的 var(blue) #6699CC。
+               Sublime Mariana 里 `support.function, support.macro` → var(blue)，
+               所以 Python 内置函数（print/len/open）、LaTeX 命令（\chapter）
+               都是这个蓝。（另一条规则 `entity.name.function` → var(blue5) 青
+               只管「函数定义名」，Shiki 把两者合并了，取更常见的蓝。） */
+            '--shiki-token-function': { dark: PALETTE.blue, light: '#3E6FA8' },
+            '--shiki-token-string-expression': { dark: '#A9D4A4', light: '#3E7A3A' },
+            '--shiki-token-punctuation': { dark: PALETTE.dim, light: '#5A6472' },
+            '--shiki-token-link': { dark: PALETTE.blueUi, light: LIGHT.link },
+            /* Shiki 的 css-variables 主题还引用这三个（用于 ```diff 代码块），
+               但宿主 shiki.css 没有声明它们 —— 不补的话 diff 新增/删除行会落到
+               var() 未定义的兜底色（继承正文色），看不出增删。 */
+            '--shiki-token-inserted': { dark: PALETTE.green, light: '#4E8A4A' },
+            '--shiki-token-deleted': { dark: PALETTE.red, light: '#C4464F' },
+            '--shiki-token-changed': { dark: PALETTE.yellow, light: '#C97A2B' },
+          }
+        : {}
+
+      /* ---- 合并成 { light, dark } 对；缺浅色值的回落到深色值（绝不出现单值）---- */
+      const out = {}
+      for (const name of Object.keys(dark)) {
+        out[name] = { light: light[name] !== undefined ? light[name] : dark[name], dark: dark[name] }
+      }
+      for (const name of Object.keys(staticTokens)) out[name] = staticTokens[name]
+      for (const name of Object.keys(shikiTokens)) out[name] = shikiTokens[name]
+      /* 正文高亮的辅助令牌：与 syntax 开关解耦，由 prose 开关单独控制样式表挂载。 */
+      for (const [name, pair] of Object.entries(resolveProseTokens(state))) out[name] = pair
+      /* 过程行高亮色：写进令牌层，样式表用 var(--dmt-row-color, 兜底) 取。
+         浅色值与深色值相同（过程行颜色是用户挑的，不该随外观变）。
+         state 可能整体缺省（测试/首次挂载），所以每个字段都单独兜底。 */
+      const rowColor = typeof (state && state.rowColor) === 'string' && HEX_PATTERN.test(state.rowColor)
+        ? state.rowColor
+        : DEFAULTS.rowColor
+      out['--dmt-row-color'] = { light: rowColor, dark: rowColor }
+      /* 汇总行 / 本轮汇总的颜色（黄），同上：两色系同值。 */
+      const summaryColor = typeof (state && state.summaryColor) === 'string' && HEX_PATTERN.test(state.summaryColor)
+        ? state.summaryColor
+        : DEFAULTS.summaryColor
+      out['--dmt-summary-color'] = { light: summaryColor, dark: summaryColor }
+      /* Markdown 细节色：对齐 Sublime Mariana 的 markup.* 规则。 */
+      out['--dmt-md-list-marker'] = { light: PALETTE.green, dark: PALETTE.green }
+      out['--dmt-md-quote'] = { light: PALETTE.orange, dark: PALETTE.orange }
+      out['--dmt-md-code-bg'] = { light: LIGHT.code, dark: s.layer2 }
+      return out
+    }
+
+    /* ====================================================================== *
+     * 二·五、正文高亮样式表（prose）
+     *
+     * 为什么需要单独一张表：`--shiki-*` 只被 Shiki 生成的 `<span>` 的 inline style
+     * 引用，**Markdown 正文完全不消费它**。正文的颜色来自前端 CSS 里那几条固定规则
+     * （下面用行内注释形式引用，避免与 JS 块注释嵌套冲突）：
+     *
+     *     ._markdown_xxx { color: var(--dsw-alias-label-primary) }   // 全部文字同色
+     *     ._markdown_xxx strong { font-weight: 600 }                 // 只改字重，不改色
+     *
+     * 所以想让正文"有高亮"，只能往宿主 DOM 里加规则。
+     *
+     * 选择器怎么选才不随构建失效：
+     *   宿主 markdown 容器是 `className: de(St.markdown, ...)`，St.markdown 是
+     *   CSS Modules 生成的 `_markdown_1ypvv_5` —— 前缀 `_markdown_` 来自源文件名，
+     *   **跨构建稳定**；末尾的 hash 与序号会变。所以用 `[class*="_markdown_"]`
+     *   做属性子串匹配，既不写死 hash，也不会误伤其它模块。
+     *
+     * 为什么要排除 compact：宿主对摘要/紧凑变体显式写了
+     *     ._compact_xxx pre, ._compact_xxx pre :is(code,span){color:inherit!important}
+     *     ._compact_xxx a { color: inherit; text-decoration: underline dotted }
+     * 它在紧凑场景**故意**要求继承色，我们的规则若命中也应该让位 ——
+     * 容器上只有 compact 时有 `data-markdown-variant="compact"`，据此排除。
+     * ====================================================================== */
+
+    /* ====================================================================== *
+     * 二·六、表面不透明度 + 毛玻璃
+     *
+     * **本段是从 yaanlaan/deepseek-colorful 的 `lib/theme-engine.js` 直接移植的**
+     * （MIT，见 README 致谢）。移植时只改了函数名与取值来源，机制原样保留。
+     *
+     * 原实现的关键机制（三件事缺一不可，前几版就是缺了第 1 件才一直没效果）：
+     *
+     *   1. **自己插一个全屏背景容器**，`prepend` 到 body，`z-index: 0`：
+     *
+     *        container.style.cssText = `position: fixed; top:0;left:0;right:0;bottom:0;
+     *          width:100vw; height:100vh; pointer-events:none; z-index:0; overflow:hidden`
+     *        document.body.prepend(container)
+     *
+     *   2. **把窗口结构透明化**（html/body/#root + frame + 各列），
+     *      让背景容器露出来：
+     *
+     *        html, body { background: transparent !important }
+     *        #root { position: relative; z-index: 1; background: transparent !important }
+     *        div[class*="frame"], div[class*="centerCol"], ... { background: transparent !important }
+     *
+     *   3. **半透明 + backdrop-filter 同时生效**，这时模糊的是背景容器的内容。
+     *
+     * 原作者还写了注释解释为什么必须这样：
+     *   「基础透明度策略：开启背景或磨砂时，必须透出背景图」
+     *   `const baseAlpha = hasBg ? (...) : 1`
+     * —— 没有背景层时 alpha 直接是 1，根本不做半透明。
+     * ====================================================================== */
+
+    /** 背景层容器的 id（照抄原实现的命名习惯）。 */
+    const BACKDROP_ID = 'dmt-theme-bg-container'
+
+    /**
+     * 布局列（没有对应令牌，只能按类名片段命中）—— 需要透明化，让背景层露出来。
+     * 类名片段取自宿主 CSS Modules 的可读部分，跨构建稳定。
+     */
+    const TRANSPARENT_SELECTORS = Object.freeze([
+      /* ⚠️ **只透明化外壳，不含三列。**
+         三列要单独上 alpha（见 buildGlassSheet 里那段），
+         如果把列也放进这个列表，两条规则会打在同一批元素上，
+         后写的 alpha 覆盖透明化 —— 于是 alpha 叠 alpha，看不出透明效果。 */
+      'html', 'body', '#root',
+      'div[class*="frame"]',
+      'div[class*="scrollBody"]',
+      'div[class*="composerSeat"]',
+      'div[class*="composerStack"]',
+      'div[class*="composerHero"]',
+      'div[class*="viewArea"]',
+    ])
+
+    /**
+     * 要加 `backdrop-filter` 的表面容器。
+     * 与原实现一致：侧栏 / 中列 / 右栏 / 卡片 / 气泡 / 输入框。
+     */
+    const GLASS_TARGETS = Object.freeze([
+      Object.freeze({ key: 'sidebar', sel: 'div[class*="sidebarCol"], aside, nav, [data-sidebar]' }),
+      Object.freeze({ key: 'center', sel: 'div[class*="centerCol"]' }),
+      Object.freeze({ key: 'rightbar', sel: 'div[class*="rightbarCol"], div[class*="Rightbar"]' }),
+      Object.freeze({ key: 'card', sel: 'div[class*="kuvljq_card"], div[class*="flL80G_file"], div[class*="KuQXFq_card"], div[class*="QSKnSa_card"]' }),
+      Object.freeze({ key: 'bubble', sel: 'div[class*="bubble"]' }),
+      Object.freeze({ key: 'composer', sel: 'div[class*="RlGAzG_card"]' }),
+    ])
+
+    /**
+     * 解析 0–100 的「表面不透明度」。无效值按 100（不透明）处理。
+     * @param {string|number|undefined} raw - 设置值。
+     * @returns {number} 0–100 的整数。
+     */
+    function parseSurfaceOpacity(raw) {
+      if (raw === undefined || raw === null || raw === '') return 100
+      const n = Number(String(raw).trim())
+      if (!Number.isFinite(n)) return 100
+      return Math.max(0, Math.min(100, Math.round(n)))
+    }
+
+    /** 解析带上下限的数值设置。 */
+    function parseBounded(raw, min, max, fallback) {
+      if (raw === undefined || raw === null || raw === '') return fallback
+      const n = Number(String(raw).trim())
+      if (!Number.isFinite(n)) return fallback
+      return Math.max(min, Math.min(max, n))
+    }
+
+    /** 深色模式选择器：属性写两遍提权（照抄原实现的手法）。 */
+    const DARK_SELECTOR = 'body[data-ds-dark-theme][data-ds-dark-theme]'
+    /** 浅色模式选择器。 */
+    const LIGHT_SELECTOR = 'body:not([data-ds-dark-theme])'
+
+    /**
+     * hex → `rgba(r, g, b, a)`。
+     * 照抄原实现的 `hexToRgba`：用 rgba 而不是 8 位 hex。
+     * @param {string} hex - `#rgb` 或 `#rrggbb`。
+     * @param {number} alpha - 0..1。
+     * @returns {string} rgba() 文本；非法输入原样返回。
+     */
+    function hexToRgba(hex, alpha) {
+      if (typeof hex !== 'string') return hex
+      let clean = hex.trim().replace('#', '')
+      if (clean.length === 3) clean = clean.split('').map((c) => c + c).join('')
+      if (!/^[0-9a-fA-F]{6}$/.test(clean)) return hex
+      const r = parseInt(clean.slice(0, 2), 16)
+      const g = parseInt(clean.slice(2, 4), 16)
+      const b = parseInt(clean.slice(4, 6), 16)
+      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return hex
+      const a = Math.round(Math.max(0, Math.min(1, alpha)) * 100) / 100
+      return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')'
+    }
+
+    /**
+     * 生成背景层的 CSS 背景值。
+     *
+     * 照抄原实现 `applyBackground` 的思路：背景层是**图片/视频/渐变**，
+     * 不是纯色 —— 纯色模糊后还是纯色。这里用当前配色派生的渐变。
+     *
+     * @param {object} surfaces - 表面色。
+     * @param {boolean} isDark - 深色模式。
+     * @returns {string} 可写进 `background` 的值。
+     */
+    function buildBackdropImage(surfaces, isDark) {
+      const s = surfaces || {}
+      const base = s.base || (isDark ? '#343D46' : '#FFFFFF')
+      const shift = (hex, delta) => {
+        const lab = okOklchFromHex(hex)
+        if (lab === null) return hex
+        const next = okHexFromOklch({
+          L: Math.max(0.02, Math.min(0.98, lab.L + delta)),
+          C: lab.C,
+          h: lab.h,
+        })
+        return next === null ? hex : next
+      }
+      /* 明暗差拉大，否则半透明看不出效果（实测通道差 < 15 时肉眼无感）。 */
+      const d = isDark ? 0.16 : -0.10
+      const bright = shift(base, d)
+      const bright2 = shift(base, d * 1.8)
+      return 'radial-gradient(circle at 20% 15%, ' + hexToRgba(bright2, 0.95) + ' 0%, transparent 48%),'
+        + 'radial-gradient(circle at 78% 72%, ' + hexToRgba(bright, 0.9) + ' 0%, transparent 52%),'
+        + 'radial-gradient(circle at 52% 45%, ' + hexToRgba(bright, 0.55) + ' 0%, transparent 65%),'
+        + base
+    }
+
+    /**
+     * 创建/更新/移除背景层容器。
+     *
+     * **照抄原实现的 `getOrCreateBgContainer`**：`position: fixed`、
+     * `inset: 0`、`pointer-events: none`、`z-index: 0`、`prepend` 到 body。
+     *
+     * @param {boolean} needed - 是否需要背景层。
+     * @param {object} surfaces - 表面色。
+     * @param {boolean} isDark - 深色模式。
+     */
+    function syncBackdropLayer(needed, surfaces, isDark) {
+      if (typeof document === 'undefined') return
+      if (typeof document.getElementById !== 'function') return
+      const existing = document.getElementById(BACKDROP_ID)
+      if (!needed) {
+        if (existing !== null) {
+          try {
+            existing.remove()
+          } catch (error) {
+            note('remove backdrop', error)
+          }
+        }
+        return
+      }
+      let el = existing
+      if (el === null) {
+        el = document.createElement('div')
+        el.id = BACKDROP_ID
+        el.setAttribute('aria-hidden', 'true')
+        /* 这三条是原实现的核心：fixed 铺满、z-index 0 在内容之下、不挡点击。 */
+        el.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
+          + 'width:100vw;height:100vh;pointer-events:none;z-index:0;overflow:hidden;'
+          + 'transition:opacity .25s ease,background .25s ease'
+        try {
+          if (typeof document.body.prepend === 'function') document.body.prepend(el)
+          else document.body.insertBefore(el, document.body.firstChild)
+        } catch (error) {
+          note('prepend backdrop', error)
+          return
+        }
+      }
+      const image = buildBackdropImage(surfaces, isDark)
+      if (el.__dmtImage !== image) {
+        el.__dmtImage = image
+        el.style.background = image
+        el.style.backgroundSize = 'cover'
+      }
+    }
+
+    /**
+     * 生成「表面不透明度 + 毛玻璃」样式表。
+     *
+     * 结构与原实现 `generateCss` 一致：
+     *   ① 结构透明化（让背景层露出来）
+     *   ② 表面半透明（rgba）
+     *   ③ backdrop-filter
+     *
+     * @param {object} state - 已生效设置。
+     * @param {object} darkSurfaces - 深色表面色。
+     * @param {object} lightSurfaces - 浅色表面色。
+     * @param {boolean} isDark - 当前是否深色。
+     * @returns {string} CSS 文本；两个功能都没开时为空串。
+     */
+    function buildGlassSheet(state, darkSurfaces, lightSurfaces, isDark) {
+      const s = state || {}
+      const percent = parseSurfaceOpacity(s.surfaceOpacity)
+      const glassOn = s.glass === 'on'
+      const blur = parseBounded(s.glassBlur, 0, 40, 16)
+      const saturate = parseBounded(s.glassSaturate, 100, 220, 120)
+      const wantAlpha = percent < 100
+      const wantGlass = glassOn && blur > 0
+      if (!wantAlpha && !wantGlass) return ''
+
+      const alpha = percent / 100
+      const dark = darkSurfaces || {}
+      const light = lightSurfaces || {}
+      const lines = ['/* dsh-colorlab —— 表面不透明度 + 毛玻璃（移植自 deepseek-colorful） */']
+
+      /* ① 结构透明化：背景层在 z-index 0，必须让结构让位，否则看不到。 */
+      lines.push(TRANSPARENT_SELECTORS.join(',')
+        + '{background:transparent !important;background-color:transparent !important}')
+      /* 内容根抬到背景层之上。 */
+      lines.push('#root{position:relative !important;z-index:1 !important;'
+        + 'background:transparent !important}')
+
+      /* ② 表面半透明。每条都必须带 !important —— 宿主用 body 内联样式写 token。 */
+      if (wantAlpha) {
+        const important = ' !important'
+        const decls = (surf, aB, aS, a1, a2) => {
+          const out = []
+          if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB) + important)
+          if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS) + important)
+          if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1) + important)
+          if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2) + important)
+          if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)) + important)
+          if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)) + important)
+          if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1) + important)
+          return out
+        }
+        const aSidebar = Math.min(1, alpha * 1.08)
+        const aLayer1 = Math.min(1, alpha * 1.12)
+        const aLayer2 = Math.min(1, alpha * 1.18)
+        const dDecls = decls(dark, alpha, aSidebar, aLayer1, aLayer2)
+        const lDecls = decls(light, alpha, aSidebar, aLayer1, aLayer2)
+        if (dDecls.length > 0) lines.push(DARK_SELECTOR + '{' + dDecls.join(';') + '}')
+        if (lDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lDecls.join(';') + '}')
+
+        /* 三列直接铺自己的背景，也要半透明（它们不跟 token 走）。 */
+        const colDecls = (col, color, a) => 'background-color:' + hexToRgba(color, a) + important
+        for (const col of [
+          { sel: 'div[class*="sidebarCol"]', key: 'sidebar' },
+          { sel: 'div[class*="centerCol"]', key: 'center' },
+          { sel: 'div[class*="rightbarCol"]', key: 'rightbar' },
+        ]) {
+          const dColor = col.key === 'center' ? dark.base : dark.sidebar
+          const lColor = col.key === 'center' ? light.base : light.sidebar
+          const a = col.key === 'center' ? alpha : aSidebar
+          if (dColor) lines.push(DARK_SELECTOR + ' ' + col.sel + '{' + colDecls(col, dColor, a) + '}')
+          if (lColor) lines.push(LIGHT_SELECTOR + ' ' + col.sel + '{' + colDecls(col, lColor, a) + '}')
+        }
+      }
+
+      /* ③ backdrop-filter：这时背后是背景层，模糊才有效果。 */
+      if (wantGlass) {
+        const filter = 'backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important;'
+          + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important'
+        for (const target of GLASS_TARGETS) {
+          lines.push(target.sel + '{' + filter + '}')
+        }
+      }
+
+      void isDark
+      return lines.join('\n')
+    }
+
+    const GLASS_SHEET_ID = 'dsh-colorlab/glass.css'
     /* @dsh-oklch:start —— 由 tools/embed-tex-assets.mjs 生成，请勿手改。
      改动请改 tools/oklch.mjs，然后重新运行：node tools/embed-tex-assets.mjs */
 
     /* ---- OKLCH 色彩科学（真源：tools/oklch.mjs）----
-       感知均匀的亮度/彩度调整：hover 提亮、调色都走它，
-       而不是在 sRGB/HSL 里线性插值（那样同样步长在深色和浅色上观感不一致）。 */
+       感知均匀的亮度调整：背景层光斑、hover 提亮都走它。 */
 
 /**
  * OKLCH / OKLab 色彩科学工具（Björn Ottosson 的 OKLab，sRGB 基准）。
@@ -913,340 +1542,11 @@ function okContrastRatio(hexA, hexB) {
 
     /* @dsh-oklch:end */
 
-    /**
-     * 表面不透明度 + 毛玻璃 —— **覆盖层方案**，在令牌层之外单独挂一张样式表。
-     *
-     * 为什么不做进令牌层：令牌层（`resolveTokens`）是主题通道的一部分，改它是
-     * 全局的、还得跟着 `overrideTokens` 的撤销机制走。半透明/毛玻璃是**独立的
-     * 视觉层**，可单独开关，写成覆盖层更干净，也不会连带影响别的令牌。
-     *
-     * 这个方案的三个要点**都是从既有实现里学的**（见 README 的致谢）：
-     *
-     *   1. 颜色用 `rgba(r, g, b, a)` 而不是 `#rrggbbaa` —— 精度更高，
-     *      也不会和已经是 `color-mix()` 的值打架；
-     *   2. 光靠令牌不够：中列本身是透明的，真正铺底的是**列内元素**，
-     *      所以还要用 `[class*="centerCol"]` 这类**类名片段**直接给布局列上色；
-     *   3. 开毛玻璃时必须先把外层容器 `background: transparent`，
-     *      否则底下不透、模糊等于没做。
-     *
-     * 类名用**片段**而不是全名：宿主是 CSS Modules（`pI_x6G_centerCol` 或
-     * `_centerCol_1ypvv_12`），可读部分（`centerCol`）跨构建稳定。
-     */
-
-    /* ====================================================================== *
-     * 二·六、表面不透明度 + 毛玻璃
-     *
-     * ## 为什么前两版完全没效果
-     *
-     * \`backdrop-filter\` 模糊的是**它背后的东西**。如果背后就是同一块纯色，
-     * 模糊纯色得到的还是纯色 —— 屏幕上一点变化都没有。这不是 CSS 写法问题，
-     * 是**缺少被模糊的内容**。
-     *
-     * 参考实现（yaanlaan/deepseek-colorful 的 \`theme-engine.js\`）正是这么做的：
-     *
-     *     // 自己插一个全屏背景容器，prepend 到 body，z-index: 0
-     *     container.style.cssText = 'position:fixed; inset:0; width:100vw;
-     *       height:100vh; pointer-events:none; z-index:0; overflow:hidden'
-     *     document.body.prepend(container)
-     *
-     *     // 而且：没有背景时 alpha 直接是 1，根本不做半透明
-     *     const baseAlpha = hasBg ? (...) : 1
-     *
-     * 也就是说：**没有背景层就不做半透明**。它把「半透明 + 模糊」建立在
-     * 「自己铺了一层背景」这个前提上。
-     *
-     * ## 所以这里的做法
-     *
-     * 1. **自己铺一层背景**（\`#dmt-backdrop\`，fixed、z-index 0、pointer-events none）。
-     *    默认是**窗口材质透出来的渐变**，不是纯色 —— 有渐变才有"模糊得出来"的东西。
-     * 2. 把 \`html/body/#root\` 以及窗口框架**透明化**，让这层背景可见。
-     *    这一步在前一版被我删掉过（当时没有背景层，透明化只会露黑底）；
-     *    **现在有背景层了，它才是对的**。
-     * 3. 表面用 \`rgba()\` 半透明，叠在背景层之上 —— 这时 \`backdrop-filter\`
-     *    才有东西可模糊。
-     *
-     * 三者缺一不可。这也是为什么"只改 token"或"只加 backdrop-filter"都没用。
-     * ====================================================================== */
-
-    /** 背景层的 id（样式表 id 见上面的常量块）。 */
-    const BACKDROP_ID = 'dmt-backdrop'
-
-    /**
-     * 布局列（没有对应令牌，只能按类名片段命中）。
-     * 它们的角色是**被透明化**：真正铺满窗口的是窗口框架与背景层。
-     */
-    const LAYOUT_COLUMNS = Object.freeze([
-      Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]', label: '左侧栏' }),
-      Object.freeze({ key: 'center', sel: '[class*="centerCol"]', label: '会话栏' }),
-      Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"]', label: '右侧栏' }),
-    ])
-
-    /**
-     * 要加 \`backdrop-filter\` 的表面容器。
-     *
-     * **选择器刻意收窄**：只命中确切的容器类名片段。
-     * 早先用过 \`aside\`、\`nav\`、\`[class*="sidebar"]\`、\`[class*="message"]\`
-     * 这类宽选择器 —— 会命中几十个不该模糊的元素（导航器框架、消息内每一行…），
-     * 既糊掉内容又拖慢渲染。
-     */
-    const GLASS_TARGETS = Object.freeze([
-      Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]' }),
-      Object.freeze({ key: 'center', sel: '[class*="centerCol"]' }),
-      Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"]' }),
-      Object.freeze({ key: 'card', sel: '[class*="kuvljq_card"], [class*="flL80G_file"], [class*="KuQXFq_card"], [class*="QSKnSa_card"]' }),
-      Object.freeze({ key: 'bubble', sel: '[class*="bubble"]' }),
-    ])
-
-    /** 需要透明化才能露出背景层的结构（有背景层之后，这些是**必须**的）。 */
-    const GLASS_TRANSPARENT = Object.freeze([
-      /* ⚠️ **窗口框架不在此列。** 它是唯一承载 alpha 的那一层 ——
-         把它的 background 清成 transparent，token 里的 rgba 就完全用不上，
-         半透明彻底失效（这正是"一点变化都没有"的直接原因）。
-         这里只清掉那些**压在 frame 之上、又不该有自己底色**的中间容器。 */
-      'html', 'body', '#root',
-      '[class*="scrollBody"]', '[class*="_scrollBody_"]',
-      '[class*="viewArea"]', '[class*="Dc7zOa_root"]',
-    ])
-
-    /**
-     * 解析 0–100 的「表面不透明度」。无效值按 100（不透明）处理。
-     * @param {string|number|undefined} raw - 设置值。
-     * @returns {number} 0–100 的整数。
-     */
-    function parseSurfaceOpacity(raw) {
-      if (raw === undefined || raw === null || raw === '') return 100
-      const n = Number(String(raw).trim())
-      if (!Number.isFinite(n)) return 100
-      return Math.max(0, Math.min(100, Math.round(n)))
-    }
-
-    /** 解析带上下限的数值设置。 */
-    function parseBounded(raw, min, max, fallback) {
-      if (raw === undefined || raw === null || raw === '') return fallback
-      const n = Number(String(raw).trim())
-      if (!Number.isFinite(n)) return fallback
-      return Math.max(min, Math.min(max, n))
-    }
-
-    /** 深色模式选择器：属性写两遍提升权重，压过宿主自己的 `body[data-ds-dark-theme]`。 */
-    const DARK_SELECTOR = 'body[data-ds-dark-theme][data-ds-dark-theme]'
-    /** 浅色模式选择器：`:not()` 同样高于宿主的 `body`。 */
-    const LIGHT_SELECTOR = 'body:not([data-ds-dark-theme])'
-
-    /**
-     * 把 hex 转成 `rgba(r, g, b, a)`。
-     * 用 rgba 而不是 8 位 hex：精度更高，也便于和 alpha 计算混合。
-     * @param {string} hex - `#rgb` 或 `#rrggbb`。
-     * @param {number} alpha - 0..1。
-     * @returns {string} rgba() 文本；输入非法时原样返回。
-     */
-    function hexToRgba(hex, alpha) {
-      if (typeof hex !== 'string') return hex
-      let clean = hex.trim().replace('#', '')
-      if (clean.length === 3) clean = clean.split('').map((c) => c + c).join('')
-      if (!/^[0-9a-fA-F]{6}$/.test(clean)) return hex
-      const r = parseInt(clean.slice(0, 2), 16)
-      const g = parseInt(clean.slice(2, 4), 16)
-      const b = parseInt(clean.slice(4, 6), 16)
-      if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return hex
-      /* 保留两位小数：JS 浮点会算出 0.6499999999999999 这种值。 */
-      const a = Math.round(Math.max(0, Math.min(1, alpha)) * 100) / 100
-      return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')'
-    }
-
-    /**
-     * 生成背景层要用的 CSS 背景值。
-     *
-     * **必须不是纯色** —— 纯色被模糊之后还是纯色，等于没效果。
-     * 这里用「表面色的几个亮度档 + 大半径径向渐变」造出柔和的光斑，
-     * 模糊后能明显看到层次变化，同时颜色仍跟当前配色走。
-     *
-     * @param {object} surfaces - 表面色。
-     * @param {boolean} isDark - 深色模式。
-     * @returns {string} 可直接写进 `background` 的值。
-     */
-    function buildBackdropImage(surfaces, isDark) {
-      const s = surfaces || {}
-      const base = s.base || (isDark ? '#343D46' : '#FFFFFF')
-      /* ⚠️ **背景层必须和表面色拉开明暗差**，否则半透明看不出效果。
-       *
-       * 第一版这里用了「表面色同色系的低透明度光斑」，实测合成后
-       * 原始 rgb(52,61,70) → 显示 rgb(48,56,65)，通道差只有 14，肉眼无感。
-       * 原因很直接：透出来的东西和原来一样，半透明就等于没做。
-       *
-       * 现在用**明暗差拉大**的光斑：深色模式下往亮处拉（+0.18 亮度）、
-       * 浅色模式下往暗处拉（-0.12 亮度），这样透过半透明表面能明显看到
-       * 光斑的明暗变化 —— 这也是真实毛玻璃的观感来源。 */
-      const shift = (hex, delta) => {
-        const lab = okOklchFromHex(hex)
-        if (lab === null) return hex
-        const next = okHexFromOklch({ L: Math.max(0.02, Math.min(0.98, lab.L + delta)), C: lab.C, h: lab.h })
-        return next === null ? hex : next
-      }
-      /* 深色：往亮拉；浅色：往暗拉。让光斑与底色形成可见对比。 */
-      const d = isDark ? 0.16 : -0.10
-      const bright = shift(base, d)
-      const bright2 = shift(base, d * 1.8)
-      const spot = (color, alpha) => hexToRgba(color, alpha)
-      return 'radial-gradient(circle at 20% 15%, ' + spot(bright2, 0.95) + ' 0%, transparent 48%),'
-        + 'radial-gradient(circle at 78% 72%, ' + spot(bright, 0.9) + ' 0%, transparent 52%),'
-        + 'radial-gradient(circle at 52% 45%, ' + spot(bright, 0.55) + ' 0%, transparent 65%),'
-        + base
-    }
-
-    /**
-     * 按当前设置维护背景层（DOM 元素）。
-     *
-     * 只在「不透明度 < 100」或「毛玻璃开」时需要 —— 否则删掉，不留痕迹。
-     *
-     * @param {boolean} needed - 是否需要背景层。
-     * @param {object} surfaces - 表面色（深色或浅色）。
-     * @param {boolean} isDark - 深色模式。
-     */
-    function syncBackdropLayer(needed, surfaces, isDark) {
-      if (typeof document === 'undefined') return
-      /* 容错：测试替身与极端环境下可能没有 getElementById / prepend。
-         这不是核心路径，缺能力时安静跳过即可，不该让整个渲染抛异常。 */
-      const canQuery = typeof document.getElementById === 'function'
-      if (!canQuery && needed) return
-      let el = canQuery ? document.getElementById(BACKDROP_ID) : null
-      if (!needed) {
-        if (el !== null) {
-          try {
-            el.remove()
-          } catch (error) {
-            note('remove backdrop', error)
-          }
-        }
-        return
-      }
-      if (el === null) {
-        el = document.createElement('div')
-        el.id = BACKDROP_ID
-        el.setAttribute('aria-hidden', 'true')
-        /* 关键三条：fixed 铺满、z-index 0（在内容之下）、pointer-events none（不挡点击）。 */
-        el.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;'
-          + 'pointer-events:none;z-index:0;overflow:hidden;'
-          + 'transition:opacity .25s ease,background .25s ease'
-        try {
-          document.body.prepend(el)
-        } catch (error) {
-          note('prepend backdrop', error)
-          return
-        }
-      }
-      const image = buildBackdropImage(surfaces, isDark)
-      if (el.__dmtImage !== image) {
-        el.__dmtImage = image
-        el.style.background = image
-        el.style.backgroundSize = 'cover'
-      }
-    }
-
-    /**
-     * 生成「表面不透明度 + 毛玻璃」覆盖样式表。
-     *
-     * ⚠️ **为什么每条 token 声明都带 `!important`**：宿主的 `ThemePresenter` 用
-     * `body.style.setProperty(name, value)`（**内联样式**，无第三参）写这些 token。
-     * 普通内联样式高于普通样式表规则，不加 `!important` 整段无效；
-     * 而「带 `!important` 的样式表规则」高于普通内联样式，所以能压过去。
-     *
-     * ⚠️ **alpha 不能层层叠加**：宿主窗口是嵌套的、每层都用同一个不透明色铺底，
-     * 给每层都加 alpha 会合成成几乎不透明（0.6 叠两层 = 0.84、三层 = 0.944），
-     * 表现为"开了和没开一样"。所以只让**背景层之上的表面**带 alpha，
-     * 窗口结构本身透明化。
-     *
-     * @param {object} state - 已生效设置。
-     * @param {object} darkSurfaces - 深色表面色。
-     * @param {object} lightSurfaces - 浅色表面色。
-     * @param {boolean} isDark - 当前是否深色。
-     * @returns {string} CSS 文本；两个功能都没开时为空串。
-     */
-    function buildGlassSheet(state, darkSurfaces, lightSurfaces, isDark) {
-      const s = state || {}
-      const percent = parseSurfaceOpacity(s.surfaceOpacity)
-      const glassOn = s.glass === 'on'
-      const blur = parseBounded(s.glassBlur, 0, 40, 16)
-      const saturate = parseBounded(s.glassSaturate, 100, 220, 120)
-      const wantAlpha = percent < 100
-      const wantGlass = glassOn && blur > 0
-      if (!wantAlpha && !wantGlass) return ''
-
-      const alpha = percent / 100
-      const dark = darkSurfaces || {}
-      const light = lightSurfaces || {}
-      const lines = ['/* dsh-colorlab —— 表面不透明度 + 毛玻璃 */']
-
-      /* 0) 结构透明化：让背景层可见。**必须有背景层时才做**，
-            否则透明化会露出 Electron 窗口的黑底（这是上一版的教训）。 */
-      const backdropOn = wantAlpha || wantGlass
-      if (backdropOn) {
-        lines.push(GLASS_TRANSPARENT.join(',')
-          + '{background:transparent !important;background-color:transparent !important}')
-        /* 内容根要抬到背景层之上，否则会被背景层盖住。 */
-        lines.push('#root{position:relative !important;z-index:1 !important;'
-          + 'background:transparent !important}')
-      }
-
-      /* 1) 表面 token 半透明。**只在不透明度 < 100 时**做；
-            毛玻璃单独开时表面保持不透明（模糊的是它背后的背景层）。 */
-      if (wantAlpha) {
-        const important = ' !important'
-        const surfaceDecls = (surf, aB, aS, a1, a2) => {
-          const out = []
-          if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB) + important)
-          if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS) + important)
-          if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1) + important)
-          if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2) + important)
-          if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)) + important)
-          if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)) + important)
-          if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1) + important)
-          return out
-        }
-        /* 各层透明度：越靠上越实一点，否则叠起来的层次会糊。 */
-        const aSidebar = Math.min(1, alpha * 1.08)
-        const aLayer1 = Math.min(1, alpha * 1.12)
-        const aLayer2 = Math.min(1, alpha * 1.18)
-        const dDecls = surfaceDecls(dark, alpha, aSidebar, aLayer1, aLayer2)
-        const lDecls = surfaceDecls(light, alpha, aSidebar, aLayer1, aLayer2)
-        if (dDecls.length > 0) lines.push(DARK_SELECTOR + '{' + dDecls.join(';') + '}')
-        if (lDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lDecls.join(';') + '}')
-
-        /* ⚠️ **布局列必须完全透明，不能再叠 alpha。**
-         *
-         * 宿主背景是嵌套的：frame 铺满窗口，三列叠在它上面，每层都用同一个
-         * 不透明色。token 改成 rgba 后 frame **自动**半透明；这里若再给每列
-         * 设 rgba，alpha 会叠加（0.6 叠两层 = 0.84、三层 = 0.94），
-         * 屏幕上等于完全不透明 —— 这就是"改了也没变化"的原因。
-         *
-         * 列透明之后，frame 那一层唯一的 alpha 直接透到背景层。 */
-        for (const col of LAYOUT_COLUMNS) {
-          lines.push(DARK_SELECTOR + ' ' + col.sel
-            + '{background:transparent !important;background-color:transparent !important}')
-          lines.push(LIGHT_SELECTOR + ' ' + col.sel
-            + '{background:transparent !important;background-color:transparent !important}')
-        }
-      }
-
-      /* 2) backdrop-filter：这时背后有背景层，模糊才看得出效果。 */
-      if (wantGlass) {
-        const filter = 'backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important;'
-          + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important'
-        for (const target of GLASS_TARGETS) {
-          lines.push(target.sel + '{' + filter + '}')
-        }
-      }
-
-      void isDark
-      return lines.join('\n')
-    }
-
     const PROSE_SHEET_ID = 'dsh-colorlab/prose.css'
     const ROW_SHEET_ID = 'dsh-colorlab/row.css'
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
     const MARKDOWN_SHEET_ID = 'dsh-colorlab/markdown.css'
     const LATEX_SHEET_ID = 'dsh-colorlab/latex.css'
-    const GLASS_SHEET_ID = 'dsh-colorlab/glass.css'
 
     /* ====================================================================== *
      * 二·七、LaTeX 代码块：让配色回到 Sublime 的样子
@@ -2217,335 +2517,6 @@ function makeColorizer(scheme) {
       return found
     }
 
-    function resolveTokens(state) {
-      const custom = parseCustom(state && state.custom)
-      /* 自定义配色只覆盖深色那一套；浅色保持插件自带的派生值（见 CUSTOM_SLOTS 注释）。 */
-      const PALETTE = withOverrides(PALETTE_BASE, custom.palette)
-      const s = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
-      const a = ACCENTS[state && state.accent] || ACCENTS.teal
-      const syntax = !state || state.syntax !== 'off'
-
-      /* ---- 深色值 ---- */
-      const dark = {
-        /* 底色 */
-        '--dsw-alias-bg-base': s.base,
-        '--dsw-alias-bg-document-preview': s.layer1,
-        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #6699CC 40%, transparent)',
-        '--dsw-alias-label-document-preview': PALETTE.dim,
-        '--dsw-alias-bg-layer-1': s.layer1,
-        '--dsw-alias-bg-layer-2': s.layer2,
-        '--dsw-alias-bg-layer-3': s.layer3,
-        '--dsw-alias-bg-module-platform': '#38424C',
-        '--dsw-alias-bg-multi-select': '#38424C',
-        '--dsw-alias-bg-overlay': s.overlay,
-        '--dsw-alias-bg-skeleton': '#D8DEE914',
-        /* 遮罩：纯黑半透明与色相无关，保持宿主值 */
-        '--dsw-alias-bg-mask-1': '#00000080',
-        '--dsw-alias-bg-mask-2': '#0003',
-        '--dsw-alias-bg-mask-3': '#0000007a',
-        '--dsw-alias-bg-mask-photo': '#000000e0',
-        '--dsw-alias-bg-mask-drop': '#272730b3',
-        /* 边框 */
-        '--dsw-alias-border-inverted': '#0000',
-        '--dsw-alias-border-inverted2': '#0000',
-        '--dsw-alias-border-l1': '#D8DEE90F',
-        '--dsw-alias-border-l2-darkmode-thin': '#D8DEE90F',
-        '--dsw-alias-border-l2': '#D8DEE91F',
-        '--dsw-alias-border-l3': '#D8DEE929',
-        '--dsw-alias-border-l4': '#D8DEE933',
-        /* 品牌（DSH 的"反色"语义，必须保持中性） */
-        '--dsw-alias-brand-primary': PALETTE.fg,
-        '--dsw-alias-brand-primary-invert': PALETTE.fg,
-        '--dsw-alias-brand-text': PALETTE.fg,
-        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.dark,
-        /* 文字 */
-        '--dsw-alias-label-primary': PALETTE.fg,
-        '--dsw-alias-label-primary-dimmed': '#C3CBD8',
-        '--dsw-alias-label-primary-bluish': '#C9D6E6',
-        '--dsw-alias-label-primary-foreground': '#1B2229',
-        '--dsw-alias-label-primary-inverted': '#2B333C',
-        '--dsw-alias-label-secondary': PALETTE.dim,
-        '--dsw-alias-label-tertiary': '#8792A2',
-        '--dsw-alias-label-caption': PALETTE.faintUi,
-        '--dsw-alias-label-dimmed': '#B4BCC8',
-        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #FFFFFF 45%, transparent)',
-        '--dsw-alias-label-deep-diving': PALETTE.teal,
-        '--dsw-alias-label-deep-diving-shimmer': '#92D6D6',
-        '--dsw-alias-menu-icon': '#C3CBD8',
-        '--dsw-alias-link': PALETTE.blueUi,
-        /* 交互层 */
-        '--dsw-alias-interactive-bg-hover': '#D8DEE914',
-        '--dsw-alias-interactive-bg-hover-solid': s.hover,
-        '--dsw-alias-interactive-bg-hover-accent': '#D8DEE929',
-        '--dsw-alias-interactive-bg-hover-danger': '#EC5F6726',
-        '--dsw-alias-interactive-bg-active': '#D8DEE91F',
-        /* 按钮 */
-        '--dsw-alias-button-contrast-fill': PALETTE.fg,
-        '--dsw-alias-button-elevated-fill': s.bubble,
-        '--dsw-alias-button-floating-fill': s.code,
-        '--dsw-alias-button-floating-hover': '#38424C',
-        '--dsw-alias-button-ghost-active-border': '#5A6773',
-        '--dsw-alias-button-ghost-active-fill': s.bubble,
-        '--dsw-alias-button-ghost-active-hover': s.bubbleHi,
-        '--dsw-alias-button-info-fill': PALETTE.blue,
-        '--dsw-alias-button-info-hover': '#7FA9D6',
-        '--dsw-alias-button-primary-dimmed': '#38424C',
-        '--dsw-alias-button-primary-fill': PALETTE.fg,
-        '--dsw-alias-button-primary-hover': '#E6EBF2',
-        /* 工具栏按钮：宿主自带灰罩，与色相无关，保持 */
-        '--dsw-alias-button-tool-bar-fill': '#54555780',
-        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
-        '--dsw-alias-button-tool-bar-hover': '#54555799',
-        /* Markdown / 代码 */
-        '--dsw-alias-markdown-citation': s.layer1,
-        '--dsw-alias-markdown-code-block': s.code,
-        '--dsw-alias-markdown-code-block-banner': s.layer3,
-        '--dsw-alias-markdown-code-segment-selected': s.bubble,
-        '--dsw-alias-markdown-code-segment-unselected': s.code,
-        '--dsw-alias-markdown-inline-code': s.bubble,
-        '--dsw-alias-markdown-placeholder': s.layer2,
-        '--dsw-alias-markdown-tag': s.bubble,
-        /* 滚动条 */
-        '--dsw-alias-scrollbar-bg-l1': '#4F5B66',
-        '--dsw-alias-scrollbar-bg-l2': '#5A6773',
-        '--dsw-alias-scrollbar-hover-l1': PALETTE.faint,
-        '--dsw-alias-scrollbar-hover-l2': '#72808C',
-        /* 状态色 */
-        '--dsw-alias-state-business-primary': a.dark,
-        '--dsw-alias-state-business-tertiary': a.darkSoft,
-        '--dsw-alias-state-error-primary': PALETTE.red,
-        '--dsw-alias-state-error-secondary': '#F27C82',
-        '--dsw-alias-state-idle-primary': PALETTE.faint,
-        '--dsw-alias-state-success-primary': PALETTE.green,
-        '--dsw-alias-state-success-secondary': '#A9D4A4',
-        '--dsw-alias-state-success-tertiary': '#26382A',
-        '--dsw-alias-state-warn-primary': PALETTE.orange,
-        '--dsw-alias-state-warn-secondary': PALETTE.yellow,
-        '--dsw-alias-state-warn-tertiary': '#3A2E22',
-        '--dsw-alias-state-warn-label': '#FAB763',
-        /* diff */
-        '--dsw-alias-code-diff-added': '#99C7941F',
-        '--dsw-alias-code-diff-deleted': '#EC5F671F',
-        '--dsw-alias-file-diff-added-bg': '#263A2B',
-        '--dsw-alias-file-diff-added-gutter': '#1F2F23',
-        '--dsw-alias-file-diff-added-marker': PALETTE.green,
-        '--dsw-alias-file-diff-deleted-bg': '#3A2427',
-        '--dsw-alias-file-diff-deleted-gutter': '#2C1B1E',
-        '--dsw-alias-file-diff-deleted-marker': PALETTE.red,
-        /* 浮层 */
-        '--dsw-alias-switch-thumb': PALETTE.dim,
-        '--dsw-alias-toast-bg': PALETTE.bg1,
-        '--dsw-alias-toast-label': '#E6EBF2',
-        '--dsw-alias-tooltip-bg': PALETTE.bg2,
-        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #1D1E22, white 18%)',
-        '--dsw-alias-turn-trigger-bg': s.code,
-        '--dsw-alias-turn-trigger-bg-hover': '#38424C',
-        '--dsw-alias-menu-group-header-fill': '#23292EF0',
-        /* 菜单材质（README 明确这是共享令牌，值必须接近不透明，否则菜单文字发糊） */
-        '--dsw-menu-surface-fill': '#23292EB8',
-        '--dsw-specific-menu': '#23292EB8',
-        /* 侧栏与气泡 */
-        '--dsw-specific-sidebar-fill': s.sidebar,
-        '--dsw-specific-sidebar-nav-item-active': s.bubble,
-        '--dsw-specific-sidebar-nav-item-active-accent': '#5FB3B355',
-        '--dsw-specific-sidebar-nav-item-hover': s.layer1,
-        '--dsw-specific-bubble': s.bubble,
-        '--dsw-specific-bubble-highlight': s.bubbleHi,
-        '--dsw-specific-input-major': s.code,
-        '--dsw-specific-login-input': s.layer3,
-        '--dsw-specific-selector': s.selector,
-        '--dsw-specific-tip': s.layer1,
-        /* 宿主笔误补丁：终端状态栏 CSS 写的是 var(--dsw-alias-bg-l2)，
-           真名是 --dsw-alias-bg-layer-2；补一个同名别名把那条规则救回来。 */
-        '--dsw-alias-bg-l2': s.layer2,
-      }
-
-      /* ---- 浅色值 ---- */
-      const light = {
-        '--dsw-alias-bg-base': LIGHT.base,
-        '--dsw-alias-bg-document-preview': LIGHT.layer1,
-        '--dsw-alias-bg-document-selection': 'color-mix(in srgb, #4A7FB5 40%, transparent)',
-        '--dsw-alias-label-document-preview': LIGHT.dim,
-        '--dsw-alias-bg-layer-1': LIGHT.layer1,
-        '--dsw-alias-bg-layer-2': LIGHT.layer2,
-        '--dsw-alias-bg-layer-3': LIGHT.layer3,
-        '--dsw-alias-bg-module-platform': LIGHT.layer3,
-        '--dsw-alias-bg-multi-select': LIGHT.layer3,
-        '--dsw-alias-bg-overlay': LIGHT.overlay,
-        '--dsw-alias-bg-skeleton': '#0000000a',
-        '--dsw-alias-bg-mask-1': '#0000003d',
-        '--dsw-alias-bg-mask-2': '#0000001f',
-        '--dsw-alias-bg-mask-3': '#0000007a',
-        '--dsw-alias-bg-mask-photo': '#000000e0',
-        '--dsw-alias-bg-mask-drop': '#ffffffb3',
-        '--dsw-alias-border-inverted': '#0000',
-        '--dsw-alias-border-inverted2': '#0000',
-        '--dsw-alias-border-l1': '#0000000a',
-        '--dsw-alias-border-l2-darkmode-thin': '#0000001a',
-        '--dsw-alias-border-l2': '#0000001a',
-        '--dsw-alias-border-l3': '#0000001f',
-        '--dsw-alias-border-l4': '#00000029',
-        '--dsw-alias-brand-primary': LIGHT.fg,
-        '--dsw-alias-brand-primary-invert': LIGHT.fg,
-        '--dsw-alias-brand-text': LIGHT.fg,
-        '--dsw-alias-brand-primary-new-colorprimary-new-color': a.light,
-        '--dsw-alias-label-primary': LIGHT.fg,
-        '--dsw-alias-label-primary-dimmed': '#3B454F',
-        '--dsw-alias-label-primary-bluish': LIGHT.fg,
-        '--dsw-alias-label-primary-foreground': '#FFFFFF',
-        '--dsw-alias-label-primary-inverted': '#FFFFFF',
-        '--dsw-alias-label-secondary': LIGHT.dim,
-        '--dsw-alias-label-tertiary': LIGHT.faint,
-        '--dsw-alias-label-caption': LIGHT.caption,
-        '--dsw-alias-label-dimmed': '#C7CFDA',
-        '--dsw-alias-label-shimmer': 'color-mix(in srgb, #000000 30%, transparent)',
-        '--dsw-alias-label-deep-diving': a.light,
-        '--dsw-alias-label-deep-diving-shimmer': a.light,
-        '--dsw-alias-menu-icon': '#3B454F',
-        '--dsw-alias-link': LIGHT.link,
-        '--dsw-alias-interactive-bg-hover': '#2631480f',
-        '--dsw-alias-interactive-bg-hover-solid': LIGHT.layer2,
-        '--dsw-alias-interactive-bg-hover-accent': '#26314824',
-        '--dsw-alias-interactive-bg-hover-danger': '#ec13130d',
-        '--dsw-alias-interactive-bg-active': '#2631481a',
-        '--dsw-alias-button-contrast-fill': LIGHT.fg,
-        '--dsw-alias-button-elevated-fill': '#FFFFFF',
-        '--dsw-alias-button-floating-fill': '#FFFFFF',
-        '--dsw-alias-button-floating-hover': LIGHT.layer2,
-        '--dsw-alias-button-ghost-active-border': PALETTE.dim,
-        '--dsw-alias-button-ghost-active-fill': LIGHT.layer3,
-        '--dsw-alias-button-ghost-active-hover': '#DDE4EC',
-        '--dsw-alias-button-info-fill': '#4A7FB5',
-        '--dsw-alias-button-info-hover': '#3E6E9E',
-        '--dsw-alias-button-primary-dimmed': LIGHT.layer3,
-        '--dsw-alias-button-primary-fill': LIGHT.fg,
-        '--dsw-alias-button-primary-hover': '#1B2229',
-        '--dsw-alias-button-tool-bar-fill': '#54555780',
-        '--dsw-alias-button-tool-bar-fill-invisible': '#1f1f1f5c',
-        '--dsw-alias-button-tool-bar-hover': '#54555799',
-        '--dsw-alias-markdown-citation': LIGHT.layer2,
-        '--dsw-alias-markdown-code-block': LIGHT.code,
-        '--dsw-alias-markdown-code-block-banner': LIGHT.layer3,
-        '--dsw-alias-markdown-code-segment-selected': '#FFFFFF',
-        '--dsw-alias-markdown-code-segment-unselected': LIGHT.layer3,
-        '--dsw-alias-markdown-inline-code': LIGHT.code,
-        '--dsw-alias-markdown-placeholder': LIGHT.layer3,
-        '--dsw-alias-markdown-tag': LIGHT.layer3,
-        '--dsw-alias-scrollbar-bg-l1': '#CFD3D6',
-        '--dsw-alias-scrollbar-bg-l2': '#C0C5CE',
-        '--dsw-alias-scrollbar-hover-l1': PALETTE.dim,
-        '--dsw-alias-scrollbar-hover-l2': '#979DA6',
-        '--dsw-alias-state-business-primary': a.light,
-        '--dsw-alias-state-business-tertiary': a.lightSoft,
-        '--dsw-alias-state-error-primary': '#C4464F',
-        '--dsw-alias-state-error-secondary': '#D4686F',
-        '--dsw-alias-state-idle-primary': '#CFD3D6',
-        '--dsw-alias-state-success-primary': '#4E8A4A',
-        '--dsw-alias-state-success-secondary': '#5E9C58',
-        '--dsw-alias-state-success-tertiary': '#E6FAED',
-        '--dsw-alias-state-warn-primary': '#C97A2B',
-        '--dsw-alias-state-warn-secondary': '#E08C34',
-        '--dsw-alias-state-warn-tertiary': '#FEF5E7',
-        '--dsw-alias-state-warn-label': '#B36A1E',
-        '--dsw-alias-code-diff-added': '#22c55e14',
-        '--dsw-alias-code-diff-deleted': '#f25a5a14',
-        '--dsw-alias-file-diff-added-bg': '#E6F4E7',
-        '--dsw-alias-file-diff-added-gutter': '#EDF7ED',
-        '--dsw-alias-file-diff-added-marker': '#01A241',
-        '--dsw-alias-file-diff-deleted-bg': '#FCE6E2',
-        '--dsw-alias-file-diff-deleted-gutter': '#FDECE9',
-        '--dsw-alias-file-diff-deleted-marker': '#BA2723',
-        '--dsw-alias-switch-thumb': '#FFFFFF',
-        '--dsw-alias-toast-bg': '#38424C',
-        '--dsw-alias-toast-label': '#FFFFFF',
-        '--dsw-alias-tooltip-bg': '#38424C',
-        '--dsw-alias-tooltip-key-bg': 'color-mix(in srgb, #38424C, white 18%)',
-        '--dsw-alias-turn-trigger-bg': LIGHT.code,
-        '--dsw-alias-turn-trigger-bg-hover': LIGHT.layer3,
-        '--dsw-alias-menu-group-header-fill': '#F8F9FAF0',
-        '--dsw-menu-surface-fill': '#F8F9FAF0',
-        '--dsw-specific-menu': '#F8F9FAF0',
-        '--dsw-specific-sidebar-fill': LIGHT.sidebar,
-        '--dsw-specific-sidebar-nav-item-active': LIGHT.layer3,
-        '--dsw-specific-sidebar-nav-item-active-accent': a.lightSoft,
-        '--dsw-specific-sidebar-nav-item-hover': LIGHT.layer2,
-        '--dsw-specific-bubble': LIGHT.bubble,
-        '--dsw-specific-bubble-highlight': LIGHT.bubbleHi,
-        '--dsw-specific-input-major': LIGHT.code,
-        '--dsw-specific-login-input': LIGHT.layer3,
-        '--dsw-specific-selector': LIGHT.selector,
-        '--dsw-specific-tip': LIGHT.layer2,
-        '--dsw-alias-bg-l2': LIGHT.layer2,
-      }
-
-      /* ---- 静态色阶（前端 CSS 有 9 处直接引用，用于文件类型图标/内联动作）---- */
-      const staticTokens = {
-        '--dsw-static-deepseek-500': { dark: PALETTE.teal, light: a.light },
-        '--dsw-static-deepseek-450': { dark: '#7FC7C7', light: '#5A9E9E' },
-        '--dsw-static-deepseek-400': { dark: '#7FC7C7', light: '#5A9E9E' },
-        '--dsw-static-green-500': { dark: PALETTE.green, light: '#4E8A4A' },
-        '--dsw-static-amber-400': { dark: PALETTE.yellow, light: '#E08C34' },
-        '--dsw-static-amber-500': { dark: PALETTE.orange, light: '#C97A2B' },
-        '--dsw-static-red-600': { dark: PALETTE.red, light: '#C4464F' },
-        '--dsw-static-neutral-bluish-00': { dark: '#F7F9FB', light: '#FFFFFF' },
-        '--dsw-static-neutral-bluish-300': { dark: PALETTE.dim, light: '#A7ADBA' },
-      }
-
-      /* ---- Shiki 语法色（css-variables 主题，前缀 --shiki-）---- */
-      const shikiTokens = syntax
-        ? {
-            '--shiki-foreground': { dark: PALETTE.fg, light: LIGHT.fg },
-            '--shiki-background': { dark: s.code, light: LIGHT.code },
-            '--shiki-token-constant': { dark: PALETTE.orange, light: '#C97A2B' },
-            '--shiki-token-string': { dark: PALETTE.green, light: '#4E8A4A' },
-            '--shiki-token-comment': { dark: '#8792A2', light: '#6B7686' },
-            '--shiki-token-keyword': { dark: PALETTE.purple, light: '#8A5E8A' },
-            '--shiki-token-parameter': { dark: PALETTE.orange, light: '#C97A2B' },
-            /* function 令牌 = Mariana 的 var(blue) #6699CC。
-               Sublime Mariana 里 `support.function, support.macro` → var(blue)，
-               所以 Python 内置函数（print/len/open）、LaTeX 命令（\chapter）
-               都是这个蓝。（另一条规则 `entity.name.function` → var(blue5) 青
-               只管「函数定义名」，Shiki 把两者合并了，取更常见的蓝。） */
-            '--shiki-token-function': { dark: PALETTE.blue, light: '#3E6FA8' },
-            '--shiki-token-string-expression': { dark: '#A9D4A4', light: '#3E7A3A' },
-            '--shiki-token-punctuation': { dark: PALETTE.dim, light: '#5A6472' },
-            '--shiki-token-link': { dark: PALETTE.blueUi, light: LIGHT.link },
-            /* Shiki 的 css-variables 主题还引用这三个（用于 ```diff 代码块），
-               但宿主 shiki.css 没有声明它们 —— 不补的话 diff 新增/删除行会落到
-               var() 未定义的兜底色（继承正文色），看不出增删。 */
-            '--shiki-token-inserted': { dark: PALETTE.green, light: '#4E8A4A' },
-            '--shiki-token-deleted': { dark: PALETTE.red, light: '#C4464F' },
-            '--shiki-token-changed': { dark: PALETTE.yellow, light: '#C97A2B' },
-          }
-        : {}
-
-      /* ---- 合并成 { light, dark } 对；缺浅色值的回落到深色值（绝不出现单值）---- */
-      const out = {}
-      for (const name of Object.keys(dark)) {
-        out[name] = { light: light[name] !== undefined ? light[name] : dark[name], dark: dark[name] }
-      }
-      for (const name of Object.keys(staticTokens)) out[name] = staticTokens[name]
-      for (const name of Object.keys(shikiTokens)) out[name] = shikiTokens[name]
-      /* 正文高亮的辅助令牌：与 syntax 开关解耦，由 prose 开关单独控制样式表挂载。 */
-      for (const [name, pair] of Object.entries(resolveProseTokens(state))) out[name] = pair
-      /* 过程行高亮色：写进令牌层，样式表用 var(--dmt-row-color, 兜底) 取。
-         浅色值与深色值相同（过程行颜色是用户挑的，不该随外观变）。
-         state 可能整体缺省（测试/首次挂载），所以每个字段都单独兜底。 */
-      const rowColor = typeof (state && state.rowColor) === 'string' && HEX_PATTERN.test(state.rowColor)
-        ? state.rowColor
-        : DEFAULTS.rowColor
-      out['--dmt-row-color'] = { light: rowColor, dark: rowColor }
-      /* 汇总行 / 本轮汇总的颜色（黄），同上：两色系同值。 */
-      const summaryColor = typeof (state && state.summaryColor) === 'string' && HEX_PATTERN.test(state.summaryColor)
-        ? state.summaryColor
-        : DEFAULTS.summaryColor
-      out['--dmt-summary-color'] = { light: summaryColor, dark: summaryColor }
-      /* Markdown 细节色：对齐 Sublime Mariana 的 markup.* 规则。 */
-      out['--dmt-md-list-marker'] = { light: PALETTE.green, dark: PALETTE.green }
-      out['--dmt-md-quote'] = { light: PALETTE.orange, dark: PALETTE.orange }
-      out['--dmt-md-code-bg'] = { light: LIGHT.code, dark: s.layer2 }
-      return out
-    }
     /**
      * 生成正文高亮样式表。
      *
@@ -2608,14 +2579,6 @@ function makeColorizer(scheme) {
 
     /**
      * 把 hex 颜色朝白色插值（线性 sRGB 空间，通道各自向 255 靠拢）。
-     *
-     * **注意：这里暂时不用 OKLCH。** 试过用 `okAdjustLightness` 换掉它，会把三条
-     * 既有契约改掉：`t=1` 不再到纯白、`#808080@t=0.5` 的具体值变了，而且
-     * 「正文提亮档位」的层次反而塌掉（实测 soft 档 em 对正文从 1.15:1 掉到 1.06:1）——
-     * 因为线性公式在深色上会**过冲**到正文色之外，而 OKLCH 的均匀步长不会。
-     * 要换就得连同三档 boost 一起重新标定，那是单独一轮的事。
-     * OKLCH 模块（`tools/oklch.mjs` + 内嵌）已经就位，留给后续新功能用。
-     *
      * @param {string} hex - `#rgb` 或 `#rrggbb`。
      * @param {number} t - 插值比例 0..1。
      * @returns {string} 提亮后的 hex（大写）；输入非法时原样返回。
@@ -3223,25 +3186,18 @@ function makeColorizer(scheme) {
       }
     }
 
-    /**
-     * 合帧重扫：DOM 一次变动可能带进很多节点，合并成一次。
-     *
-     * 用 50ms 而不是更大的值：代码块「先无色 → Shiki 普通高亮 → 我们的 LaTeX 高亮」
-     * 这个三跳本身不可避免，但**我们这一跳的延迟要尽量小**。重扫本身很便宜
-     * （内容没变时 `syncTexLayer` 直接返回），短去抖不会带来负担。
-     */
-    /** 毛玻璃样式表元素。 */
+    /** 毛玻璃 / 不透明度样式表元素。 */
     let glassEl = null
 
     /**
-     * 按当前设置维护「表面不透明度 + 毛玻璃」覆盖样式表。
+     * 按当前设置维护「表面不透明度 + 毛玻璃」。
      *
-     * 与卡片/正文那几张表同一套模式：只在需要时挂一张 `<style>`，关掉就撤掉，
-     * 不留残留。
+     * 顺序很重要（照抄原实现 deepseek-colorful 的 applyTheme）：
+     *   1. 先确保背景层存在 —— 它是被模糊/被透出的那一层
+     *   2. 再挂样式表 —— 里面同时包含结构透明化、半透明 token、backdrop-filter
      *
-     * 表面色从**当前设置解析出来**（`SURFACES` / `LIGHT` + 自定义槽位），
-     * 而不是从 DOM 里读计算值 —— 我们要生成的是「目标值」，
-     * 读回来只会拿到自己上一轮写进去的东西。
+     * 前几版一直没效果的根因：只做了 2 没做 1，
+     * 于是 backdrop-filter 模糊的是同一块纯色，屏幕上毫无变化。
      */
     function syncGlassSheet() {
       if (typeof document === 'undefined') return
@@ -3253,8 +3209,7 @@ function makeColorizer(scheme) {
       const surfaces = isDark ? darkSurfaces : lightSurfaces
       const css = wanted ? buildGlassSheet(state, darkSurfaces, lightSurfaces, isDark) : ''
 
-      /* 背景层：半透明或毛玻璃任一开启就需要 —— 它是"被模糊/被透出"的那一层。
-         没有它，backdrop-filter 模糊的是同一块纯色，屏幕上毫无变化。 */
+      /* 背景层：两个功能任一开启就需要。 */
       const percent = parseSurfaceOpacity(state && state.surfaceOpacity)
       const needBackdrop = wanted && (percent < 100 || state.glass === 'on')
       syncBackdropLayer(needBackdrop, surfaces, isDark)
@@ -3286,6 +3241,13 @@ function makeColorizer(scheme) {
       }
     }
 
+    /**
+     * 合帧重扫：DOM 一次变动可能带进很多节点，合并成一次。
+     *
+     * 用 50ms 而不是更大的值：代码块「先无色 → Shiki 普通高亮 → 我们的 LaTeX 高亮」
+     * 这个三跳本身不可避免，但**我们这一跳的延迟要尽量小**。重扫本身很便宜
+     * （内容没变时 `syncTexLayer` 直接返回），短去抖不会带来负担。
+     */
     function scheduleLatexRescan() {
       if (latexRescanTimer !== null) return
       if (typeof setTimeout !== 'function') return
@@ -4672,127 +4634,6 @@ function makeColorizer(scheme) {
               : null,
           ),
         ),
-
-        /* ---- 表面不透明度 + 毛玻璃 ----------------------------------------
-           两个旋钮配合才有意义：不透明度让底下透出来，毛玻璃模糊掉它背后的内容。
-           DSH 桌面端在 Windows 上用 backgroundMaterial:"acrylic" 创建窗口，
-           所以「透出来」的确实是系统材质 —— 不是对着纯色做无用功。 */
-        h(
-          Row,
-          {
-            title: '表面不透明度',
-            hint: '100% = 不透明。调低后表面变半透明，桌面端窗口的原生亚克力材质会透出来。只作用于表面（底色/层/侧栏/气泡/输入框），不碰文字、边框与菜单。',
-          },
-          h(
-            'span',
-            { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flex: 'none' } },
-            h('input', {
-              type: 'range',
-              min: '0',
-              max: '100',
-              step: '1',
-              style: { width: '132px' },
-              value: String(parseSurfaceOpacity(snapshot.surfaceOpacity)),
-              'aria-label': '表面不透明度',
-              onChange: (event) => updateDraft({ surfaceOpacity: event.target.value }),
-            }),
-            h(
-              'span',
-              {
-                style: {
-                  minWidth: '40px',
-                  textAlign: 'right',
-                  fontVariantNumeric: 'tabular-nums',
-                  color: 'var(--dsw-alias-label-secondary, #A7ADBA)',
-                  fontSize: '12px',
-                },
-              },
-              parseSurfaceOpacity(snapshot.surfaceOpacity) + '%',
-            ),
-          ),
-        ),
-        h(
-          Row,
-          {
-            title: '毛玻璃',
-            hint: '给页面内层叠的表面（侧栏 / 面板 / 卡片 / 气泡 / 输入框）加 backdrop-filter，模糊掉它背后的页面内容。配合上面的不透明度使用才明显。',
-          },
-          h('input', {
-            type: 'checkbox',
-            checked: snapshot.glass === 'on',
-            'aria-label': '毛玻璃',
-            onChange: (event) => updateDraft({ glass: event.target.checked ? 'on' : 'off' }),
-          }),
-        ),
-        h(
-          Row,
-          {
-            title: '模糊半径',
-            hint: '0–40 px。0 = 不模糊；太大（>24px）会让背后的内容完全看不出形状。',
-          },
-          h(
-            'span',
-            { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flex: 'none' } },
-            h('input', {
-              type: 'range',
-              min: '0',
-              max: '40',
-              step: '1',
-              style: { width: '132px' },
-              value: String(parseBounded(snapshot.glassBlur, 0, 40, 16)),
-              'aria-label': '模糊半径',
-              onChange: (event) => updateDraft({ glassBlur: event.target.value }),
-            }),
-            h(
-              'span',
-              {
-                style: {
-                  minWidth: '40px',
-                  textAlign: 'right',
-                  fontVariantNumeric: 'tabular-nums',
-                  color: 'var(--dsw-alias-label-secondary, #A7ADBA)',
-                  fontSize: '12px',
-                },
-              },
-              parseBounded(snapshot.glassBlur, 0, 40, 16) + 'px',
-            ),
-          ),
-        ),
-        h(
-          Row,
-          {
-            title: '背景饱和度',
-            hint: '100–220 %。毛玻璃会把背后的颜色洗淡，适度过饱和（默认 120%）能把颜色拉回来。',
-          },
-          h(
-            'span',
-            { style: { display: 'inline-flex', alignItems: 'center', gap: '8px', flex: 'none' } },
-            h('input', {
-              type: 'range',
-              min: '100',
-              max: '220',
-              step: '5',
-              style: { width: '132px' },
-              value: String(parseBounded(snapshot.glassSaturate, 100, 220, 120)),
-              'aria-label': '背景饱和度',
-              onChange: (event) => updateDraft({ glassSaturate: event.target.value }),
-            }),
-            h(
-              'span',
-              {
-                style: {
-                  minWidth: '40px',
-                  textAlign: 'right',
-                  fontVariantNumeric: 'tabular-nums',
-                  color: 'var(--dsw-alias-label-secondary, #A7ADBA)',
-                  fontSize: '12px',
-                },
-              },
-              parseBounded(snapshot.glassSaturate, 100, 220, 120) + '%',
-            ),
-          ),
-        ),
-
         /* 卡片预览：结构复刻宿主 ChangedFiles（头部横带走 --changes-fill）。
            容器挂 previewVars，草稿的卡片色只盖这棵子树。 */
         h(
@@ -5318,16 +5159,6 @@ function makeColorizer(scheme) {
                 markdownEl = null
               }
               diag.markdown = 'off'
-              if (glassEl !== null) {
-                try {
-                  glassEl.remove()
-                } catch (error) {
-                  note('teardown glass sheet', error)
-                }
-                glassEl = null
-              }
-              syncBackdropLayer(false, null, false)
-              diag.glass = 'off'
               disposeLatexObserver()
               if (latexEl !== null) {
                 try {
@@ -5404,18 +5235,17 @@ function makeColorizer(scheme) {
         parseProseColors,
         CARD_SHEET_ID,
         GLASS_SHEET_ID,
+        DARK_SELECTOR,
+        LIGHT_SELECTOR,
         BACKDROP_ID,
+        TRANSPARENT_SELECTORS,
+        GLASS_TARGETS,
+        buildGlassSheet,
         buildBackdropImage,
         syncBackdropLayer,
-        GLASS_TARGETS,
-        LAYOUT_COLUMNS,
-        GLASS_TRANSPARENT,
-        buildGlassSheet,
         hexToRgba,
         parseSurfaceOpacity,
         parseBounded,
-        DARK_SELECTOR,
-        LIGHT_SELECTOR,
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
