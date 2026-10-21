@@ -24,11 +24,27 @@
 
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
-const profile = process.env.DSH_PROFILE_DIR || 'C:\\Users\\15623\\.dsh\\profiles\\desktop'
+
+/**
+ * 目标 profile 目录。
+ *
+ * 优先取 `DSH_PROFILE_DIR`；否则按 `DSH_HOME`（缺省为 `os.homedir()/.dsh`）
+ * 拼出 `profiles/desktop`。
+ *
+ * **这里刻意不写死绝对路径** —— 曾经硬编码成某个用户的主目录，
+ * 结果既跑不了别人的机器，又把本机用户名带进了公开仓库。
+ */
+function resolveProfile() {
+  if (process.env.DSH_PROFILE_DIR) return process.env.DSH_PROFILE_DIR
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  return join(home, 'profiles', process.env.DSH_PROFILE_NAME || 'desktop')
+}
+const profile = resolveProfile()
 
 const results = []
 function check(ok, name, detail) {
