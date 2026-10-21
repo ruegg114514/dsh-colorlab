@@ -609,7 +609,7 @@ node <runtime>/dependencies/pnpm/bin/pnpm.mjs install --frozen-lockfile --offlin
 [ERR_PNPM_OUTDATED_LOCKFILE] pnpm-lock.yaml is not up to date with package.json
   Failure reason:
   specifiers in the lockfile don't match specifiers in package.json:
-* 1 dependencies were added: dsh-colorlab@link:C:/Users/15623/.dsh/plugins/dsh-colorlab
+* 1 dependencies were added: dsh-colorlab@link:<DSH_HOME>/plugins/dsh-colorlab
 ```
 
 **修法**：让 lockfile 与 package.json 对齐。`link:` 依赖在 lockfile 里**只需要一条
@@ -617,7 +617,7 @@ importer 记录**（不进 `packages`/`snapshots`，和已有的三个 link 依�
 
 ```yaml
       dsh-colorlab:
-        specifier: link:C:/Users/15623/.dsh/plugins/dsh-colorlab
+        specifier: link:<DSH_HOME>/plugins/dsh-colorlab
         version: link:../../plugins/dsh-colorlab
 ```
 
