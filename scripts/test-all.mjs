@@ -53,9 +53,12 @@ for (const suite of suites) {
   let args
   let env = { ...process.env }
 
+  /* 给每个子进程留足堆：card.test.mjs 要把 174 MB 的 app.asar 读进内存，
+     连续跑多个套件时默认堆会不够，表现为 node:buffer OOM（单独跑却正常，
+     很容易被误判成产品代码有问题）。 */
   if (suite.node || !useElectron) {
     command = process.execPath
-    args = suite.args
+    args = ['--max-old-space-size=4096', ...suite.args]
   } else {
     const electron = findElectron()
     if (electron === null) {
@@ -64,7 +67,7 @@ for (const suite of suites) {
       args = suite.args
     } else {
       command = electron
-      args = suite.args
+      args = ['--max-old-space-size=4096', ...suite.args]
       env.ELECTRON_RUN_AS_NODE = '1'
     }
   }
