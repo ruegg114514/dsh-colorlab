@@ -141,18 +141,23 @@ check(half.includes('--dsw-alias-bg-layer-2:rgba(66, 75, 85, 0.59) !important'),
 check(!half.includes('#343D46'), '不再出现原始 6 位 hex（已换成 rgba）')
 check(!/#[0-9a-fA-F]{8}\b/.test(half), '不含 8 位 hex（统一走 rgba）')
 
-/* 【关键】布局列要**带 alpha**，因为它们在背景层之上 —— 这正是半透明的来源。
-   （之前有一版把它们设成 transparent，那是"没有背景层"时期的错误做法：
-     那时透明化只会露黑底。现在有 #dmt-backdrop 了，列必须半透明才看得出效果。） */
+/* 【关键】布局列必须**完全透明**，不许带 alpha。
+   宿主背景是嵌套的、每层同色；token 改成 rgba 后 frame 自动半透明，
+   列若再设 rgba 就会叠加（0.6 叠两层 = 0.84、三层 = 0.94），
+   屏幕上等于完全不透明 —— 这是"改了也没变化"的直接原因。 */
 for (const [key, sel] of [['中列', 'centerCol'], ['左栏', 'sidebarCol'], ['右栏', 'rightbarCol']]) {
-  const line = half.split('\n').find((l) => l.includes('"' + sel + '"') && l.includes('rgba('))
-  check(line !== undefined, `${key}带 alpha（叠在背景层上）`)
+  const line = half.split('\n').find((l) => l.includes('"' + sel + '"'))
+  check(line !== undefined && line.includes('transparent'), `${key}完全透明（不叠 alpha）`)
+  check(line !== undefined && !line.includes('rgba('), `${key}不带 rgba`)
 }
 check((half.match(/!important/g) || []).length > 0, '覆盖带 !important（压过宿主内联样式）')
 
-/* 窗口框架选择器必须被 data-windows-titlebar 限定，否则会命中 14 个 _frame 类 */
-check(half.includes('[data-windows-titlebar] [class*="frame"]'),
-  '窗口框架选择器带 [data-windows-titlebar] 限定')
+/* 窗口框架**不再单独写规则** —— 它的半透明完全来自 token
+   （`background: var(--dsw-alias-bg-base)` + 我们把该 token 改成 rgba）。
+   所以这里断言的是"没有针对 frame 的 background 覆盖"，
+   否则会和 token 打架（上一版把它清成 transparent，导致毫无效果）。 */
+check(!half.split('\n').some((line) => /\[class\*="frame"\]/.test(line) && /background/.test(line)),
+  '不对 frame 单独覆盖 background（半透明靠 token 承载）')
 
 /* 【关键回归】token 声明必须**全部**带 !important。
    宿主 ThemePresenter 用 body.style.setProperty(...) 写这些 token ——
@@ -270,6 +275,12 @@ check(GLASS_TRANSPARENT.includes('html') && GLASS_TRANSPARENT.includes('body'),
   '透明化列表含 html/body')
 check(!GLASS_TRANSPARENT.includes('[class*="frame"]'),
   '透明化列表不含裸 [class*="frame"]（会命中 14 个类）')
+/* 【关键回归】窗口框架**不许**被透明化：它是唯一承载 alpha 的那一层。
+   把它清成 transparent，token 里的 rgba 就完全用不上，半透明彻底失效。 */
+check(!GLASS_TRANSPARENT.some((sel) => sel.includes('frame') && sel.includes('titlebar')),
+  '透明化列表不含 [data-windows-titlebar] [class*="frame"]（它要留着承载 alpha）')
+check(!glass.split('\n').some((line) => line.startsWith('html,body,#root') && line.includes('titlebar')),
+  '结构透明化规则里没有窗口框架')
 check(GLASS_SHEET_ID === 'dsh-colorlab/glass.css', '样式表 id', GLASS_SHEET_ID)
 check(DARK_SELECTOR.includes('[data-ds-dark-theme][data-ds-dark-theme]'),
   '深色选择器把属性写两遍提权（不靠 !important）', DARK_SELECTOR)
