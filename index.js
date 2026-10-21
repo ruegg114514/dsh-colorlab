@@ -64,21 +64,57 @@ import { fileURLToPath } from 'node:url'
 /** 壁纸路由。页面用同源 fetch 取。 */
 const WALLPAPER_ROUTE = '/dsh-colorlab/wallpaper'
 
-/** 壁纸大小上限：正常约 1MB，超过 12MB 视为异常，不塞进页面。 */
-const WALLPAPER_MAX_BYTES = 12 * 1024 * 1024
+/* 壁纸大小不再设上限。
+ *
+ * 原先卡了 12 MB，理由是「正常壁纸约 1 MB」。但高分辨率壁纸（4K / 多显示器
+ * 拼接）轻松超过这个数，被拒绝时只表现为「壁纸状态：使用渐变背景」，
+ * 用户根本不知道是自己那张图太大。
+ *
+ * 现在只拒绝「空文件」这种明确异常，大小交给浏览器自己的解码能力判断。 */
 
 /**
  * 按优先级列出壁纸候选路径。
  * @returns {string[]} 可能存在的壁纸文件路径。
  */
+/**
+ * 清洗用户填的路径。
+ *
+ * Windows 资源管理器的「复制为路径」会把路径带引号复制，
+ * 用户粘进来就成了 双引号+路径+双引号 的形式。
+ * 首尾的引号是值的一部分，直接当路径用必然找不到文件。
+ * 这里统一剥掉，并且支持重复粘贴（剥多层）。
+ *
+ * @param {string} raw - 用户填写的原始值。
+ * @returns {string} 清洗后的路径；空串表示未指定。
+ */
+function cleanPath(raw) {
+  if (typeof raw !== "string") return ""
+  let value = raw.trim()
+  for (let i = 0; i < 3; i += 1) {
+    const first = value[0]
+    const last = value[value.length - 1]
+    if ((first === String.fromCharCode(34) && last === String.fromCharCode(34))
+      || (first === String.fromCharCode(39) && last === String.fromCharCode(39))) {
+      value = value.slice(1, -1).trim()
+    } else {
+      break
+    }
+  }
+  return value
+}
+
 function wallpaperCandidates(customPath) {
   const out = []
-  /* 用户自选壁纸优先：设置里指定了路径就用它，不再读系统壁纸。 */
-  if (typeof customPath === 'string' && customPath.trim() !== '') {
-    out.push(customPath.trim())
-    return out
-  }
+  const custom = cleanPath(customPath)
   const appData = process.env.APPDATA
+
+  /* 自选壁纸优先，但**不独占**。
+   * 上一版写成「有自选值就只试它」，结果用户填了个无效路径
+   * （Windows 复制来的带引号路径），整条壁纸彻底失效 ——
+   * 表现为「连桌面壁纸都识别不到，只剩渐变」。
+   * 正确行为：自选优先，读不到就回退到系统壁纸。 */
+  if (custom !== "") out.push(custom)
+
   if (appData) {
     out.push(join(appData, 'Microsoft', 'Windows', 'Themes', 'TranscodedWallpaper'))
   }
@@ -120,7 +156,8 @@ function readWallpaper(customPath) {
     try {
       if (!existsSync(path)) continue
       const stats = statSync(path)
-      if (!stats.isFile() || stats.size === 0 || stats.size > WALLPAPER_MAX_BYTES) continue
+      /* 只排除空文件与非普通文件。大小不设上限（4K / 多屏壁纸会超 12MB）。 */
+      if (!stats.isFile() || stats.size === 0) continue
 
       /* 缓存键带上路径：换壁纸（或改设置后指向别的文件）必须立刻生效，
          不能只比 mtime —— 两个文件可能 mtime 相同。 */
@@ -133,7 +170,7 @@ function readWallpaper(customPath) {
       const mime = detectImageMime(bytes)
       if (mime === 'application/octet-stream') continue
 
-      wallpaperCache = { mtime: stats.mtimeMs, bytes, mime }
+      wallpaperCache = { mtime: stats.mtimeMs, bytes, mime, path }
       return wallpaperCache
     } catch {
       /* 换下一个候选 */
@@ -162,7 +199,23 @@ function registerWallpaperRoute(ctx, getCustomPath) {
             response.end()
             return
           }
-          const found = readWallpaper(typeof getCustomPath === 'function' ? getCustomPath() : '')
+          /* 🔧 路径优先从 query 取。
+           *
+           * 页面每次请求都带上当前的 glassWallpaperPath（见 client.js 的
+           * wallpaperUrl）。这比读 Host 的 config 可靠 —— config 是 apply()
+           * 时的快照，设置改动后不会更新，会导致「要提交第二次才显示上一次的图」。
+           *
+           * query 里没有时才回落到 config（兼容旧请求 / 直接访问路由）。 */
+          let queryPath = ''
+          try {
+            const requestUrl = new URL(request.url, 'http://localhost')
+            const raw = requestUrl.searchParams.get('path')
+            if (typeof raw === 'string' && raw !== '') queryPath = raw
+          } catch {
+            /* URL 解析失败就回落到 config */
+          }
+          const configured = typeof getCustomPath === 'function' ? getCustomPath() : ''
+          const found = readWallpaper(queryPath !== '' ? queryPath : configured)
           if (found === null) {
             response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
             response.end('wallpaper not found')
@@ -255,6 +308,9 @@ const FIELD_DEFAULTS = {
   glassFog: '16',
   /* 玻璃背后的模糊半径 0–40 px。 */
   glassBlur: '16',
+  /* 白雾浓度 0–100。磨砂的「厚度感」来自这层薄白，不是来自模糊。
+     上游实测：0% 边缘能量 0.23、8% → 0.61（平衡点）、28% → 1.03（会盖平模糊）。 */
+  glassHaze: '8',
   /* 自选壁纸的绝对路径；空串 = 跟随系统桌面壁纸。
      指向本机图片文件时优先使用它，Host 会校验存在性与大小。 */
   glassWallpaperPath: '',
@@ -389,6 +445,7 @@ function buildConfig() {
     glassTint: str(FIELD_DEFAULTS.glassTint),
     glassFog: str(FIELD_DEFAULTS.glassFog),
     glassBlur: str(FIELD_DEFAULTS.glassBlur),
+    glassHaze: str(FIELD_DEFAULTS.glassHaze),
     glassWallpaperPath: str(FIELD_DEFAULTS.glassWallpaperPath),
   })
 }
