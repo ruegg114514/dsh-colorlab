@@ -933,11 +933,47 @@ function okContrastRatio(hexA, hexB) {
      * `_centerCol_1ypvv_12`），可读部分（`centerCol`）跨构建稳定。
      */
 
+    /* ====================================================================== *
+     * 二·六、表面不透明度 + 毛玻璃
+     *
+     * ## 为什么前两版完全没效果
+     *
+     * \`backdrop-filter\` 模糊的是**它背后的东西**。如果背后就是同一块纯色，
+     * 模糊纯色得到的还是纯色 —— 屏幕上一点变化都没有。这不是 CSS 写法问题，
+     * 是**缺少被模糊的内容**。
+     *
+     * 参考实现（yaanlaan/deepseek-colorful 的 \`theme-engine.js\`）正是这么做的：
+     *
+     *     // 自己插一个全屏背景容器，prepend 到 body，z-index: 0
+     *     container.style.cssText = 'position:fixed; inset:0; width:100vw;
+     *       height:100vh; pointer-events:none; z-index:0; overflow:hidden'
+     *     document.body.prepend(container)
+     *
+     *     // 而且：没有背景时 alpha 直接是 1，根本不做半透明
+     *     const baseAlpha = hasBg ? (...) : 1
+     *
+     * 也就是说：**没有背景层就不做半透明**。它把「半透明 + 模糊」建立在
+     * 「自己铺了一层背景」这个前提上。
+     *
+     * ## 所以这里的做法
+     *
+     * 1. **自己铺一层背景**（\`#dmt-backdrop\`，fixed、z-index 0、pointer-events none）。
+     *    默认是**窗口材质透出来的渐变**，不是纯色 —— 有渐变才有"模糊得出来"的东西。
+     * 2. 把 \`html/body/#root\` 以及窗口框架**透明化**，让这层背景可见。
+     *    这一步在前一版被我删掉过（当时没有背景层，透明化只会露黑底）；
+     *    **现在有背景层了，它才是对的**。
+     * 3. 表面用 \`rgba()\` 半透明，叠在背景层之上 —— 这时 \`backdrop-filter\`
+     *    才有东西可模糊。
+     *
+     * 三者缺一不可。这也是为什么"只改 token"或"只加 backdrop-filter"都没用。
+     * ====================================================================== */
+
+    /** 背景层的 id（样式表 id 见上面的常量块）。 */
+    const BACKDROP_ID = 'dmt-backdrop'
+
     /**
      * 布局列（没有对应令牌，只能按类名片段命中）。
-     *
-     * 它们的角色是**被透明化**：真正铺满窗口的是外层的 frame，
-     * 这些列叠在它上面。让它们透明，外层的半透明才透得出来。
+     * 它们的角色是**被透明化**：真正铺满窗口的是窗口框架与背景层。
      */
     const LAYOUT_COLUMNS = Object.freeze([
       Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]', label: '左侧栏' }),
@@ -945,14 +981,13 @@ function okContrastRatio(hexA, hexB) {
       Object.freeze({ key: 'rightbar', sel: '[class*="rightbarCol"]', label: '右侧栏' }),
     ])
 
-    /** 要加 backdrop-filter 的容器（类名片段）。 */
     /**
-     * 要加 `backdrop-filter` 的表面容器。
+     * 要加 \`backdrop-filter\` 的表面容器。
      *
      * **选择器刻意收窄**：只命中确切的容器类名片段。
-     * 早先用过 `aside`、`nav`、`[class*="sidebar"]`、`[class*="message"]`
-     * 这类宽选择器 —— 它们会命中几十个本不该模糊的元素（导航器框架、消息内的
-     * 每一行…），既糊掉内容又拖慢渲染。宁可少模糊几个，也不要糊成一片。
+     * 早先用过 \`aside\`、\`nav\`、\`[class*="sidebar"]\`、\`[class*="message"]\`
+     * 这类宽选择器 —— 会命中几十个不该模糊的元素（导航器框架、消息内每一行…），
+     * 既糊掉内容又拖慢渲染。
      */
     const GLASS_TARGETS = Object.freeze([
       Object.freeze({ key: 'sidebar', sel: '[class*="sidebarCol"]' }),
@@ -962,23 +997,13 @@ function okContrastRatio(hexA, hexB) {
       Object.freeze({ key: 'bubble', sel: '[class*="bubble"]' }),
     ])
 
-    /**
-     * ⚠️ **不再透明化任何外层容器。**
-     *
-     * 这是抄错了别人的一处做法，代价很直观：上半屏直接变黑。
-     *
-     * 别人（yaanlaan/deepseek-colorful）会**自己插入一个全屏背景容器**
-     * （`position: fixed`、`z-index: 0`、壁纸或渐变），所以它把
-     * `html/body/#root` 透明化是对的 —— 底下有它自己铺的东西。
-     *
-     * 我们**没有背景层**。把窗口结构透明掉之后，露出来的是 **Electron 窗口
-     * 自己的黑底** —— 于是"毛玻璃"实际效果是「上半屏发黑、只有少数自带底色的
-     * 区块正常」。这条已整个删除。
-     *
-     * 现在毛玻璃只做一件事：给**表面容器**加 `backdrop-filter`。
-     * 半透明由「表面不透明度」改 token 提供，两者各司其职。
-     */
-    const GLASS_TRANSPARENT = Object.freeze([])
+    /** 需要透明化才能露出背景层的结构（有背景层之后，这些是**必须**的）。 */
+    const GLASS_TRANSPARENT = Object.freeze([
+      'html', 'body', '#root',
+      '[data-windows-titlebar] [class*="frame"]',
+      '[class*="scrollBody"]', '[class*="_scrollBody_"]',
+      '[class*="viewArea"]', '[class*="Dc7zOa_root"]',
+    ])
 
     /**
      * 解析 0–100 的「表面不透明度」。无效值按 100（不透明）处理。
@@ -1021,40 +1046,106 @@ function okContrastRatio(hexA, hexB) {
       const g = parseInt(clean.slice(2, 4), 16)
       const b = parseInt(clean.slice(4, 6), 16)
       if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return hex
-      /* 保留两位小数：JS 浮点会算出 0.6499999999999999 这种值，写进 CSS 很难看，
-         也会让测试里的字符串比对变脆。 */
+      /* 保留两位小数：JS 浮点会算出 0.6499999999999999 这种值。 */
       const a = Math.round(Math.max(0, Math.min(1, alpha)) * 100) / 100
       return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')'
     }
 
     /**
+     * 生成背景层要用的 CSS 背景值。
+     *
+     * **必须不是纯色** —— 纯色被模糊之后还是纯色，等于没效果。
+     * 这里用「表面色的几个亮度档 + 大半径径向渐变」造出柔和的光斑，
+     * 模糊后能明显看到层次变化，同时颜色仍跟当前配色走。
+     *
+     * @param {object} surfaces - 表面色。
+     * @param {boolean} isDark - 深色模式。
+     * @returns {string} 可直接写进 `background` 的值。
+     */
+    function buildBackdropImage(surfaces, isDark) {
+      const s = surfaces || {}
+      const base = s.base || (isDark ? '#343D46' : '#FFFFFF')
+      const layer1 = s.layer1 || base
+      const layer2 = s.layer2 || layer1
+      const sidebar = s.sidebar || layer1
+      /* 三个光斑：左上偏侧栏色、右下偏 layer2、中间偏 layer1。
+         大半径 + 低不透明度，模糊后是柔和的光晕，不会显得花。 */
+      const spot = (color, alpha) => hexToRgba(color, alpha)
+      return 'radial-gradient(circle at 18% 12%, ' + spot(sidebar, 0.85) + ' 0%, transparent 55%),'
+        + 'radial-gradient(circle at 82% 78%, ' + spot(layer2, 0.85) + ' 0%, transparent 58%),'
+        + 'radial-gradient(circle at 50% 50%, ' + spot(layer1, 0.6) + ' 0%, transparent 70%),'
+        + base
+    }
+
+    /**
+     * 按当前设置维护背景层（DOM 元素）。
+     *
+     * 只在「不透明度 < 100」或「毛玻璃开」时需要 —— 否则删掉，不留痕迹。
+     *
+     * @param {boolean} needed - 是否需要背景层。
+     * @param {object} surfaces - 表面色（深色或浅色）。
+     * @param {boolean} isDark - 深色模式。
+     */
+    function syncBackdropLayer(needed, surfaces, isDark) {
+      if (typeof document === 'undefined') return
+      /* 容错：测试替身与极端环境下可能没有 getElementById / prepend。
+         这不是核心路径，缺能力时安静跳过即可，不该让整个渲染抛异常。 */
+      const canQuery = typeof document.getElementById === 'function'
+      if (!canQuery && needed) return
+      let el = canQuery ? document.getElementById(BACKDROP_ID) : null
+      if (!needed) {
+        if (el !== null) {
+          try {
+            el.remove()
+          } catch (error) {
+            note('remove backdrop', error)
+          }
+        }
+        return
+      }
+      if (el === null) {
+        el = document.createElement('div')
+        el.id = BACKDROP_ID
+        el.setAttribute('aria-hidden', 'true')
+        /* 关键三条：fixed 铺满、z-index 0（在内容之下）、pointer-events none（不挡点击）。 */
+        el.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;'
+          + 'pointer-events:none;z-index:0;overflow:hidden;'
+          + 'transition:opacity .25s ease,background .25s ease'
+        try {
+          document.body.prepend(el)
+        } catch (error) {
+          note('prepend backdrop', error)
+          return
+        }
+      }
+      const image = buildBackdropImage(surfaces, isDark)
+      if (el.__dmtImage !== image) {
+        el.__dmtImage = image
+        el.style.background = image
+        el.style.backgroundSize = 'cover'
+      }
+    }
+
+    /**
      * 生成「表面不透明度 + 毛玻璃」覆盖样式表。
      *
-     * ⚠️ **为什么每条 token 声明都带 `!important`**（这是这块唯一的硬性要求）：
+     * ⚠️ **为什么每条 token 声明都带 `!important`**：宿主的 `ThemePresenter` 用
+     * `body.style.setProperty(name, value)`（**内联样式**，无第三参）写这些 token。
+     * 普通内联样式高于普通样式表规则，不加 `!important` 整段无效；
+     * 而「带 `!important` 的样式表规则」高于普通内联样式，所以能压过去。
      *
-     * 宿主的 `ThemePresenter` 是这样写 token 的（`app/src/client-ui-theme`）：
-     *
-     *     for (const name of this.appliedTokens) body.style.removeProperty(name)
-     *     this.appliedTokens = []
-     *     for (const [name, value] of Object.entries(snapshot.active.tokens)) {
-     *       body.style.setProperty(name, value)      // ← 内联样式，无第三参
-     *       this.appliedTokens.push(name)
-     *     }
-     *
-     * 也就是 **`body` 的内联样式**。CSS 优先级里「普通内联样式」高于「普通样式表
-     * 规则」，所以不带 `!important` 的覆盖**整段无效** ——
-     * 实测症状正是：不透明度拖到底毫无变化，而 `backdrop-filter` 却生效了
-     * （因为它不是 token，没被内联样式压）。
-     *
-     * 而「带 `!important` 的样式表规则」是**高于**普通内联样式的，
-     * 所以加 `!important` 就能压过去，且不需要宿主配合。
+     * ⚠️ **alpha 不能层层叠加**：宿主窗口是嵌套的、每层都用同一个不透明色铺底，
+     * 给每层都加 alpha 会合成成几乎不透明（0.6 叠两层 = 0.84、三层 = 0.944），
+     * 表现为"开了和没开一样"。所以只让**背景层之上的表面**带 alpha，
+     * 窗口结构本身透明化。
      *
      * @param {object} state - 已生效设置。
      * @param {object} darkSurfaces - 深色表面色。
      * @param {object} lightSurfaces - 浅色表面色。
+     * @param {boolean} isDark - 当前是否深色。
      * @returns {string} CSS 文本；两个功能都没开时为空串。
      */
-    function buildGlassSheet(state, darkSurfaces, lightSurfaces) {
+    function buildGlassSheet(state, darkSurfaces, lightSurfaces, isDark) {
       const s = state || {}
       const percent = parseSurfaceOpacity(s.surfaceOpacity)
       const glassOn = s.glass === 'on'
@@ -1065,94 +1156,63 @@ function okContrastRatio(hexA, hexB) {
       if (!wantAlpha && !wantGlass) return ''
 
       const alpha = percent / 100
-      /* 各层不透明度：越靠上越实一点，否则叠起来的层次会糊。 */
-      const aBase = alpha
-      const aSidebar = Math.min(1, alpha * 1.08)
-      const aLayer1 = Math.min(1, alpha * 1.12)
-      const aLayer2 = Math.min(1, alpha * 1.18)
-
       const dark = darkSurfaces || {}
       const light = lightSurfaces || {}
-      const lines = ['/* dsh-colorlab —— 表面不透明度 + 毛玻璃（覆盖层，不改令牌） */']
+      const lines = ['/* dsh-colorlab —— 表面不透明度 + 毛玻璃 */']
 
-      /* ⚠️ 每条声明都必须带 `!important`。
-         宿主 ThemePresenter 是用 **`body.style.setProperty(...)`（内联样式）**
-         写这些 token 的，而**内联样式压过任何普通样式表规则** ——
-         不加 `!important` 的话整段覆盖层完全无效（实测：不透明度拖到底也毫无变化，
-         只有 `backdrop-filter` 生效，因为那条不涉及 token）。
-         这正是既有实现里每一条都带 `!important` 的原因。 */
-      const important = ' !important'
-      const surfaceDecls = (surf, aB, aS, a1, a2) => {
-        const out = []
-        if (!wantAlpha) return out
-        if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB) + important)
-        if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS) + important)
-        if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1) + important)
-        if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2) + important)
-        if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)) + important)
-        if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)) + important)
-        if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1) + important)
-        /* ⚠️ 曾经在这里把输入框设成 transparent —— 结果是输入框直接没底色、
-           和周围糊在一起。**不要这样做**：输入框需要自己的可读底。
-           毛玻璃只负责模糊，不改它的颜色。 */
-        return out
+      /* 0) 结构透明化：让背景层可见。**必须有背景层时才做**，
+            否则透明化会露出 Electron 窗口的黑底（这是上一版的教训）。 */
+      const backdropOn = wantAlpha || wantGlass
+      if (backdropOn) {
+        lines.push(GLASS_TRANSPARENT.join(',')
+          + '{background:transparent !important;background-color:transparent !important}')
+        /* 内容根要抬到背景层之上，否则会被背景层盖住。 */
+        lines.push('#root{position:relative !important;z-index:1 !important;'
+          + 'background:transparent !important}')
       }
 
-      const darkDecls = surfaceDecls(dark, aBase, aSidebar, aLayer1, aLayer2)
-      const lightDecls = surfaceDecls(light, aBase, aSidebar, aLayer1, aLayer2)
-      if (darkDecls.length > 0) lines.push(DARK_SELECTOR + '{' + darkDecls.join(';') + '}')
-      if (lightDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lightDecls.join(';') + '}')
-
-      /* ⚠️ **alpha 不能层层叠加** —— 这是"开了和没开一样"的根因。
-       *
-       * 宿主的窗口结构是**嵌套**的，而且每一层都用同一个不透明色铺底：
-       *
-       *     .BynINW_frame      { background: var(--dsw-alias-bg-base) }   ← 铺满整个窗口
-       *       .BynINW_sidebarCol { background: var(--dsw-specific-sidebar-fill) }
-       *       .BynINW_centerCol  { background: var(--dsw-alias-bg-base) }
-       *       .BynINW_rightbarCol{ background: var(--dsw-specific-sidebar-fill) }
-       *
-       * 如果给**每一层**都加 alpha，合成后的不透明度是
-       *   a + a(1-a) + a(1-a)² … —— 0.6 叠两层就是 0.84、三层 0.944，
-       * 肉眼看等于完全不透明。实测正是这个症状。
-       *
-       * 正确做法：**只让最外层（frame）带 alpha**，内层全部设成 transparent，
-       * 让外层的半透明直接透到窗口材质上。这样合成后就是设定的那一个 alpha。
-       */
+      /* 1) 表面 token 半透明。**只在不透明度 < 100 时**做；
+            毛玻璃单独开时表面保持不透明（模糊的是它背后的背景层）。 */
       if (wantAlpha) {
-        /* 最外层：窗口框架，唯一需要带 alpha 的一层。
-           ⚠️ **不能用 `[class*="frame"]`** —— 宿主里有 14 个 `_frame` 类
-           （`xpvNua_frame` 轮次导航器、`source_frame` 代码视图、`filmstrip__frame`…），
-           那个片段会把它们全部染上背景，直接糊掉界面。
-           窗口框架的特征是它**在 `[data-windows-titlebar]` 之下**，
-           用属性 + 片段双重限定才唯一。 */
-        const frameSel = '[data-windows-titlebar] [class*="frame"]'
-        if (dark.base) {
-          lines.push(DARK_SELECTOR + ' ' + frameSel
-            + '{background-color:' + hexToRgba(dark.base, aBase) + ' !important;'
-            + 'background:' + hexToRgba(dark.base, aBase) + ' !important}')
+        const important = ' !important'
+        const surfaceDecls = (surf, aB, aS, a1, a2) => {
+          const out = []
+          if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB) + important)
+          if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS) + important)
+          if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1) + important)
+          if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2) + important)
+          if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)) + important)
+          if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)) + important)
+          if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1) + important)
+          return out
         }
-        if (light.base) {
-          lines.push(LIGHT_SELECTOR + ' ' + frameSel
-            + '{background-color:' + hexToRgba(light.base, aBase) + ' !important;'
-            + 'background:' + hexToRgba(light.base, aBase) + ' !important}')
-        }
-        /* 内层：全部透明，否则会把外层的半透明盖回实色。 */
+        /* 各层透明度：越靠上越实一点，否则叠起来的层次会糊。 */
+        const aSidebar = Math.min(1, alpha * 1.08)
+        const aLayer1 = Math.min(1, alpha * 1.12)
+        const aLayer2 = Math.min(1, alpha * 1.18)
+        const dDecls = surfaceDecls(dark, alpha, aSidebar, aLayer1, aLayer2)
+        const lDecls = surfaceDecls(light, alpha, aSidebar, aLayer1, aLayer2)
+        if (dDecls.length > 0) lines.push(DARK_SELECTOR + '{' + dDecls.join(';') + '}')
+        if (lDecls.length > 0) lines.push(LIGHT_SELECTOR + '{' + lDecls.join(';') + '}')
+
+        /* 布局列也要半透明（它们直接铺在自己的列上，不跟 token 走）。 */
         for (const col of LAYOUT_COLUMNS) {
-          lines.push(DARK_SELECTOR + ' ' + col.sel
-            + '{background:transparent !important;background-color:transparent !important}')
-          lines.push(LIGHT_SELECTOR + ' ' + col.sel
-            + '{background:transparent !important;background-color:transparent !important}')
+          const dColor = col.key === 'center' ? dark.base : dark.sidebar
+          const lColor = col.key === 'center' ? light.base : light.sidebar
+          const a = col.key === 'center' ? alpha : aSidebar
+          if (dColor) {
+            lines.push(DARK_SELECTOR + ' ' + col.sel
+              + '{background-color:' + hexToRgba(dColor, a) + ' !important}')
+          }
+          if (lColor) {
+            lines.push(LIGHT_SELECTOR + ' ' + col.sel
+              + '{background-color:' + hexToRgba(lColor, a) + ' !important}')
+          }
         }
       }
 
+      /* 2) backdrop-filter：这时背后有背景层，模糊才看得出效果。 */
       if (wantGlass) {
-        /* 外层容器**不透明化**（见 GLASS_TRANSPARENT 的注释：我们背后没有背景层，
-           透明掉只会露出 Electron 的黑底）。列表为空时这段直接跳过。 */
-        if (GLASS_TRANSPARENT.length > 0) {
-          lines.push(GLASS_TRANSPARENT.join(',')
-            + '{background:transparent !important;background-color:transparent !important}')
-        }
         const filter = 'backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important;'
           + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(' + saturate + '%) !important'
         for (const target of GLASS_TARGETS) {
@@ -1160,8 +1220,10 @@ function okContrastRatio(hexA, hexB) {
         }
       }
 
+      void isDark
       return lines.join('\n')
     }
+
     const PROSE_SHEET_ID = 'dsh-colorlab/prose.css'
     const ROW_SHEET_ID = 'dsh-colorlab/row.css'
     const CARD_SHEET_ID = 'dsh-colorlab/card.css'
@@ -3168,28 +3230,18 @@ function makeColorizer(scheme) {
       if (typeof document === 'undefined') return
       const wanted = state.enabled !== 'off' && shouldApply()
       const custom = parseCustom(state && state.custom)
+      const isDark = resolvedScheme() !== 'light'
       const darkSurfaces = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
       const lightSurfaces = withOverrides(LIGHT, custom.surface)
-      const css = wanted ? buildGlassSheet(state, darkSurfaces, lightSurfaces) : ''
-      /* 临时诊断：把实际参与渲染的值暴露出来（查完即删）。 */
-      try {
-        if (typeof document !== 'undefined') {
-          document.__dmtGlassDebug = {
-            wanted,
-            surfaceOpacity: state.surfaceOpacity,
-            glass: state.glass,
-            glassBlur: state.glassBlur,
-            glassSaturate: state.glassSaturate,
-            parsedOpacity: parseSurfaceOpacity(state.surfaceOpacity),
-            cssLength: css.length,
-            darkBase: darkSurfaces.base,
-            lightBase: lightSurfaces.base,
-            calls: ((document.__dmtGlassDebug && document.__dmtGlassDebug.calls) || 0) + 1,
-          }
-        }
-      } catch {
-        /* 诊断失败不影响功能 */
-      }
+      const surfaces = isDark ? darkSurfaces : lightSurfaces
+      const css = wanted ? buildGlassSheet(state, darkSurfaces, lightSurfaces, isDark) : ''
+
+      /* 背景层：半透明或毛玻璃任一开启就需要 —— 它是"被模糊/被透出"的那一层。
+         没有它，backdrop-filter 模糊的是同一块纯色，屏幕上毫无变化。 */
+      const percent = parseSurfaceOpacity(state && state.surfaceOpacity)
+      const needBackdrop = wanted && (percent < 100 || state.glass === 'on')
+      syncBackdropLayer(needBackdrop, surfaces, isDark)
+
       if (css === '') {
         if (glassEl !== null) {
           try {
@@ -5257,6 +5309,7 @@ function makeColorizer(scheme) {
                 }
                 glassEl = null
               }
+              syncBackdropLayer(false, null, false)
               diag.glass = 'off'
               disposeLatexObserver()
               if (latexEl !== null) {
@@ -5334,6 +5387,9 @@ function makeColorizer(scheme) {
         parseProseColors,
         CARD_SHEET_ID,
         GLASS_SHEET_ID,
+        BACKDROP_ID,
+        buildBackdropImage,
+        syncBackdropLayer,
         GLASS_TARGETS,
         LAYOUT_COLUMNS,
         GLASS_TRANSPARENT,
