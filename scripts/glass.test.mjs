@@ -115,11 +115,11 @@ console.log('  C. 关闭状态不产生样式')
 const darkSurf = { base: '#343D46', sidebar: '#2E363F', layer1: '#3B444D', layer2: '#424B55', layer3: '#49525C', overlay: '#1E242A', bubble: '#3B444D' }
 const lightSurf = { base: '#FFFFFF', sidebar: '#F9FAFB', layer1: '#FFFFFF', layer2: '#F3F4F6', layer3: '#E9EBEF', overlay: '#E5E7EB', bubble: '#FFFFFF' }
 
-check(buildGlassSheet({ surfaceOpacity: '100', glass: 'off' }, darkSurf, lightSurf) === '',
+check(buildGlassSheet({ surfaceOpacity: '100', glass: 'off' }, darkSurf, lightSurf, true) === '',
   '不透明度 100 + 毛玻璃关 → 空串（不挂空样式表）')
-check(buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '0' }, darkSurf, lightSurf) === '',
+check(buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '0' }, darkSurf, lightSurf, true) === '',
   '毛玻璃开但半径为 0 → 空串')
-check(buildGlassSheet({}, darkSurf, lightSurf) === '', '空设置 → 空串')
+check(buildGlassSheet({}, darkSurf, lightSurf, true) === '', '空设置 → 空串')
 
 /* ------------------------------------------------------------------ *
  * D. 不透明度生效
@@ -127,7 +127,7 @@ check(buildGlassSheet({}, darkSurf, lightSurf) === '', '空设置 → 空串')
 
 console.log('  D. 表面不透明度')
 
-const half = buildGlassSheet({ surfaceOpacity: '50', glass: 'off' }, darkSurf, lightSurf)
+const half = buildGlassSheet({ surfaceOpacity: '50', glass: 'off' }, darkSurf, lightSurf, true)
 check(half !== '', '50% 产生样式')
 check(half.includes(DARK_SELECTOR), '有深色模式规则', DARK_SELECTOR)
 check(half.includes(LIGHT_SELECTOR), '有浅色模式规则', LIGHT_SELECTOR)
@@ -141,26 +141,18 @@ check(half.includes('--dsw-alias-bg-layer-2:rgba(66, 75, 85, 0.59) !important'),
 check(!half.includes('#343D46'), '不再出现原始 6 位 hex（已换成 rgba）')
 check(!/#[0-9a-fA-F]{8}\b/.test(half), '不含 8 位 hex（统一走 rgba）')
 
-/* 【关键回归】布局列必须被**透明化**，不是被上色。
-   宿主结构是嵌套的、每层都用同一个不透明色铺底；给每层都加 alpha 会叠加成
-   几乎不透明（0.6 叠两层 = 0.84、三层 = 0.944），实测症状就是"开了和没开一样"。
-   所以只有最外层 frame 带 alpha，内层必须 transparent。 */
+/* 【关键】布局列要**带 alpha**，因为它们在背景层之上 —— 这正是半透明的来源。
+   （之前有一版把它们设成 transparent，那是"没有背景层"时期的错误做法：
+     那时透明化只会露黑底。现在有 #dmt-backdrop 了，列必须半透明才看得出效果。） */
 for (const [key, sel] of [['中列', 'centerCol'], ['左栏', 'sidebarCol'], ['右栏', 'rightbarCol']]) {
-  const line = half.split('\n').find((l) => l.includes('"' + sel + '"') && l.includes('transparent'))
-  check(line !== undefined, `${key}被透明化（不再叠 alpha）`)
+  const line = half.split('\n').find((l) => l.includes('"' + sel + '"') && l.includes('rgba('))
+  check(line !== undefined, `${key}带 alpha（叠在背景层上）`)
 }
 check((half.match(/!important/g) || []).length > 0, '覆盖带 !important（压过宿主内联样式）')
-
-/* alpha 只能出现在最外层 frame 上，不能出现在布局列上 */
-const colLines = half.split('\n').filter((l) => /Col"\]/.test(l))
-check(colLines.every((l) => l.includes('transparent')), '所有布局列规则都是 transparent')
-check(!colLines.some((l) => /rgba\(/.test(l)), '布局列规则里不再出现 rgba（不叠 alpha）')
 
 /* 窗口框架选择器必须被 data-windows-titlebar 限定，否则会命中 14 个 _frame 类 */
 check(half.includes('[data-windows-titlebar] [class*="frame"]'),
   '窗口框架选择器带 [data-windows-titlebar] 限定')
-check(!half.includes('[class*="frame"]{') || half.includes('[data-windows-titlebar] [class*="frame"]'),
-  '不存在裸的 [class*="frame"] 选择器')
 
 /* 【关键回归】token 声明必须**全部**带 !important。
    宿主 ThemePresenter 用 body.style.setProperty(...) 写这些 token ——
@@ -183,7 +175,7 @@ check(!half.includes('[class*="frame"]{') || half.includes('[data-windows-titleb
 }
 
 /* 0% = 完全透明 */
-const zero = buildGlassSheet({ surfaceOpacity: '0', glass: 'off' }, darkSurf, lightSurf)
+const zero = buildGlassSheet({ surfaceOpacity: '0', glass: 'off' }, darkSurf, lightSurf, true)
 check(zero.includes('rgba(52, 61, 70, 0)'), '0% → alpha 0')
 check(!zero.includes('rgba(52, 61, 70, 1)'), '0% 不出现完全不透明')
 
@@ -193,23 +185,19 @@ check(!zero.includes('rgba(52, 61, 70, 1)'), '0% 不出现完全不透明')
 
 console.log('  E. 毛玻璃')
 
-const glass = buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '20', glassSaturate: '150' }, darkSurf, lightSurf)
+const glass = buildGlassSheet({ surfaceOpacity: '100', glass: 'on', glassBlur: '20', glassSaturate: '150' }, darkSurf, lightSurf, true)
 check(glass !== '', '毛玻璃产生样式')
 check(glass.includes('backdrop-filter:blur(20px) saturate(150%)'), '模糊半径与饱和度正确',
   'blur(20px) saturate(150%)')
 check(glass.includes('-webkit-backdrop-filter'), '带 -webkit- 前缀（Safari/旧 Chromium）')
 
-/* 【关键回归】**不许透明化外层容器**。
-   这条曾经写成"必须透明化"，结果真机上上半屏直接变黑 ——
-   因为我们背后没有自己的背景层（别人有全屏壁纸容器，透明掉才好看），
-   透明化只会露出 Electron 窗口的黑底。 */
-check(!glass.includes('html,body,#root'), '不透明化 html/body/#root（否则露黑底）')
-check(!glass.includes('[class*="scrollBody"]'), '不透明化 scrollBody')
-check(!glass.includes('[class*="composerSeat"]'), '不透明化 composerSeat')
-check(!/background:transparent !important/.test(glass),
-  '整张样式表里没有 background:transparent 规则')
-check(glass.split('\n').every((line) => !/^html\b|^body\b|^#root/.test(line)),
-  '没有任何以 html/body/#root 开头的规则')
+/* 【关键】结构必须透明化 —— 但**前提是有背景层**。
+   没有背景层时透明化会露 Electron 黑底（上一版踩过）；
+   现在 syncGlassSheet 会先 prepend #dmt-backdrop，所以透明化是对的。 */
+check(glass.includes('html,body,#root'), 'html/body/#root 被透明化（露出背景层）')
+check(glass.includes('background:transparent'), '有 transparent 规则')
+check(glass.includes('#root{position:relative'), '#root 抬到背景层之上（z-index:1）')
+check(glass.includes('z-index:1'), '#root 的 z-index 是 1')
 
 /* 容器要加 backdrop-filter */
 check(glass.includes('[class*="sidebarCol"]'), '侧栏加模糊')
@@ -228,7 +216,7 @@ for (const target of GLASS_TARGETS) {
 }
 
 /* 不透明度与毛玻璃同时开：两者都要在 */
-const both = buildGlassSheet({ surfaceOpacity: '70', glass: 'on', glassBlur: '12' }, darkSurf, lightSurf)
+const both = buildGlassSheet({ surfaceOpacity: '70', glass: 'on', glassBlur: '12' }, darkSurf, lightSurf, true)
 check(both.includes('rgba(52, 61, 70, 0.7)'), '同时开：alpha 生效')
 check(both.includes('backdrop-filter:blur(12px)'), '同时开：模糊生效')
 /* 输入框**不许**被设成透明：真机上那样做会让输入框丢底色、和周围糊在一起。 */
@@ -239,13 +227,33 @@ check(!both.includes('--dsw-specific-input-major:transparent'),
  * F. 常量合理性
  * ------------------------------------------------------------------ */
 
-console.log('  F. 常量')
+console.log('  F. 背景层（模糊的"内容"来源）')
+
+/* 没有背景层，backdrop-filter 模糊的是同一块纯色 —— 屏幕上毫无变化。
+   这是前两版"开了和没开一样"的真正原因。 */
+{
+  const img = t.buildBackdropImage(darkSurf, true)
+  check(typeof img === 'string' && img.length > 0, '背景图非空')
+  check(img.includes('radial-gradient'), '背景是**渐变**而不是纯色（纯色模糊后还是纯色）')
+  check(img.includes('rgba('), '渐变里用 rgba（带透明度才能叠出光晕）')
+  check(img.includes('#343D46'), '底色仍是当前配色的 base')
+  const img2 = t.buildBackdropImage(lightSurf, false)
+  check(img2.includes('#FFFFFF'), '浅色模式用浅色底')
+  check(t.BACKDROP_ID === 'dmt-backdrop', '背景层元素 id', t.BACKDROP_ID)
+  check(typeof t.syncBackdropLayer === 'function', 'syncBackdropLayer 已导出')
+}
+
+console.log('  G. 常量')
 
 check(Array.isArray(GLASS_TARGETS) && GLASS_TARGETS.length >= 5, '毛玻璃目标 ≥ 5 组', String(GLASS_TARGETS.length))
 check(Array.isArray(LAYOUT_COLUMNS) && LAYOUT_COLUMNS.length === 3, '布局列 3 个（左/中/右）')
 check(LAYOUT_COLUMNS.every((c) => c.sel.includes('[class*=')), '布局列全部用类名片段选择器')
-check(Array.isArray(GLASS_TRANSPARENT) && GLASS_TRANSPARENT.length === 0,
-  '透明化容器列表为空（我们背后没有背景层）', String(GLASS_TRANSPARENT.length))
+check(Array.isArray(GLASS_TRANSPARENT) && GLASS_TRANSPARENT.length >= 4,
+  '透明化容器列表非空（有背景层，必须透明化才露得出来）', String(GLASS_TRANSPARENT.length))
+check(GLASS_TRANSPARENT.includes('html') && GLASS_TRANSPARENT.includes('body'),
+  '透明化列表含 html/body')
+check(!GLASS_TRANSPARENT.includes('[class*="frame"]'),
+  '透明化列表不含裸 [class*="frame"]（会命中 14 个类）')
 check(GLASS_SHEET_ID === 'dsh-colorlab/glass.css', '样式表 id', GLASS_SHEET_ID)
 check(DARK_SELECTOR.includes('[data-ds-dark-theme][data-ds-dark-theme]'),
   '深色选择器把属性写两遍提权（不靠 !important）', DARK_SELECTOR)
