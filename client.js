@@ -1005,12 +1005,33 @@ function okContrastRatio(hexA, hexB) {
       const g = parseInt(clean.slice(2, 4), 16)
       const b = parseInt(clean.slice(4, 6), 16)
       if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) return hex
-      const a = Math.max(0, Math.min(1, alpha))
+      /* 保留两位小数：JS 浮点会算出 0.6499999999999999 这种值，写进 CSS 很难看，
+         也会让测试里的字符串比对变脆。 */
+      const a = Math.round(Math.max(0, Math.min(1, alpha)) * 100) / 100
       return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + a + ')'
     }
 
     /**
      * 生成「表面不透明度 + 毛玻璃」覆盖样式表。
+     *
+     * ⚠️ **为什么每条 token 声明都带 `!important`**（这是这块唯一的硬性要求）：
+     *
+     * 宿主的 `ThemePresenter` 是这样写 token 的（`app/src/client-ui-theme`）：
+     *
+     *     for (const name of this.appliedTokens) body.style.removeProperty(name)
+     *     this.appliedTokens = []
+     *     for (const [name, value] of Object.entries(snapshot.active.tokens)) {
+     *       body.style.setProperty(name, value)      // ← 内联样式，无第三参
+     *       this.appliedTokens.push(name)
+     *     }
+     *
+     * 也就是 **`body` 的内联样式**。CSS 优先级里「普通内联样式」高于「普通样式表
+     * 规则」，所以不带 `!important` 的覆盖**整段无效** ——
+     * 实测症状正是：不透明度拖到底毫无变化，而 `backdrop-filter` 却生效了
+     * （因为它不是 token，没被内联样式压）。
+     *
+     * 而「带 `!important` 的样式表规则」是**高于**普通内联样式的，
+     * 所以加 `!important` 就能压过去，且不需要宿主配合。
      *
      * @param {object} state - 已生效设置。
      * @param {object} darkSurfaces - 深色表面色。
@@ -1038,18 +1059,25 @@ function okContrastRatio(hexA, hexB) {
       const light = lightSurfaces || {}
       const lines = ['/* dsh-colorlab —— 表面不透明度 + 毛玻璃（覆盖层，不改令牌） */']
 
+      /* ⚠️ 每条声明都必须带 `!important`。
+         宿主 ThemePresenter 是用 **`body.style.setProperty(...)`（内联样式）**
+         写这些 token 的，而**内联样式压过任何普通样式表规则** ——
+         不加 `!important` 的话整段覆盖层完全无效（实测：不透明度拖到底也毫无变化，
+         只有 `backdrop-filter` 生效，因为那条不涉及 token）。
+         这正是既有实现里每一条都带 `!important` 的原因。 */
+      const important = ' !important'
       const surfaceDecls = (surf, aB, aS, a1, a2) => {
         const out = []
         if (!wantAlpha) return out
-        if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB))
-        if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS))
-        if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1))
-        if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2))
-        if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)))
-        if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)))
-        if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1))
+        if (surf.base) out.push('--dsw-alias-bg-base:' + hexToRgba(surf.base, aB) + important)
+        if (surf.sidebar) out.push('--dsw-specific-sidebar-fill:' + hexToRgba(surf.sidebar, aS) + important)
+        if (surf.layer1) out.push('--dsw-alias-bg-layer-1:' + hexToRgba(surf.layer1, a1) + important)
+        if (surf.layer2) out.push('--dsw-alias-bg-layer-2:' + hexToRgba(surf.layer2, a2) + important)
+        if (surf.layer3) out.push('--dsw-alias-bg-layer-3:' + hexToRgba(surf.layer3, Math.min(1, a2 + 0.04)) + important)
+        if (surf.overlay) out.push('--dsw-alias-bg-overlay:' + hexToRgba(surf.overlay, Math.min(1, a2 + 0.06)) + important)
+        if (surf.bubble) out.push('--dsw-specific-bubble:' + hexToRgba(surf.bubble, a1) + important)
         /* 输入框实体：让它完全透明，交给毛玻璃与底下的材质 */
-        if (wantGlass) out.push('--dsw-specific-input-major:transparent')
+        if (wantGlass) out.push('--dsw-specific-input-major:transparent' + important)
         return out
       }
 
@@ -1066,11 +1094,13 @@ function okContrastRatio(hexA, hexB) {
           const a = col.key === 'center' ? aBase : aSidebar
           if (dColor) {
             lines.push(DARK_SELECTOR + ' ' + col.sel
-              + '{background-color:' + hexToRgba(dColor, a) + ' !important}')
+              + '{background:' + hexToRgba(dColor, a) + ' !important;'
+              + 'background-color:' + hexToRgba(dColor, a) + ' !important}')
           }
           if (lColor) {
             lines.push(LIGHT_SELECTOR + ' ' + col.sel
-              + '{background-color:' + hexToRgba(lColor, a) + ' !important}')
+              + '{background:' + hexToRgba(lColor, a) + ' !important;'
+              + 'background-color:' + hexToRgba(lColor, a) + ' !important}')
           }
         }
       }
