@@ -177,7 +177,7 @@ console.log('  E. 背景层与壁纸（失败原因 1）')
   check(host.includes('TranscodedWallpaper'), '读 Windows 当前壁纸')
   check(host.includes('detectImageMime'), '魔数嗅探图片类型')
   check(host.includes('wallpaperCache'), 'mtime 缓存')
-  check(host.includes('registerWallpaperRoute(ctx)'), 'apply() 里调用了注册')
+  check(/registerWallpaperRoute\(ctx,/.test(host), 'apply() 里调用了注册（并传入读配置闭包）')
 }
 
 /* ------------------------------------------------------------------ *
@@ -187,8 +187,9 @@ console.log('  E. 背景层与壁纸（失败原因 1）')
 console.log('  F. 输入栏（正文穿模问题）')
 
 {
-  const seatRe = /\[class\*="Dc7zOa_composerSeat"\]/
-  check(!seatRe.test(css), '样式表里不单独处理 composerSeat')
+  /* 🔧 输入栏座现在**要**单独处理：给它一层不透明底，把正文挡在外面。
+     之前不处理 → 正文会透到输入框区域里（实测问题）。 */
+  check(/composerSeat[^{]*\{[^}]*background:rgba/.test(css), '输入栏座有自己的不透明底（挡住正文）')
   const transparentRule = lines.find((l) => l.includes('Dc7zOa_root'))
   check(transparentRule === undefined || !transparentRule.includes('composerSeat'),
     '清透明的容器列表里不含 composerSeat（否则正文滚进输入栏）')
@@ -277,8 +278,13 @@ console.log('  G2. 整窗覆盖（所有表面令牌）')
   }
 
   /* 侧栏令牌必须 transparent（它同时决定标题栏颜色） */
-  check(decls.some((d) => d === '--dsw-specific-sidebar-fill:transparent !important'),
-    '侧栏令牌 = transparent（同时决定标题栏）')
+  /* 🔧 侧栏令牌**不能**是 transparent：主进程校验 setTitleBarOverlay 的颜色时
+     用的是 /^(?:#[\da-f]{3,8}|rgba?\\([\\d.,%\\s]+\\))$/ 这条正则，
+     'transparent' 通不过，IPC 被丢弃，标题栏就保留默认不透明外观。
+     必须是带 alpha 的 rgba。 */
+  check(decls.some((d) => d.startsWith('--dsw-specific-sidebar-fill:rgba(')),
+    '侧栏令牌 = 带 alpha 的 rgba（否则标题栏不生效）',
+    decls.find((d) => d.startsWith('--dsw-specific-sidebar-fill:')) || '')
   check(decls.some((d) => d === '--dsw-alias-bg-base:transparent !important'),
     '整页底令牌 = transparent（让背景层透上来）')
 }
