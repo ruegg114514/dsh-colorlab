@@ -1226,6 +1226,151 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 生成「整窗玻璃」令牌覆盖。
+     *
+     * ## 为什么需要这一步
+     *
+     * 只把三列设成半透明，窗口里**所有的浮层和卡片仍然是实心的** ——
+     * 卡片、代码块、思考块、输入框、菜单、对话框各有自己的不透明底，
+     * 它们铺在玻璃上，看起来就是「一块块不透明的板子漂浮在透明背景上」。
+     *
+     * 要让**整个窗口**都呈现玻璃质感，必须把这些表面令牌也换成半透明。
+     *
+     * ## 令牌 vs 选择器
+     *
+     * 优先改令牌而不是加 DOM 选择器，理由（参考实现也踩过）：
+     *   - 令牌是宿主自己声明的位置，覆盖它不会碰 DOM 结构
+     *   - 不会与第三方插件的类名哈希冲突
+     *   - 宿主所有引用该令牌的组件一起生效，不会漏
+     *
+     * 之前几次失败的教训：往 DOM 上加硬选择器，既漏层又容易崩。
+     *
+     * @param {object} surf - 当前表面色。
+     * @param {boolean} isDark - 深色模式。
+     * @param {number} alpha - 基础浓度 0..1。
+     * @param {number} fog - 浮层浓度 0..1（浮层需要更浓，否则读不清字）。
+     * @returns {string[]} 令牌声明数组（不含 selector 包裹）。
+     */
+    function glassTokenDecls(surf, isDark, alpha, fog) {
+      const out = []
+      const push = (name, color, a) => {
+        if (!color) return
+        out.push(name + ':' + hexToRgba(color, Math.min(1, Math.max(0, a))) + ' !important')
+      }
+      /* ⚠️ 浓度换算（踩过两次的坑）
+       *
+       * 1. 浮层浓度 fog 是滑块百分比 0–40，**不能直接当 alpha** ——
+       *    0.16 的卡片几乎全透、字读不清；而 0.16 直接加在 0.65 上又变成 0.93，
+       *    玻璃感全没了。它应该是「相对基础浓度的增量比例」。
+       *
+       * 2. 浮层（卡片/菜单/输入框）比底板**略浓**但必须仍能透：
+       *    浓太多就成了实心板，玻璃效果消失。
+       *    这里让 fog 在 0–40% 之间把浮层从「与底板同浓」推到「比底板浓约 10%」。
+       */
+      const fogRatio = Math.max(0, Math.min(1, fog / 0.4)) /* 0..1 */
+      const layerAlpha = Math.min(1, alpha)
+      /* 浮层：基础浓度 + 最多 10 个百分点。0.65 → 0.65~0.75 */
+      const fogAlpha = Math.min(1, alpha + fogRatio * 0.1)
+      /* 代码块：必须明显更实（长段代码要读），但不至于完全不透明 */
+      const solidAlpha = Math.min(0.85, Math.max(0.62, alpha + 0.08))
+
+      /* ① 整页底：透明，让背景层透上来。
+       *    注意这一步不改成半透明 —— 透明才能看到背景层。 */
+      out.push('--dsw-alias-bg-base:transparent !important')
+
+      /* ② 侧栏底色令牌：透明。
+       *    ⚠️ 它被 DSH 的隐藏探针消费：preload 读它的计算色再调
+       *    window.setTitleBarOverlay({color})。实测该 API 的颜色**支持 alpha**：
+       *      不透明近黑 → 标题栏和侧栏一起纯黑
+       *      半透明     → 发灰
+       *      transparent → 纯玻璃
+       *    所以这里必须给 transparent，标题栏才会跟窗口一致。 */
+      out.push('--dsw-specific-sidebar-fill:transparent !important')
+
+      /* ③ 分层表面：给 alpha。这些是卡片/面板/浮层的底。
+       *    浮层（layer1-3 / overlay）比底层更浓一点，保证能读字。 */
+      const layer1 = surf.layer1 || surf.base
+      const layer2 = surf.layer2 || layer1
+      const layer3 = surf.layer3 || layer2
+      const overlay = surf.overlay || layer2
+      push('--dsw-alias-bg-layer-1', layer1, layerAlpha)
+      push('--dsw-alias-bg-layer-2', layer2, Math.min(1, layerAlpha * 1.03))
+      push('--dsw-alias-bg-layer-3', layer3, Math.min(1, layerAlpha * 1.06))
+      push('--dsw-alias-bg-overlay', overlay, Math.min(1, layerAlpha * 1.1))
+
+      /* ④ 浮层专名：菜单/提示/选择器/气泡/输入框。
+       *    这些是「要读字」的表面，用 fog（比 alpha 高）。 */
+      const bubble = surf.bubble || layer1
+      const hover = surf.hover || layer1
+      push('--dsw-specific-bubble', bubble, fogAlpha)
+      push('--dsw-specific-menu', overlay, fogAlpha)
+      push('--dsw-specific-tip', overlay, fogAlpha)
+      push('--dsw-specific-selector', hover, fogAlpha)
+      push('--dsw-specific-input-major', layer1, fogAlpha)
+      push('--dsw-alias-tooltip-bg', overlay, fogAlpha)
+
+      /* ⑤ 其它背景令牌：一起半透明，否则个别组件仍是实心板。 */
+      push('--dsw-alias-bg-document-preview', layer1, fogAlpha)
+      push('--dsw-alias-bg-module-platform', layer1, fogAlpha)
+      push('--dsw-alias-bg-multi-select', layer1, fogAlpha)
+      push('--dsw-alias-bg-skeleton', layer1, layerAlpha * 0.7)
+      push('--dsw-alias-markdown-placeholder', layer2, layerAlpha * 0.8)
+      push('--dsw-alias-markdown-tag', layer2, fogAlpha * 0.95)
+
+      /* ⑥ 代码块：**比其它浮层更浓**。
+       *    长段代码压在壁纸上会糊成一片，必须保证可读。
+       *    实测 55% 是「既看得出玻璃、又能读代码」的平衡点。 */
+      const code = surf.code || layer2
+      push('--dsw-alias-markdown-code-block', code, solidAlpha)
+      push('--dsw-alias-markdown-code-block-banner', code, Math.min(1, solidAlpha + 0.07))
+
+      /* ⑦ 代码块背景（我们自己注入的 token）。 */
+      out.push('--dmt-md-code-bg:' + hexToRgba(code, solidAlpha) + ' !important')
+
+      /* ⑧ 交互态：hover / active 也要半透明，否则鼠标一上去就变实心块。 */
+      push('--dsw-alias-interactive-bg-hover', hover, Math.min(1, layerAlpha * 1.15))
+      push('--dsw-alias-interactive-bg-active', hover, Math.min(1, layerAlpha * 1.25))
+      push('--dsw-alias-button-tool-bar-fill', layer1, fogAlpha)
+
+      /* ⑨ 卡片填充：四个卡片组件用各自的令牌。 */
+      push('--changes-fill', layer2, fogAlpha)
+      push('--deliverable-fill', layer2, fogAlpha)
+      push('--plan-card-fill', layer2, fogAlpha)
+      push('--card-fill', layer2, fogAlpha)
+
+      return out
+    }
+
+    /**
+     * 深色玻璃模式下把文字提亮。
+     *
+     * 理由：Mariana 的正文是 #D8DEE9（浅灰白），压在「深色玻璃 + 壁纸」上
+     * 对比度会掉。参考实现实测过：深色主题下必须把 label 三档改成白/浅灰系，
+     * 并把底层静态色 bluish-200/300/400/600/700 一起提亮 ——
+     * 因为很多组件的 label 是引用这些静态色的，只改 label-* 会漏。
+     *
+     * ⚠️ 刻意**不动** bluish-00/50/1000：
+     * 它们同时被背景与品牌色引用，改白会把品牌色也弄坏。
+     *
+     * @returns {string[]} 令牌声明数组。
+     */
+    function glassTextDecls() {
+      return [
+        '--dsw-alias-label-primary:rgb(255, 255, 255) !important',
+        '--dsw-alias-label-secondary:rgb(240, 243, 247) !important',
+        '--dsw-alias-label-tertiary:rgb(232, 236, 242) !important',
+        '--dsw-alias-label-caption:rgb(228, 232, 238) !important',
+        '--dsw-alias-label-dimmed:rgb(214, 219, 226) !important',
+        '--dsw-alias-label-document-preview:rgb(228, 232, 238) !important',
+        '--dsw-static-neutral-bluish-200:rgb(242, 245, 249) !important',
+        '--dsw-static-neutral-bluish-300:rgb(236, 240, 245) !important',
+        '--dsw-static-neutral-bluish-400:rgb(228, 232, 238) !important',
+        '--dsw-static-neutral-bluish-600:rgb(228, 232, 238) !important',
+        '--dsw-static-neutral-bluish-700:rgb(240, 243, 247) !important',
+      ]
+    }
+
+    /**
      * 生成玻璃样式表。
      *
      * 全部规则都要求 `html[data-dsh-glass]`，所以关掉开关时它们一律不命中。
@@ -1295,6 +1440,29 @@ window.__ModuleLoader__.load({
         + g + '[class*="xz4KEq_root"],' + g + '[class*="xz4KEq_frame"],'
         + g + '[class*="xz4KEq_scroll"]{background:transparent !important;'
         + 'background-image:none !important}')
+
+      /* ④b **整窗玻璃的关键**：把「所有表面令牌」也换成半透明。
+       *
+       * 只改三列时，窗口里所有卡片/代码块/思考块/输入框/菜单/对话框
+       * 仍然是**实心的** —— 它们各有自己的不透明底，铺在玻璃上就成了
+       * 「一块块不透明的板子浮在透明背景上」，看起来只有中栏是玻璃。
+       *
+       * 改令牌而不是加 DOM 选择器：令牌是宿主自己声明的位置，
+       * 覆盖它不会碰 DOM 结构、不会与哈希类名冲突、宿主所有引用者一起生效。
+       * 之前几轮失败的根因之一就是在 DOM 上硬贴选择器 —— 既漏层又容易崩。 */
+      const fog = parsePercent(s.glassFog, 0, 40, 16) / 100
+      const tokenLines = glassTokenDecls(surf, isDark, alpha, fog)
+      if (tokenLines.length > 0) {
+        /* 深浅两套都写：DSH 的深色块特异性更高，只写裸 body 会被压过去。 */
+        lines.push(g + 'body,' + g + 'body[data-ds-dark-theme]{'
+          + tokenLines.join(';'))
+      }
+
+      /* ④c 深色模式把文字提亮 —— 否则浅灰白文字压在玻璃上会发灰看不清。 */
+      if (isDark) {
+        const textLines = glassTextDecls()
+        lines.push(g + 'body[data-ds-dark-theme]{' + textLines.join(';'))
+      }
 
       /* ⑤ 压暗层：盖在背景层之上、内容之下，把亮壁纸压回可读范围。
        *
