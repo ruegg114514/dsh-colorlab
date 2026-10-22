@@ -372,19 +372,22 @@ console.log('  G2. 整窗覆盖（所有表面令牌）')
   check(true, '（无必须实底的表面：挡字靠强模糊，不靠涂死）')
 
   /* 浮层应比底板略浓，但不能浓太多 */
+  /* 🔧 反转：浮层/卡片应当比底板**更透**，不是更实。
+   *
+   * 旧断言写反了方向，导致实现跟着写反 ——
+   * 卡片和代码块一度比底板还实（0.78~0.85），屏幕上看就是实心板。
+   * 正确：三列撑主题色（浓），卡片/代码块浮在玻璃上（透）。 */
   const layer1 = getAlpha('--dsw-alias-bg-layer-1')
   const bubble = getAlpha('--dsw-specific-bubble')
   if (layer1 !== null && bubble !== null) {
-    check(bubble >= layer1, '可透浮层（气泡）比底板略实',
+    check(bubble <= layer1, '浮层/卡片比底板更透（否则成实心板）',
       '底板 ' + layer1 + ' / 气泡 ' + bubble)
-    check(bubble - layer1 <= 0.2, '可透浮层不比底板浓超过 20 个百分点',
-      '差 ' + (bubble - layer1).toFixed(2))
   }
 
   /* 代码块必须最实（长段代码要读） */
   const codeBlock = getAlpha('--dsw-alias-markdown-code-block')
   if (codeBlock !== null) {
-    check(codeBlock >= 0.6, '代码块浓度 ≥ 60%（保证长段可读）', String(codeBlock))
+    check(codeBlock >= 0.35, '代码块浓度 ≥ 35%（可读性下限）', String(codeBlock))
   }
 
   /* 侧栏令牌必须 transparent（它同时决定标题栏颜色） */
