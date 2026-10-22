@@ -1313,12 +1313,32 @@ window.__ModuleLoader__.load({
        *    浓太多就成了实心板，玻璃效果消失。
        *    这里让 fog 在 0–40% 之间把浮层从「与底板同浓」推到「比底板浓约 10%」。
        */
-      const fogRatio = Math.max(0, Math.min(1, fog / 0.4)) /* 0..1 */
+      /* 浓度换算（2026-10-22 重写，之前的公式方向错了）
+       *
+       * 实测数据（用户设置 表面 78%、浮层 0%）：
+       *   layerAlpha = 0.78
+       *   fogAlpha   = 0.78   ← 卡片
+       *   solidAlpha = 0.85   ← 代码块（撞上限）
+       * 全是接近不透明 → 屏幕上看就是实心板，「没有玻璃效果」。
+       *
+       * 错在方向：之前的公式让卡片和代码块**比底板更实**。
+       * 但正确的视觉逻辑是反的：
+       *   · 三列是大面积底 → 需要浓度撑住主题色，浓是对的
+       *   · 卡片/代码块是浮在玻璃上的**小元素** → 应该比底板**更透**，
+       *     才能透出背后的模糊，看起来才「像玻璃」
+       *   · 代码块要读字，但靠**描边 + 阴影**区分边界即可，不必靠高不透明度
+       *
+       * 新公式：
+       *   fogAlpha   = alpha - 0.18（比底板透 18 个点）
+       *   solidAlpha = alpha - 0.10（比底板透 10 个点）
+       *
+       * 底板 0.78 时 → 卡片 0.60、代码块 0.68，这才看得出玻璃。 */
+      const fogRatio = Math.max(0, Math.min(1, fog / 0.4)) /* 0..1，浮层浓度滑块的归一值 */
       const layerAlpha = Math.min(1, alpha)
-      /* 浮层：基础浓度 + 最多 10 个百分点。0.65 → 0.65~0.75 */
-      const fogAlpha = Math.min(1, alpha + fogRatio * 0.1)
-      /* 代码块：必须明显更实（长段代码要读），但不至于完全不透明 */
-      const solidAlpha = Math.min(0.85, Math.max(0.62, alpha + 0.08))
+      /* 浮层/卡片：比底板更透。fog 滑块在此基础上再微调（最多 +0.10）。 */
+      const fogAlpha = Math.max(0.25, Math.min(1, alpha - 0.18 + fogRatio * 0.10))
+      /* 代码块：比底板略透，但比卡片实一点（要读长段代码）。 */
+      const solidAlpha = Math.max(0.35, Math.min(0.92, alpha - 0.10))
 
       /* ① 整页底：透明，让背景层透上来。
        *    注意这一步不改成半透明 —— 透明才能看到背景层。 */
@@ -1383,6 +1403,12 @@ window.__ModuleLoader__.load({
       const code = surf.code || layer2
       push('--dsw-alias-markdown-code-block', code, solidAlpha)
       push('--dsw-alias-markdown-code-block-banner', code, Math.min(1, solidAlpha + 0.07))
+      /* ⚠️ 关键：Shiki 把 --shiki-background 写在 <pre> 的**内联样式**上，
+       * 内联样式优先级高于任何 CSS 规则。
+       * 只改 --dsw-alias-markdown-code-block 不够 —— Shiki 读的是
+       * --shiki-background，它还是实色（#2E363F），所以代码块永远是不透明的。
+       * 必须把它也改成半透明。 */
+      push('--shiki-background', code, solidAlpha)
 
       /* ⑦ 代码块背景（我们自己注入的 token）。 */
       out.push('--dmt-md-code-bg:' + hexToRgba(code, solidAlpha) + ' !important')
@@ -1741,9 +1767,16 @@ window.__ModuleLoader__.load({
        *
        * 可读性由外层承担：data-code-wrap 已经是 rgba(0.73) + blur(16px)，
        * 长段代码压在那上面仍然能读。 */
+      /* ⚠️ 不能写 code:not(pre code) —— Selectors 3 的 :not() 只接受
+       * 简单选择器，不接受后代选择器。写了整条规则会被浏览器丢弃，
+       * 于是 pre 的透明一直没生效（这就是代码块里 pre 仍带宿主实色底的原因）。
+       *
+       * 拆成三条独立规则：pre、pre code、行间 code。 */
       lines.push(g + 'pre,'
         + g + 'pre code,'
-        + g + 'code:not(pre code){'
+        + g + 'p code,'
+        + g + 'li code,'
+        + g + 'td code{'
         + 'background:transparent !important;'
         + 'background-color:transparent !important;'
         + 'background-image:none !important}')
@@ -1757,16 +1790,19 @@ window.__ModuleLoader__.load({
        *   j_8BDW_card  approval 的审批卡
        * 用 [class*="_card"] 收尾能覆盖它们，但会误命中输入卡片
        * （RlGAzG_card 单独处理过，加 :not() 排除）。 */
-      const cardTargets = [
-        '[class*="kuvljq_card"]',
-        '[class*="flL80G_file"]',
-        '[class*="KuQXFq_card"]',
-        '[class*="QSKnSa_card"]',
-        '[class*="KZf9OG_card"]',
-        '[class*="j_8BDW_card"]',
-        '[class*="bubble"]',
-      ].join(',')
-      lines.push(g + cardTargets + '{' + surfaceFilter + glassSurface + '}')
+      /* 每个选择器都必须单独带总闸前缀。
+       * 之前用 join(',') 拼成一个串，只有第一个带前缀 ——
+       * 结果关掉玻璃后其余六个仍然生效（残留污染）。 */
+      const cardSelectors = [
+        'kuvljq_card',
+        'flL80G_file',
+        'KuQXFq_card',
+        'QSKnSa_card',
+        'KZf9OG_card',
+        'j_8BDW_card',
+        'bubble',
+      ].map((name) => g + '[class*="' + name + '"]').join(',')
+      lines.push(cardSelectors + '{' + surfaceFilter + glassSurface + '}')
 
       /* 输入栏卡片与 dock 跟随座的颜色，不再单独涂死。 */
       /* ══ 输入区：玻璃放在**卡片**上，不是放在整条底栏上 ═══════════════
