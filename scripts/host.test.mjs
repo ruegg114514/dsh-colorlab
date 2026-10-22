@@ -14,7 +14,7 @@
  *   ELECTRON_RUN_AS_NODE=1 "D:\dsh\DeepSeek Harness.exe" scripts/host.test.mjs   # 完整
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -61,11 +61,52 @@ async function main() {
   console.log('dsh-colorlab Host 半体测试')
   console.log('─'.repeat(52))
 
+  /* 🔧 诊断文件测试的前置：把 profile 目录指到临时位置，**在 import 之前**。
+   * index.js 的 `const Config = buildConfig()` 在模块加载时就跑完 ——
+   * 纯 node 下 schemastery 必然解析失败，诊断文件应落在 DSH_PROFILE_DIR。 */
+  const diagDir = join(root, '.tmp-host-diag')
+  mkdirSync(diagDir, { recursive: true })
+  const diagFile = join(diagDir, 'colorlab-diagnostic.json')
+  try { rmSync(diagFile, { force: true }) } catch { /* 没有 */ }
+  process.env.DSH_PROFILE_DIR = diagDir
+
   const mod = await import(entry)
+  {
+    const isElectron = typeof process.versions.electron === 'string'
+    const exists = existsSync(diagFile)
+    if (isElectron && mod.Config !== undefined) {
+      /* Electron 下 schemastery 能解析 → Config 成功 → 诊断文件必须被清掉。 */
+      check(!exists, '成功路径：诊断文件不存在（或被清除）')
+    } else if (!isElectron) {
+      check(exists, '失败路径：诊断文件已写入 profile 目录')
+      if (exists) {
+        try {
+          const report = JSON.parse(readFileSync(diagFile, 'utf8'))
+          check(report.plugin === 'dsh-colorlab' && report.reason === 'no-anchor-resolved',
+            '报告含 plugin/reason', report.reason)
+          check(Array.isArray(report.anchors) && report.anchors.length >= 3,
+            '报告逐锚点轨迹（anchors）', String(report.anchors.length) + ' 个锚点')
+          check(report.anchors.every((a) => typeof a.anchor === 'string' && Array.isArray(a.attempts)),
+            '每个锚点有 anchor 与 attempts 明细')
+          check(typeof report.hint === 'string' && report.hint.includes('schemastery'),
+            '报告带人话 hint')
+        } catch (error) {
+          check(false, '报告可被 JSON.parse', String(error))
+        }
+      }
+      /* 绝不污染插件目录本身。 */
+      check(!existsSync(join(root, 'colorlab-diagnostic.json')),
+        '诊断不落在插件目录（尊重 DSH_PROFILE_DIR）')
+    }
+  }
+  try { rmSync(diagDir, { recursive: true, force: true }) } catch { /* 清不掉就算了 */ }
+  delete process.env.DSH_PROFILE_DIR
+
   check(typeof mod.apply === 'function', 'apply 已导出')
   check(mod.SETTINGS_ENTRY === 'mariana-theme', 'SETTINGS_ENTRY = mariana-theme', mod.SETTINGS_ENTRY)
   check(mod.BOOT_BACKGROUND === '#343D46', 'BOOT_BACKGROUND = #343D46', mod.BOOT_BACKGROUND)
-  check(mod.FIELD_DEFAULTS && Object.keys(mod.FIELD_DEFAULTS).length === 22, 'FIELD_DEFAULTS 有 22 个字段', String(Object.keys(mod.FIELD_DEFAULTS || {}).length))
+  check(mod.FIELD_DEFAULTS && Object.keys(mod.FIELD_DEFAULTS).length === 26, 'FIELD_DEFAULTS 有 26 个字段', String(Object.keys(mod.FIELD_DEFAULTS || {}).length))
+  check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.shape === 'off', 'FIELD_DEFAULTS.shape = off（手绘造型默认关）', mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.shape)
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.prose === 'on', 'FIELD_DEFAULTS.prose = on（默认开正文高亮）')
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseBoost === 'soft', 'FIELD_DEFAULTS.proseBoost = soft（默认提亮一档）', mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseBoost)
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseColors === '', 'FIELD_DEFAULTS.proseColors = 空串（正文颜色跟随派生）')
@@ -88,7 +129,9 @@ async function main() {
   {
     const source = readFileSync(join(root, 'index.js'), 'utf8')
     const defaultsBlock = /const FIELD_DEFAULTS = \{([\s\S]*?)\n\}/.exec(source)
-    const schemaBlock = /return z\.object\(\{([\s\S]*?)\n  \}\)/.exec(source)
+    /* schema 块现在包在 try/catch 里（构造失败也要落诊断文件），锚定改跟
+     * `z.object({` 本身，缩进放宽 —— 语义不变：字段仍须一一对应。 */
+    const schemaBlock = /z\.object\(\{([\s\S]*?)\n\s*\}\)/.exec(source)
     check(defaultsBlock !== null, '能定位 FIELD_DEFAULTS 块')
     check(schemaBlock !== null, '能定位 Config schema 块')
     if (defaultsBlock !== null && schemaBlock !== null) {

@@ -196,14 +196,17 @@ function main() {
 
   check(nodes.length > 30, '渲染出足够多的节点', String(nodes.length))
   check((byClass.get('dmt-root') || 0) === 1, '根节点 .dmt-root 存在')
-  /* 五个区块标题：ColorLab 配色方案 / 正文颜色 / 过程行高亮 / 自定义配色 / 配色方案 */
-  check((byClass.get('dmt-title') || 0) === 5, '五个区块标题', String(byClass.get('dmt-title') || 0))
-  check((byClass.get('dmt-status') || 0) === 1, '状态条存在')
-  check((byClass.get('dmt-chip') || 0) >= 4, '状态芯片 ≥ 4 个', String(byClass.get('dmt-chip') || 0))
+  /* 🔧 2026-10-22 页面整理后的新不变量：
+   * 六个分组统一用 GroupHead（主题/代码与正文/过程行/玻璃界面/手绘造型/自定义配色/配色方案 = 7）。
+   * 旧的五行芯片诊断退役 —— 正常时诊断行完全隐身（这里默认状态全绿，应为 0）。 */
+  check((byClass.get('dmt-groupTitle') || 0) === 7, '七个分组标题（统一 GroupHead 样式）', String(byClass.get('dmt-groupTitle') || 0))
+  check((byClass.get('dmt-diagLine') || 0) === 0, '一切正常 → 诊断行隐身')
+  check((byClass.get('dmt-chip') || 0) === 0, '旧芯片行已退役')
+  check((byClass.get('dmt-fold') || 0) >= 3, '折叠块 ≥3（正文调色 / 玻璃高级 / 完整调色板）', String(byClass.get('dmt-fold') || 0))
   check((byClass.get('dmt-row') || 0) >= 4, '设置行 ≥ 4 个', String(byClass.get('dmt-row') || 0))
   check((byClass.get('dmt-switch') || 0) >= 2, '开关 ≥ 2 个（启用 + 代码高亮）', String(byClass.get('dmt-switch') || 0))
   /* 两个分段选择：套用范围（2 项）+ 正文高亮亮度（3 项） */
-  check((byClass.get('dmt-seg') || 0) === 3, '分段选择 3 个（套用范围 + 正文亮度 + 背景来源）', String(byClass.get('dmt-seg') || 0))
+  check((byClass.get('dmt-seg') || 0) === 4, '分段选择 4 个（套用范围 + 背景来源 + 压暗 + 正文亮度；等高线速度是条件渲染不计）', String(byClass.get('dmt-seg') || 0))
   check((byClass.get('dmt-swatch') || 0) === 6, '色块 6 个（3 背景 + 3 强调）', String(byClass.get('dmt-swatch') || 0))
   check((byClass.get('dmt-card') || 0) === 14, '色板预览 14 张卡', String(byClass.get('dmt-card') || 0))
   check((byClass.get('dmt-preview') || 0) === 1, '代码样例存在')
@@ -244,8 +247,8 @@ function main() {
 
   /* 自定义配色 + 正文颜色共用同一套槽位组件：18 + 9 = 27 */
   check((byClass.get('dmt-custom') || 0) === 2, '颜色容器 2 个（正文颜色 + 自定义配色）', String(byClass.get('dmt-custom') || 0))
-  check((byClass.get('dmt-customGroup') || 0) === 4, '分组 4 个（界面底色/文字/语法色 + 透明与壁纸）', String(byClass.get('dmt-customGroup') || 0))
-  check((byClass.get('dmt-customGroupTitle') || 0) === 4, '4 个分组标题')
+  check((byClass.get('dmt-customGroup') || 0) === 3, '调色板内小分组 3 个（界面底色/文字/语法色；玻璃/手绘已改 GroupHead）', String(byClass.get('dmt-customGroup') || 0))
+  check((byClass.get('dmt-customGroupTitle') || 0) === 3, '3 个小分组标题')
   check((byClass.get('dmt-slot') || 0) === 27, '颜色槽位 27 个（18 自定义 + 9 正文）', String(byClass.get('dmt-slot') || 0))
   check((byClass.get('dmt-slotSwatch') || 0) === 27, '27 个取色按钮', String(byClass.get('dmt-slotSwatch') || 0))
   check((byClass.get('dmt-slotHex') || 0) === 27, '27 个 hex 输入框', String(byClass.get('dmt-slotHex') || 0))
@@ -325,7 +328,10 @@ function main() {
       if (typeof cls === 'string') lightByClass.set(cls, (lightByClass.get(cls) || 0) + 1)
     }
     check((lightByClass.get('dmt-notice') || 0) === 1, '浅色 + 仅深色模式 → 出现提示条')
-    check((lightByClass.get('dmt-dot') || 0) >= 4, '浅色下状态芯片仍渲染')
+    check((lightByClass.get('dmt-chip') || 0) === 0, '旧芯片行已退役（浅色场景）')
+    /* 这个假 ctx 没带 configForms → form='memory' 是**真实状态**，
+     * 诊断行理应显形 —— 顺带验证"异常才显示"的正向路径。 */
+    check((lightByClass.get('dmt-diagLine') || 0) === 1, '浅色场景：memory 配置 → 诊断行显形（异常才显示的正向验证）')
     /* 提示条里的按钮是"切换到深色"，必须真的能调到 setTheme。 */
     const notice = lightNodes.find((node) => node.props && node.props.className === 'dmt-notice')
     check(notice !== undefined, '提示条节点存在')
@@ -439,32 +445,42 @@ function main() {
       /* 改套用范围：点 "深浅都套用"。分段按钮总数 = 2（套用范围）+ 3（正文亮度）= 5。
          顺序由 OPTIONS 决定：前两个是 schemeMode，后三个是 proseBoost。 */
       const segButtons = nodes3.filter((node) => node.props && node.props.className === 'dmt-segBtn')
-      check(segButtons.length === 7, '写盘场景：7 个分段按钮（2 套用范围 + 3 正文亮度 + 2 背景来源）', String(segButtons.length))
-      if (segButtons.length === 5) {
+      check(segButtons.length === 13, '写盘场景：13 个分段按钮（2 套用范围 + 3 背景来源 + 5 压暗 + 3 正文亮度）', String(segButtons.length))
+      if (segButtons.length >= 5) {
+        /* 🔧 按 label 找按钮，不按位置下标 —— 下标依赖设置页渲染顺序，
+         * 加一个分段组就会全体漂移。fake react 把 children 收进 props.children。 */
+        const byLabel = (txt) => segButtons.find((node) => node.props && node.props.children === txt)
+        const bothBtn = byLabel('深浅都套用')
         const before = writes.length
-        segButtons[1].props.onClick()
+        bothBtn.props.onClick()
         check(writes.length === before + 1, '点分段按钮触发写盘')
         const ops = writes[writes.length - 1] || []
         const modeOp = ops.find((op) => op.path && op.path[0] === 'schemeMode')
         check(modeOp !== undefined && modeOp.value === 'both', '写盘内容：schemeMode → both', modeOp ? modeOp.value : 'n/a')
 
-        /* 亮度档位：点 "更亮"（第 5 个按钮）应写 proseBoost=strong。 */
+        /* 亮度档位：点 "更亮"（proseBoost=soft 是默认，strong 是"最亮"）。 */
         const beforeBoost = writes.length
-        segButtons[4].props.onClick()
+        byLabel('更亮').props.onClick()
         check(writes.length === beforeBoost + 1, '点亮度档位触发写盘')
         const boostOps = writes[writes.length - 1] || []
         const boostOp = boostOps.find((op) => op.path && op.path[0] === 'proseBoost')
         check(boostOp !== undefined && boostOp.value === 'strong', '写盘内容：proseBoost → strong', boostOp ? boostOp.value : 'n/a')
 
-        /* 点 "原值"（第 3 个按钮）应写 proseBoost=off。 */
-        segButtons[2].props.onClick()
+        /* 点 "原值" 应写 proseBoost=off。 */
+        byLabel('原值').props.onClick()
         const offOp = (writes[writes.length - 1] || []).find((op) => op.path && op.path[0] === 'proseBoost')
         check(offOp !== undefined && offOp.value === 'off', '写盘内容：proseBoost → off', offOp ? offOp.value : 'n/a')
+
+        /* 背景来源第三项：点 "等高线" 应写 glassBackground=contour。 */
+        byLabel('等高线').props.onClick()
+        const contourOp = (writes[writes.length - 1] || []).find((op) => op.path && op.path[0] === 'glassBackground')
+        check(contourOp !== undefined && contourOp.value === 'contour', '写盘内容：glassBackground → contour',
+          contourOp ? contourOp.value : 'n/a')
       }
 
       /* 正文高亮开关：点它必须写 prose 字段。 */
       const switches3 = nodes3.filter((node) => node.props && node.props.className === 'dmt-switch')
-      check(switches3.length === 5, '写盘场景：5 个开关（启用/代码高亮/正文高亮/过程行高亮/玻璃界面）', String(switches3.length))
+      check(switches3.length === 6, '写盘场景：6 个开关（启用/代码高亮/正文高亮/过程行高亮/玻璃界面/手绘造型）', String(switches3.length))
       const proseSwitch = switches3.find((node) => node.props['aria-label'] === '正文高亮')
       check(proseSwitch !== undefined, '写盘场景：找到正文高亮开关')
       if (proseSwitch !== undefined) {

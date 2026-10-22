@@ -34,6 +34,8 @@ const suites = [
   { name: '文件卡片检测（宿主真实 CSS）', args: [join(here, 'card.test.mjs')] },
   { name: 'LaTeX 代码块判定', args: [join(here, 'latex.test.mjs')] },
   { name: '玻璃界面（壁纸 + 单层 alpha）', args: [join(here, 'glass.test.mjs')] },
+  { name: '等高线背景（移植管线）', args: [join(here, 'contour.test.mjs')] },
+  { name: '手绘造型（shape）', args: [join(here, 'shape.test.mjs')] },
   { name: '运行时行为', args: [join(here, 'runtime.test.mjs')] },
   { name: '自定义配色与配色方案', args: [join(here, 'custom.test.mjs')] },
   { name: '设置页渲染与交互', args: [join(here, 'page.test.mjs')] },

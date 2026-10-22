@@ -78,6 +78,7 @@ Settings → **ColorLab**:
 | **File card colour** | Recolours the header band of "edited N files" cards and the whole card body of "delivered files" cards |
 | **Custom colours** | 18 slots (8 surfaces / 3 text / 7 syntax), each adjustable |
 | **Presets** | Save the current palette and load it back later, up to 12 |
+| **Hand-drawn shape** | Uneven corner radii, paper shadows, hover lift and a glowing sidebar divider (off by default; mechanism borrowed from dsh-maid-whale-UI, no art assets) |
 
 **LaTeX gets a dedicated highlighter.** Sublime's own
 `LaTeX.sublime-syntax` + `TeX.sublime-syntax` are ported wholesale and run
@@ -200,8 +201,11 @@ At the top of the settings panel:
 - **Prose highlighting does not cover half-parsed Markdown.** During streaming
   the DOM structure is the same so rules still apply, but an unclosed `**` is
   not coloured while it is half-written.
-- **Corner radii and fonts are untouched.** Those belong to `ui-theme` and
-  `dsh-font-probe`; this plugin only deals with colour.
+- **Corner radii are untouched by default.** Fonts stay with `dsh-font-probe`.
+  The optional **Hand-drawn shape** toggle does restyle corner radii and
+  shadows — deliberately off by default, and it only ever touches named
+  surfaces (input card, dialogs, menus, code blocks, detected cards), never
+  a full-tree scan.
 - **The light variant is not original Mariana.** Mariana itself is dark-only;
   the light values are same-hue lightened derivatives, there so that
   "apply to both" mode is not glaring.
@@ -225,7 +229,7 @@ condition was found and fixed — are kept in [docs/DESIGN.md](docs/DESIGN.md)
 ## Tests
 
 ```sh
-npm test        # 9 suites, offline
+npm test        # 14 suites, offline
 npm run check   # syntax check
 ```
 
@@ -235,6 +239,12 @@ MIT. The Mariana palette originates from Sublime Text
 (`Sublime HQ Pty Ltd`, colour scheme by Dmitri Voronianski). This plugin is an
 independent reimplementation of the palette as DSH design tokens; it is not
 affiliated with or endorsed by Sublime HQ.
+
+The optional contour background is ported from
+[dsh-theme-endfield](https://github.com/ymh0000123/dsh-theme-endfield)
+(MIT, (c) yunxiiQwQ) — core pipeline only (field → marching squares → stitch →
+smooth → draw), with its own comments and measured constants preserved; none of
+that project's art assets are included.
 
 ---
 
@@ -308,6 +318,7 @@ Mariana 是 Sublime Text 3.0（2017）起及 Sublime Text 4 的默认配色，
 | **文件卡片颜色** | 「已编辑 N 个文件」卡片的头部横带，以及「交付文件」卡片的整张底色 |
 | **自定义配色** | 18 个槽位（界面底色 8 / 文字 3 / 语法色 7），逐个调 |
 | **配色方案** | 把当前配色存成方案，随时载入，最多 12 套 |
+| **手绘造型** | 四角不等宽的圆角（手绘感）、纸片式双层投影、悬停微抬、侧栏右缘渐隐发光线。默认关，与玻璃界面互相独立（机制借鉴 dsh-maid-whale-UI，不含其美术） |
 
 **LaTeX 走专门的高亮通道。** 直接把 Sublime 的 `LaTeX.sublime-syntax` 与
 `TeX.sublime-syntax` **整份移植**过来，用一个小型 TextMate 引擎跑分词，
@@ -410,7 +421,9 @@ WCAG 对比度，不是估算。
   规则会失配 —— 表现是正文退回同色，不会报错。
 - **正文高亮不覆盖流式渲染中的半截 Markdown。** DOM 结构相同所以规则照常命中，
   但未闭合的 `**` 在半截状态下不会被着色。
-- **不改圆角与字体。** 那是 `ui-theme` 与 `dsh-font-probe` 的职责，本插件只碰颜色。
+- **默认不改圆角与字体。** 字体是 `dsh-font-probe` 的职责；可选的「手绘造型」
+  开关会改圆角与投影 —— 刻意默认关，且只点名已知表面（输入卡/对话框/菜单/
+  代码块/检测到的卡片），不做全树扫描。
 - **浅色变体不是 Mariana 原版。** Mariana 本身只有深色版，浅色值是同色相提亮的
   自制品，只为「深浅都套用」模式下不刺眼。
 - **自定义配色只覆盖深色。** 浅色没有对应槽位 —— 刻意的，避免把深色下挑的颜色
@@ -427,7 +440,7 @@ WCAG 对比度，不是估算。
 ## 校验
 
 ```sh
-npm test        # 11 个套件，离线可跑
+npm test        # 14 个套件，离线可跑
 npm run check   # 语法检查
 ```
 
@@ -436,3 +449,8 @@ npm run check   # 语法检查
 MIT。Mariana 配色来自 Sublime Text（`Sublime HQ Pty Ltd`，配色方案作者
 Dmitri Voronianski）。本插件是把该配色重新实现为 DSH 设计令牌的独立实现，
 与 Sublime HQ 无隶属或背书关系。
+
+可选的「等高线」背景移植自
+[dsh-theme-endfield](https://github.com/ymh0000123/dsh-theme-endfield)
+（MIT，(c) yunxiiQwQ）：只取核心管线（场 → marching squares → 缝合 → 平滑 →
+描边），保留了它的注释与实测常数；不含该项目的任何美术素材。

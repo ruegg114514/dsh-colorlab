@@ -31,7 +31,7 @@
 
 import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -314,6 +314,16 @@ const FIELD_DEFAULTS = {
   /* 自选壁纸的绝对路径；空串 = 跟随系统桌面壁纸。
      指向本机图片文件时优先使用它，Host 会校验存在性与大小。 */
   glassWallpaperPath: '',
+  /* 背景压暗："auto" | "0" | "20" | "35" | "50"（固定百分比）。 */
+  glassVeil: 'auto',
+  /* 背景饱和度 0–200%（100 = 原样）。 */
+  glassSat: '120',
+  /* 等高线漂移速度："0" 静止 | "1" | "2" | "4"。 */
+  contourSpeed: '2',
+  /* "on" | "off" —— 手绘造型（不规则圆角 + 纸影 + 悬停微抬 + 分界线）。
+     灵感与数值来自 dsh-maid-whale-UI 的纸面主题（只抄机制不抄美术），
+     与玻璃界面独立，默认关。 */
+  shape: 'off',
 }
 
 /** 首屏画布色（standard 变体的 base）。客户端随后会用真实设置覆盖。 */
@@ -376,34 +386,104 @@ function configRequireAnchors() {
 }
 
 /**
+ * 诊断文件（借鉴 dsh-theme-endfield 的做法，2026-10-22）。
+ *
+ * 背景：`loadSchemaBuilder()` 全锚点落空时，表现是**设置页整个消失且不报错**
+ * （条目投射不出表单，主题照常生效）—— 这是我们最难查的故障模式，
+ * DESIGN.md 里记过"错误被 remote 层吞掉，前端连一句报错都看不到"。
+ *
+ * 做法：探测失败时往 profile 目录写 `colorlab-diagnostic.json`，记录
+ * 试过的每个锚点、每个模块 id 的具体报错；成功时把它删掉。
+ * 下次"设置页没了"，文件直接说明死在哪一步，不用再猜。
+ */
+const DIAGNOSTIC_FILE = 'colorlab-diagnostic.json'
+
+function diagnosticDir() {
+  if (typeof process.env.DSH_PROFILE_DIR === 'string' && process.env.DSH_PROFILE_DIR !== '') {
+    return process.env.DSH_PROFILE_DIR
+  }
+  const haystacks = [
+    ...(process.argv || []).filter((v) => typeof v === 'string'),
+    fileURLToPath(import.meta.url),
+  ]
+  for (const value of haystacks) {
+    const hit = /^(.*?[\\/]profiles[\\/][^\\/]+)/.exec(value)
+    if (hit !== null) return hit[1]
+  }
+  /* 兜底：插件自己的目录（测试环境会走到这里）。 */
+  return fileURLToPath(new URL('.', import.meta.url))
+}
+
+function writeDiagnostic(trail) {
+  try {
+    writeFileSync(join(diagnosticDir(), DIAGNOSTIC_FILE), JSON.stringify({
+      at: new Date().toISOString(),
+      plugin: 'dsh-colorlab',
+      reason: trail.reason,
+      anchors: trail.anchors,
+      hint: '设置表单投射失败：DSH 读不到 schemastery 或 schema 构造抛错。'
+        + '主题本身不受影响（客户端用内存默认值）。检查 anchors 里哪个环节是 ok:false。',
+    }, null, 2), 'utf8')
+  } catch {
+    /* 诊断本身写不了就算了，绝不让它把插件带崩 */
+  }
+}
+
+function clearDiagnostic() {
+  try {
+    rmSync(join(diagnosticDir(), DIAGNOSTIC_FILE), { force: true })
+  } catch {
+    /* 没有文件 / 删不掉 —— 无所谓 */
+  }
+}
+
+/**
  * 从宿主 realm 懒加载 schemastery。
  * 找不到就返回 undefined —— 那样条目投射不出设置表单，但主题覆盖本身照常工作
  * （客户端用内存默认值）。这样"设置页没出来"不会连累"主题没生效"。
+ * 失败时把逐锚点的轨迹写进诊断文件（见 writeDiagnostic）。
  */
 function loadSchemaBuilder() {
+  const trail = { reason: 'no-anchor-resolved', anchors: [] }
   for (const anchor of configRequireAnchors()) {
+    const entry = { anchor, requireOk: false, attempts: [] }
+    trail.anchors.push(entry)
     let req
     try {
       req = createRequire(anchor + '/package.json')
-    } catch {
+      entry.requireOk = true
+    } catch (error) {
+      entry.error = String(error && error.code ? error.code : error)
       continue
     }
     for (const id of ['@deepseek-ai/schemastery', 'schemastery']) {
+      const attempt = { id, ok: false }
+      entry.attempts.push(attempt)
       try {
         const mod = req(id)
         const z = mod && mod.default ? mod.default : mod
-        if (z && typeof z.object === 'function' && typeof z.string === 'function') return z
-      } catch {
-        /* 下一个候选 */
+        if (z && typeof z.object === 'function' && typeof z.string === 'function') {
+          attempt.ok = true
+          return { z, trail }
+        }
+        attempt.ok = true
+        attempt.shapeMismatch = true
+      } catch (error) {
+        attempt.error = String(error && error.message ? error.message : error)
       }
     }
   }
-  return undefined
+  return { z: undefined, trail }
 }
 
 function buildConfig() {
-  const z = loadSchemaBuilder()
-  if (z === undefined) return undefined
+  const loaded = loadSchemaBuilder()
+  const z = loaded.z
+  if (z === undefined) {
+    /* 全锚点落空：写诊断文件（这是"设置页消失"的唯一可查证据）。 */
+    writeDiagnostic(loaded.trail)
+    return undefined
+  }
 
   /**
    * 构造一个可写字段。
@@ -424,30 +504,46 @@ function buildConfig() {
     return field
   }
 
-  return z.object({
-    enabled: str(FIELD_DEFAULTS.enabled),
-    schemeMode: str(FIELD_DEFAULTS.schemeMode),
-    surface: str(FIELD_DEFAULTS.surface),
-    accent: str(FIELD_DEFAULTS.accent),
-    syntax: str(FIELD_DEFAULTS.syntax),
-    prose: str(FIELD_DEFAULTS.prose),
-    proseBoost: str(FIELD_DEFAULTS.proseBoost),
-    proseColors: str(FIELD_DEFAULTS.proseColors),
-    custom: str(FIELD_DEFAULTS.custom),
-    presets: str(FIELD_DEFAULTS.presets),
-    rowHighlight: str(FIELD_DEFAULTS.rowHighlight),
-    rowColor: str(FIELD_DEFAULTS.rowColor),
-    summaryColor: str(FIELD_DEFAULTS.summaryColor),
-    cardColor: str(FIELD_DEFAULTS.cardColor),
-    rowVariants: str(FIELD_DEFAULTS.rowVariants),
-    glass: str(FIELD_DEFAULTS.glass),
-    glassBackground: str(FIELD_DEFAULTS.glassBackground),
-    glassTint: str(FIELD_DEFAULTS.glassTint),
-    glassFog: str(FIELD_DEFAULTS.glassFog),
-    glassBlur: str(FIELD_DEFAULTS.glassBlur),
-    glassHaze: str(FIELD_DEFAULTS.glassHaze),
-    glassWallpaperPath: str(FIELD_DEFAULTS.glassWallpaperPath),
-  })
+  /* schema 构造本身也可能抛（宿主 schemastery 版本缺 object/string 之外的
+     链式能力时）—— 同样落进诊断，别让"设置页消失"再当一次哑故障。 */
+  try {
+    const config = z.object({
+      enabled: str(FIELD_DEFAULTS.enabled),
+      schemeMode: str(FIELD_DEFAULTS.schemeMode),
+      surface: str(FIELD_DEFAULTS.surface),
+      accent: str(FIELD_DEFAULTS.accent),
+      syntax: str(FIELD_DEFAULTS.syntax),
+      prose: str(FIELD_DEFAULTS.prose),
+      proseBoost: str(FIELD_DEFAULTS.proseBoost),
+      proseColors: str(FIELD_DEFAULTS.proseColors),
+      custom: str(FIELD_DEFAULTS.custom),
+      presets: str(FIELD_DEFAULTS.presets),
+      rowHighlight: str(FIELD_DEFAULTS.rowHighlight),
+      rowColor: str(FIELD_DEFAULTS.rowColor),
+      summaryColor: str(FIELD_DEFAULTS.summaryColor),
+      cardColor: str(FIELD_DEFAULTS.cardColor),
+      rowVariants: str(FIELD_DEFAULTS.rowVariants),
+      glass: str(FIELD_DEFAULTS.glass),
+      glassBackground: str(FIELD_DEFAULTS.glassBackground),
+      glassTint: str(FIELD_DEFAULTS.glassTint),
+      glassFog: str(FIELD_DEFAULTS.glassFog),
+      glassBlur: str(FIELD_DEFAULTS.glassBlur),
+      glassHaze: str(FIELD_DEFAULTS.glassHaze),
+      glassWallpaperPath: str(FIELD_DEFAULTS.glassWallpaperPath),
+    glassVeil: str(FIELD_DEFAULTS.glassVeil),
+    glassSat: str(FIELD_DEFAULTS.glassSat),
+    contourSpeed: str(FIELD_DEFAULTS.contourSpeed),
+      shape: str(FIELD_DEFAULTS.shape),
+    })
+    /* 成功：清掉上一次失败留下的诊断（文件在 = 现在仍有问题，语义保持单一）。 */
+    clearDiagnostic()
+    return config
+  } catch (error) {
+    loaded.trail.reason = 'schema-build-threw'
+    loaded.trail.error = String(error && error.message ? error.message : error)
+    writeDiagnostic(loaded.trail)
+    return undefined
+  }
 }
 
 const Config = buildConfig()

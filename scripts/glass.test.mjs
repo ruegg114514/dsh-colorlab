@@ -109,17 +109,23 @@ console.log('  C. 模糊位置（失败原因 2）')
      真正要禁止的是「三列上出现 blur」，所以只匹配 blur 值。 */
   check(!/\[class\*="_centerCol"\][^{]*\{[^}]*backdrop-filter:blur/.test(css),
     '中列规则里没有 backdrop-filter: blur')
-  /* 🔧 浮层（输入栏/菜单）**应该有** backdrop-filter —— 那是挡住背后文字的手段。
-     但三列**不应该**有：它们的模糊来自背景层，再加一次是重复计算。
-     判据：模糊只允许出现在「浮层类」选择器上。 */
+  /* 🔧 2026-10-22（借鉴 dsh-theme-endfield 的 glass.md）：backdrop-filter
+     收窄到「背后有活文字」的表面 —— 对话框/菜单与标题栏拖动区。
+     代码块/卡片/输入卡/座的 filter 全部删除：背后本来就是壁纸层
+     预糊好的图（再糊 = 浪费 GPU），且 filter 有 fixed 后代包含块的
+     实测事故风险（上游 tooltip 抖动）。三列依旧不许有。 */
   {
     const filterLines = css.split('\n').filter((l) => l.includes('backdrop-filter:blur'))
     const colFilter = filterLines.filter((l) => /_sidebarCol|_centerCol|_rightbarCol/.test(l))
     check(colFilter.length === 0, '三列没有 backdrop-filter（模糊来自背景层）',
       String(colFilter.length) + ' 条')
-    const surfaceFilter = filterLines.filter((l) => /composerSeat|RlGAzG|role="dialog"/.test(l))
-    check(surfaceFilter.length >= 2, '输入栏/浮层有 backdrop-filter（用来糊掉背后的字）',
-      String(surfaceFilter.length) + ' 条')
+    const shouldBlur = filterLines.filter((l) => /role="dialog"|_frame"\]::before/.test(l))
+    const mustNotBlur = filterLines.filter((l) => /RlGAzG|_card|md-code-block|data-code|composerSeat|bubble/.test(l))
+    check(shouldBlur.length >= 2, '对话框/菜单 + 标题栏有 backdrop-filter（糊活文字）',
+      String(shouldBlur.length) + ' 条')
+    check(mustNotBlur.length === 0,
+      '代码块/卡片/输入卡/座无 backdrop-filter（防包含块事故 + 省 GPU）',
+      mustNotBlur.length + ' 条违规')
   }
 
   check(src.includes('wallpaperEl.style.filter = value'), '模糊写进壁纸层的 style.filter')
@@ -146,25 +152,26 @@ console.log('  D. 主题色（失败原因 3）')
 
   /* 完整合成链验算：壁纸 → 压暗层 → 三列 alpha → 显示色。
    *
-   * ⚠️ 必须按**三层**算，只算「壁纸→三列」会得到 153（超标），
-   * 而真实链路里有压暗层，结果是 68。
-   * 这个差别正是压暗层存在的理由：没有它，亮壁纸会把主题色冲淡。 */
+   * 🔧 ❸ 后压暗层与浓度联动：α=0.65 → veil=0.31（旧固定 0.55）。
+   * 通道差因此从 68 放宽到 ~105 —— 这是**有意的取舍**：用一点主题色
+   * 纯度换壁纸可见度（用户批准的 ❸ 方向）。反证链守住底线：
+   * 没有 veil 冲淡到 153、α=0.1 洗掉主题色到 393。 */
   const mariana = [52, 61, 70]
   const wallpaper = [232, 190, 198]
   const over = (fg, a, bg) => fg.map((c, i) => Math.round(c * a + bg[i] * (1 - a)))
   const distance = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])
 
-  /* 第 1 层：压暗层（mariana base + 55%）盖在壁纸上 */
-  const veiled = over(mariana, 0.55, wallpaper)
+  /* 第 1 层：压暗层（联动值 0.31）盖在壁纸上 */
+  const veiled = over(mariana, 0.31, wallpaper)
   /* 第 2 层：三列 65% 叠在压暗后的背景上 */
   const shown = over(mariana, 0.65, veiled)
   const dist = distance(shown, mariana)
-  check(dist <= 100, '完整链路（含压暗层）下仍是主题色（通道差 ≤ 100）',
+  check(dist <= 115, '完整链路（含联动压暗层）下仍是主题色（通道差 ≤ 115）',
     '通道差 ' + dist + ' rgb(' + shown.join(',') + ')')
 
   /* 反证 1：没有压暗层 → 主题色被冲淡 */
   const noVeil = over(mariana, 0.65, wallpaper)
-  check(distance(noVeil, mariana) > 100,
+  check(distance(noVeil, mariana) > 115,
     '没有压暗层时主题色确实被冲淡（压暗层不是可选项）',
     '通道差 ' + distance(noVeil, mariana))
 
@@ -244,17 +251,49 @@ console.log('  F. 输入栏（正文穿模问题）')
   check(cardLine !== undefined && /background-color:rgba\(/.test(cardLine),
     '输入卡片是半透明玻璃（与周围一致）',
     cardLine === undefined ? '缺失' : (cardLine.match(/background-color:[^;]+/) || ['?'])[0])
-  /* 输入栏的模糊应当明显大于「设置里的基础半径」——
-     因为三列根本没有 backdrop-filter（它们的模糊来自背景层），
-     所以对比基准是设置值本身，而不是某个别的选择器。 */
-  const seatBlur = seatLine === undefined ? null : /blur\((\d+)px\)/.exec(seatLine)
-  const baseBlurValue = 16 /* 默认 glassBlur，与 DEFAULTS 一致 */
-  check(seatBlur !== null && Number(seatBlur[1]) > baseBlurValue,
-    '输入栏模糊大于基础半径（要压住文字这种高频细节）',
-    '输入栏 ' + (seatBlur ? seatBlur[1] : '?') + 'px / 基础 ' + baseBlurValue + 'px')
+  /* 🔧 2026-10-22（④ 对齐参考插件）：输入区从「强模糊挡字」换成「硬裁」——
+   * JS 把 seat 抬成滚动容器的 flex 兄弟，文字硬断在输入卡上沿，
+   * 背后没有文字 → 不需要 frostedFilter。断言反转：
+   * seat 必须**没有** backdrop-filter（有就是旧方案没撤干净），
+   * 且必须有 flex:none（参考插件实测：absolute/丢 flex 都会让裁切失效）。 */
+  const seatBlur = seatLine === undefined ? null : /backdrop-filter:blur/.exec(seatLine)
+  check(seatLine !== undefined && seatBlur === null,
+    '座无 backdrop-filter（硬裁取代强模糊，④）',
+    seatLine === undefined ? '缺失' : (seatLine.match(/backdrop-filter:[^;]+/) || ['无'])[0])
+  check(seatLine !== undefined && /flex:none/.test(seatLine),
+    '座带 flex:none（seat 是 content 的 flex 兄弟，裁切的布局前提）')
+  const contentRule = lines.find((l) => l.includes('[data-conversation-content]{'))
+  check(contentRule !== undefined && /position:relative/.test(contentRule),
+    'content 容器 position:relative（lift 方案的定位前提）')
+  /* 输入卡本体：保留基础 surfaceFilter（糊壁纸），不再用 frosted。 */
+  check(cardLine !== undefined && !cardLine.includes('blur(26px)'),
+    '输入卡不用 frosted 强模糊（硬裁后背后无文字）')
+  /* seat 的 lift/restore/observer 机制存在性（源码级锁）。 */
+  check(/function liftSeats/.test(src) && /function restoreSeats/.test(src)
+    && /MutationObserver/.test(src) && /syncSeatLift\(false\)/.test(src),
+    '硬裁机制完整（lift + restore + observer + 关闭时撤销）')
   const transparentRule = lines.find((l) => l.includes('Dc7zOa_root'))
   check(transparentRule === undefined || !transparentRule.includes('composerSeat'),
     '清透明的容器列表里不含 composerSeat（否则正文滚进输入栏）')
+
+  /* 🔴 回归锁（2026-10-22 真机 bug「正文穿过输入区」）：
+   * 座**就是** .Dc7zOa_composerSeat —— 宿主给同一个元素同时挂了
+   * 类名和 data-composer-seat（渲染代码：className: composerSeat,
+   * "data-composer-seat": ""）。旧版「透明化整条底栏」那条规则里也列了
+   * [data-composer-seat]，且带 backdrop-filter:none —— 它在表尾，
+   * 同特异性后者赢，于是座的强模糊被自己撤掉，正文直接可读地透进来。
+   * 不变量：**任何含 backdrop-filter:none 的规则都不得命中座**。 */
+  {
+    const noneLines = lines.filter((l) => l.includes('backdrop-filter:none')
+      && l.includes('data-composer-seat'))
+    check(noneLines.length === 0,
+      '座的模糊不被任何 backdrop-filter:none 规则撤掉',
+      noneLines.length + ' 条冲突规则')
+    /* 座规则不得再带强模糊（④ 硬裁取代；见 F 节的反向断言）。 */
+    const seatRule = lines.find((l) => l.includes('composerSeat'))
+    check(seatRule !== undefined && !/backdrop-filter:blur/.test(seatRule),
+      '座规则无 frosted 强模糊（硬裁后不需要）')
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -295,17 +334,61 @@ console.log('  F2. 标题栏（探针覆盖）')
 }
 
 /* ------------------------------------------------------------------ *
- * G. 压暗层：让文字可读
+ * G. 压暗层：合成进背景层（2026-10-22 迁移）
+ *
+ * 旧版把压暗层放 `#root::before`（fixed, z-index:0）。那是个层叠事故：
+ * `#root` 被玻璃表设为 z-index:1 = 层叠上下文，上下文**内部**的定位元素
+ * 画在静态流内容（三列、卡片、正文）之上 —— 一旦生效就是整页蒙 55% 灰纱，
+ * 连文字一起压暗。（它以前没出过事，是因为缺失闭括号的 CSS 错误恢复
+ * 把整条吞了 —— 见 I 节的括号平衡回归锁。）
+ *
+ * 现在合成进背景层 `#dmt-wallpaper` 自身的 background-image：
+ * 物理上在 #root 之外、之下 → 只压底图，不压内容。
  * ------------------------------------------------------------------ */
 
-console.log('  G. 压暗层')
+console.log('  G. 压暗层（背景层合成）')
 
 {
-  check(css.includes('#root::before'), '有压暗层（#root::before）')
-  check(/position:fixed/.test(css), '压暗层是 fixed（铺满窗口）')
-  check(/pointer-events:none/.test(css), '压暗层不挡点击')
-  check(/z-index:0/.test(css), '压暗层在内容之下')
-  check(css.includes('rgba(52, 61, 70, 0.55)'), '深色模式压暗 55%')
+  const { glassVeilColor, composeBackdrop, glassSolidAlpha } = t
+  check(typeof glassVeilColor === 'function' && typeof composeBackdrop === 'function'
+    && typeof glassSolidAlpha === 'function',
+    'veil 三个纯函数已导出')
+  /* 🔧 ❸：veil 与表面浓度联动 —— 深色 v = 0.50 − 0.30·α（夹 0.15–0.45）。
+   * 浓度高 → 列自己已压得住底，veil 让位；浓度低 → veil 多干活。 */
+  check(glassVeilColor({ base: '#343D46' }, true, 0.65) === 'rgba(52, 61, 70, 0.31)',
+    '深色 α=0.65 → 压暗 0.31', glassVeilColor({ base: '#343D46' }, true, 0.65))
+  check(glassVeilColor({ base: '#FFFFFF' }, false, 0.65) === 'rgba(255, 255, 255, 0.26)',
+    '浅色 α=0.65 → 压暗 0.26')
+  check(glassVeilColor({ base: '#343D46' }, true, 0) === 'rgba(52, 61, 70, 0.45)',
+    'α=0 → 压暗夹到上限 0.45（文字直接坐壁纸，veil 必须多干）')
+  check(glassVeilColor({ base: '#343D46' }, true, 1) === 'rgba(52, 61, 70, 0.2)',
+    'α=1 → 压暗降到 0.2')
+  check(glassVeilColor(undefined, true) === 'rgba(52, 61, 70, 0.31)',
+    '缺 surf/缺 α 时回落默认 base+0.65')
+  /* 合成：veil 在前（第一层=画在最上），图片在后 */
+  const composed = composeBackdrop('rgba(52, 61, 70, 0.31)', 'url("blob:x")')
+  check(composed === 'linear-gradient(rgba(52, 61, 70, 0.31), rgba(52, 61, 70, 0.31)), url("blob:x")',
+    '壁纸路径合成正确（渐变前置）', composed.slice(0, 40) + '…')
+  /* ⚠️ 关键防御：veil 为空时必须原样返回 —— 拼进 linear-gradient() 会得到
+   * `linear-gradient(, ,)` 非法值，整条 background-image 一起报废。 */
+  check(composeBackdrop('', 'url("blob:x")') === 'url("blob:x")',
+    'veil 空 → 不前置（避免非法 linear-gradient）')
+  /* 样式表里不能再出现 #root::before（层叠事故的载体） */
+  check(!css.includes('#root::before'),
+    '玻璃表不再放 #root::before 压暗层（层叠事故源）')
+  /* 渐变兜底也要含 veil（paint 时走 backdropGradient，veil 由 sync 注入） */
+  const veil = glassVeilColor(dark, true, 0.65)
+  const g1 = t.backdropGradient(dark, true, veil)
+  check(g1.startsWith('linear-gradient(' + veil + ', ' + veil + '),') && g1.includes('radial-gradient'),
+    '渐变兜底同样前置压暗层', g1.slice(0, 46) + '…')
+  check(t.backdropGradient(dark, true, '') === t.buildGradientBackdrop(dark, true),
+    'veil 空 → 渐变兜底原样（不多包一层）')
+  /* 代码块浓度：差值档 —— 合成（不是直涂）收敛到 α+0.14 */
+  const near = (a, b) => Math.abs(a - b) < 1e-9
+  check(near(glassSolidAlpha(0.65), 0.14 / 0.35) && near(glassSolidAlpha(0.78, 0), 0.14 / 0.22)
+    && glassSolidAlpha(1) === 0,
+    'glassSolidAlpha = 差值公式（α=1 时涂什么都看不见 → 0）',
+    '65→' + glassSolidAlpha(0.65) + ' 78→' + glassSolidAlpha(0.78))
 }
 
 /* ------------------------------------------------------------------ *
@@ -352,42 +435,36 @@ console.log('  G2. 整窗覆盖（所有表面令牌）')
     check(decls.some((d) => d.startsWith(name + ':')), '覆盖 ' + label, name)
   }
 
-  /* 浓度必须在可透区间 */
-  /* 🔧 分两类：可以透的表面 vs 必须实底的表面。
-   *
-   * 必须实底的是「底下压着正文」的那几类 —— 输入框、菜单、tooltip。
-   * 它们半透明就必然透字（透光是物理结果，层叠上下文治不了）。
-   * 其余表面应当留在可透区间，否则玻璃感消失。 */
-  /* 🔧 没有「必须实底」的表面了 —— 挡字改由浮层的强模糊负责。 */
-  const MUST_BE_OPAQUE = []
+  /* 🔧  差值体系：判据从「本层浓度」改成「合成浓度」。
+   * 本层涂多少不再是视觉指标 —— 卡片涂 0.29 但合成后是 0.75，
+   * 观感由合成值决定。旧断言（本层 ≥0.3 / ≤0.95）测的是错的量。 */
+  const { glassComposite } = t
+  const colAlpha = 0.65 /* 默认 glassTint，三列选择器直涂这个值 */
   const alphas = REQUIRED.map(([name, label]) => ({ name, label, a: getAlpha(name) }))
     .filter((x) => x.a !== null)
-  const translucent = alphas.filter((x) => !MUST_BE_OPAQUE.includes(x.name))
-  const opaque = alphas.filter((x) => MUST_BE_OPAQUE.includes(x.name))
-
-  check(translucent.every((x) => x.a >= 0.3), '可透表面浓度 ≥ 30%（否则字读不清）',
-    translucent.filter((x) => x.a < 0.3).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
-  check(translucent.every((x) => x.a <= 0.95), '可透表面浓度 ≤ 95%（否则成实心板，没有玻璃感）',
-    translucent.filter((x) => x.a > 0.95).map((x) => x.label + '=' + x.a).join(', ') || '全部合规')
+  const composited = alphas.map((x) => ({ ...x, f: glassComposite(colAlpha, x.a) }))
+  /* 合成必须收敛进档位区间：浮层档 α+0.10 … +0.40（fog 0–40 全量程），
+   * 代码块档 α+0.14±0.01。
+   * 🔧 上限 0.21→0.41：fogPer 从 0.10 扩到 0.30（用户报"fog 调了没反应"，
+   * 观感范围太窄是原因之一）。 */
+  const FLOAT = ['--dsw-alias-markdown-code-block', '--dsw-alias-markdown-code-block-banner',
+    '--changes-fill', '--deliverable-fill', '--plan-card-fill', '--card-fill']
+  const badFloat = composited.filter((x) => !FLOAT.includes(x.name)
+    && (x.f < colAlpha + 0.09 || x.f > colAlpha + 0.41))
+  check(badFloat.length === 0, '浮层档合成 = α+0.10(+fog≤0.30)（差值收敛）',
+    badFloat.map((x) => x.label + '→' + x.f.toFixed(2)).join(', ') || '全部收敛')
+  const code = composited.find((x) => x.name === '--dsw-alias-markdown-code-block')
+  check(code !== undefined && code.f >= colAlpha + 0.13 && code.f <= colAlpha + 0.15,
+    '代码块档合成 = α+0.14（比卡片实一档、不是实心板）',
+    code ? '合成 ' + code.f.toFixed(2) : '缺失')
   check(true, '（无必须实底的表面：挡字靠强模糊，不靠涂死）')
 
-  /* 浮层应比底板略浓，但不能浓太多 */
-  /* 🔧 反转：浮层/卡片应当比底板**更透**，不是更实。
-   *
-   * 旧断言写反了方向，导致实现跟着写反 ——
-   * 卡片和代码块一度比底板还实（0.78~0.85），屏幕上看就是实心板。
-   * 正确：三列撑主题色（浓），卡片/代码块浮在玻璃上（透）。 */
+  /* 浮层合成必须比列实（能区分）、比实心透（能透壁纸）。 */
   const layer1 = getAlpha('--dsw-alias-bg-layer-1')
   const bubble = getAlpha('--dsw-specific-bubble')
   if (layer1 !== null && bubble !== null) {
-    check(bubble <= layer1, '浮层/卡片比底板更透（否则成实心板）',
-      '底板 ' + layer1 + ' / 气泡 ' + bubble)
-  }
-
-  /* 代码块必须最实（长段代码要读） */
-  const codeBlock = getAlpha('--dsw-alias-markdown-code-block')
-  if (codeBlock !== null) {
-    check(codeBlock >= 0.35, '代码块浓度 ≥ 35%（可读性下限）', String(codeBlock))
+    check(Math.abs(bubble - layer1) < 1e-9, '气泡与面板层1 同档（浮层档）',
+      '底板层 ' + layer1 + ' / 气泡 ' + bubble)
   }
 
   /* 侧栏令牌必须 transparent（它同时决定标题栏颜色） */
@@ -433,12 +510,287 @@ console.log('  H. 设置项')
     check(d.glassTint === '65', '浓度默认 65（保住主题色）', String(d.glassTint))
     check(d.glassBlur === '16', '模糊默认 16px', String(d.glassBlur))
   }
-  check(src.includes("'透明与壁纸'"), '有分组标题')
+  /* 🔧 2026-10-22 页面整理：分组标题统一 GroupHead；「壁纸状态」整行
+   * 退役，状态并进玻璃组的动态副标题（已加载壁纸 / 等高线 / 渐变…）。 */
+  check(/h\(\s*GroupHead,\s*\{\s*title: '玻璃界面'/.test(src), '玻璃有分组标题（GroupHead）')
   check(src.includes("title: '玻璃界面'"), '有「玻璃界面」开关')
   check(src.includes("title: '背景来源'"), '有「背景来源」')
   check(src.includes("title: '表面浓度'"), '有「表面浓度」')
   check(src.includes("title: '模糊半径'"), '有「模糊半径」')
-  check(src.includes("title: '壁纸状态'"), '有「壁纸状态」')
+  check(src.includes("'壁纸已加载'"), '壁纸状态并进组副标题')
+  check(!src.includes("title: '壁纸状态'"), '壁纸状态不再占整行')
+}
+
+/* ------------------------------------------------------------------ *
+ * I. 生成 CSS 的结构合法性（2026-10-22 事故回归锁）
+ *
+ * 玻璃表是**拼字符串**生成的。曾经有两处 push 忘了收尾的 `}`：
+ * CSS 错误恢复把「文字提亮块」和「压暗层」整段吞掉 —— 所有逐行正则
+ * 断言照样全绿，真机上那两条规则根本没生效（用户看到的"文字发灰、
+ * 亮壁纸压不住"）。**逐行匹配测不出括号**，必须整体平衡校验。
+ *
+ * 用真实参数（多组），而不是只测默认值。
+ * ------------------------------------------------------------------ */
+
+console.log('  I. 生成 CSS 结构合法（括号平衡 / 无非法值）')
+
+{
+  const variants = [
+    [{ glass: 'on' }, dark, true], /* 默认 */
+    [{ glass: 'on', glassTint: '78', glassFog: '0', glassHaze: '8' }, dark, true], /* 用户 profile 实值 */
+    [{ glass: 'on', glassTint: '30', glassBlur: '0' }, dark, true],
+    [{ glass: 'on', glassTint: '100' }, dark, false],
+    [{ glass: 'on' }, { base: '#FFFFFF' }, false],
+  ]
+  let bad = 0
+  for (const [st, sf, dk] of variants) {
+    const out = buildGlassSheet(st, sf, dk)
+    const opens = (out.match(/{/g) || []).length
+    const closes = (out.match(/}/g) || []).length
+    if (opens !== closes) bad += 1
+    /* 每条规则行都得自己闭合（逐行数一次，报错好定位） */
+    for (const ln of out.split('\n')) {
+      if (!ln.includes('{') || ln.startsWith('/*')) continue
+      if ((ln.match(/{/g) || []).length !== (ln.match(/}/g) || []).length) bad += 1
+    }
+    /* 非法值防御：空颜色 / undefined 漏进声明串 */
+    if (/rgba\([^)]*undefined|linear-gradient\(\s*,|,\s*\)/.test(out)) bad += 1
+    if (out.includes('undefined')) bad += 1
+  }
+  check(bad === 0, '五种参数组合：逐行闭合、总数平衡、无非法颜色', bad + ' 处异常')
+
+  /* 🔴 回归锁（2026-10-22 三连事故）：无障碍 @media 块必须不存在。
+   * Windows「透明效果」开关（注册表 EnableTransparency=0，很多机器默认关）
+   * 被 Chromium 映射成 prefers-reduced-transparency: reduce —— 旧版那个块
+   * 把三列钉成同一个 88% 实色：侧栏色被抹掉、浓度滑块失效、
+   * 只有 ::before 标题栏还跟着变（用户三连报的正是这三条）。
+   * 玻璃是应用内显式开关，不许被 OS 启发式劫持。 */
+  check(!css.includes('prefers-reduced-transparency'),
+    '不再有无障碍 @media 劫持（OS 透明开关不得钉死用户选的浓度）')
+  check((css.match(/\{/g) || []).length === (css.match(/\}/g) || []).length,
+    '去掉 @media 块后整表仍括号平衡')
+  /* 三列各自的颜色不许相同（sidebar ≠ base 是两个独立槽位） */
+  const sideLine = lines.find((l) => /_sidebarCol"\]\{background:rgba/.test(l))
+  const centerLine = lines.find((l) => /_rightbarCol"\]\{background:rgba/.test(l))
+  check(sideLine !== undefined && centerLine !== undefined
+    && sideLine.includes('rgba(46, 54, 63') && centerLine.includes('rgba(52, 61, 70'),
+    '侧栏列 = sidebar 色、中/右列 = base 色（两槽位独立：夹具 #2E363F vs #343D46）')
+}
+
+/* ------------------------------------------------------------------ *
+ * J. 跨列容器不得涂色（2026-10-22「只有标题栏会变」事故回归锁）
+ *
+ * _frame 是三列的**父容器**。上一轮 ❼ 我给它铺了 rgba(sidebar, α) 想
+ * "补标题栏垫底"，真机三个症状：
+ *   · 列的半透明底叠在 frame 的板上 → 壁纸信号 22%→5%，浓度滑块失效；
+ *     只有 ::before 顶部条（单层）还在跟着变 —— 用户原话「只有标题会变」；
+ *   · 侧栏色透过中栏渗出 → 「左栏颜色被统一到正栏」；
+ *   · 顶部条被我顺手改成单色侧栏色 → sidebar/base 两个独立槽位的区分没了。
+ * 不变量：frame 必须 transparent；上色只发生在 ::before（渐变双色）与三列。
+ * ------------------------------------------------------------------ */
+
+console.log('  J. 跨列容器不涂色 / 顶部双色')
+
+{
+  const frameLine = lines.find((l) => /\[class\*="_frame"\]\{/.test(l))
+  check(frameLine !== undefined && /background:transparent/.test(frameLine),
+    'frame 容器 = transparent（父容器铺色会吃掉列的壁纸信号）')
+  check(!lines.some((l) => /\[class\*="_frame"\]\{[^}]*rgba\(/.test(l)),
+    '没有任何规则给 frame 容器铺 rgba 色')
+  const beforeLine = lines.find((l) => /\[class\*="_frame"\]::before\{/.test(l))
+  check(beforeLine !== undefined
+    && beforeLine.includes('linear-gradient(to right')
+    && beforeLine.includes('rgba(46, 54, 63') /* 夹具 sidebar #2E363F */
+    && beforeLine.includes('rgba(52, 61, 70'), /* 夹具 base #343D46 */
+    '顶部条 = sidebar→base 双色渐变（两个独立槽位各归各）')
+  check(beforeLine !== undefined && beforeLine.includes('--dsh-windows-sidebar-width'),
+    '渐变接缝用宿主真实侧栏宽（不写死百分比）')
+  /* 中栏清圆角是刻意设计（玻璃下弧内会露背景破洞），不许"交还宿主"。 */
+  const radiusLine = lines.find((l) => /\[class\*="_centerCol"\]\{border-radius:0/.test(l))
+  check(radiusLine !== undefined, '中栏左上角圆角在玻璃下清成直角（原设计）')
+}
+
+/* ------------------------------------------------------------------ *
+ * K. 壁纸信号单调性（❸ 差值体系的验收不变量）
+ *
+ * 从壁纸到像素，每多一层涂色，壁纸信号 ×(1−该层浓度)。旧公式下
+ * 卡片 = 列(0.78) × 卡片(0.78) → 信号 2%，"卡片没有玻璃"的数学根源。
+ * 差值体系要求：**信号按档位单调**，且卡片上的信号 ≥ 旧公式的 4 倍。
+ *   正文区信号  = (1−v)(1−α)
+ *   卡片上信号  = (1−v)(1−α)(1−a_float)   a_float=差值
+ *   代码块信号  = 再 ×(1−a_code)  —— 允许更低（要读字），但必须
+ *                仍高于"实心板"线（>3%）
+ * ------------------------------------------------------------------ */
+
+console.log('  K. 壁纸信号单调（差值体系验收）')
+
+{
+  const { glassComposite, glassFloatAlpha, glassSolidAlpha, glassVeilColor } = t
+  const a = 0.78 /* 用户 profile 的 tint */
+  const v = Number(/,\s*([\d.]+)\)$/.exec(glassVeilColor({ base: '#343D46' }, true, a))[1])
+  const sig = (alphaChain) => (1 - v) * alphaChain.reduce((acc, x) => acc * (1 - x), 1)
+  const body = sig([a])
+  const card = sig([a, glassFloatAlpha(a, 0)])
+  const code = sig([a, glassSolidAlpha(a)])
+  check(body > card && card > code, '信号单调：正文 > 卡片 > 代码块',
+    '正文 ' + (body * 100).toFixed(1) + '% 卡片 ' + (card * 100).toFixed(1)
+    + '% 代码块 ' + (code * 100).toFixed(1) + '%')
+  check(card >= body * 0.50, '卡片信号 ≥ 正文的 50%（差值体系在 α=0.78 的精确比是 0.545；旧直涂公式只有 0.36）',
+    (card / body * 100).toFixed(0) + '%')
+  check(code >= 0.03, '代码块信号 ≥ 3%（可读性与玻璃感的下限）',
+    (code * 100).toFixed(1) + '%')
+  check(body >= 0.10 && body <= 0.30, 'α=0.78 时正文信号落在 10–30%（氛围可见、不抢字）',
+    (body * 100).toFixed(1) + '%')
+  /* 全浓度扫描：任何 tint 下都不许出现"卡片比正文还实"的倒挂 */
+  let inverted = 0
+  for (let t0 = 0; t0 <= 100; t0 += 5) {
+    const aa = t0 / 100
+    const vv = Number(/,\s*([\d.]+)\)$/.exec(glassVeilColor({ base: '#343D46' }, true, aa))[1])
+    const sBody = (1 - vv) * (1 - aa)
+    const sCard = sBody * (1 - glassFloatAlpha(aa, 0))
+    if (sCard > sBody + 1e-9) inverted += 1
+  }
+  check(inverted === 0, 'tint 0–100 全扫描：卡片信号永不超过正文（无倒挂）')
+}
+
+/* ------------------------------------------------------------------ *
+ * L. 卡片填充变量写在声明元素上（2026-10-22「卡片不受浓度影响」回归锁）
+ *
+ * 宿主把 --changes-fill 等变量声明在卡片元素自己的哈希类上 ——
+ * 自定义属性不从 body 继承过本地声明，body 级 !important 完全无效。
+ * 不变量：玻璃表必须按 detectCardTargets 的类名逐元素输出 rgba 覆盖，
+ * 且用户挑了 cardColor 时以它为基色（❺ 一并解决）。
+ * ------------------------------------------------------------------ */
+
+console.log('  L. 卡片填充变量（声明元素级覆盖）')
+
+{
+  const targets = [
+    { defClass: 'kuvljq_card', varName: '--changes-fill', hoverVar: '--changes-hover' },
+    { defClass: 'flL80G_root', varName: '--deliverable-fill', hoverVar: '--deliverable-hover' },
+    { defClass: 'KuQXFq_card', varName: '--plan-card-fill', hoverVar: '--plan-card-hover' },
+  ]
+  const withTargets = buildGlassSheet({ glass: 'on', glassTint: '65', glassFog: '0' }, dark, true, targets)
+  const tLines = withTargets.split('\n')
+  for (const tg of targets) {
+    const l = tLines.find((x) => x.includes('.' + tg.defClass + '{') && x.includes(tg.varName))
+    check(l !== undefined, '覆盖 ' + tg.varName + ' 写在 .' + tg.defClass, l ? l.slice(0, 60) + '…' : '缺失')
+    if (l !== undefined) {
+      check(/rgba\(/.test(l) && l.includes('!important'), tg.varName + ' 是 rgba + !important')
+      /* 合成收敛到浮层档：本层涂差值（0.65 列 → 涂 (0.75-0.65)/0.35≈0.29） */
+      const m = /rgba\([^)]*?,\s*([\d.]+)\)/.exec(l)
+      if (m !== null) {
+        const f = t.glassComposite(0.65, Number(m[1]))
+        check(f >= 0.74 && f <= 0.76, tg.varName + ' 合成 ≈ α+0.10', '合成 ' + f.toFixed(2))
+      }
+    }
+  }
+  /* 用户挑了 cardColor → 以它为**基色**做预补偿（❺）。
+   * 断言不能查字面色（补偿后的涂色不是原值），查的是：
+   * 卡片元素级规则存在 + 补偿色的通道明显低于 base（往深色方向走）。 */
+  const picked = buildGlassSheet({ glass: 'on', glassTint: '65', cardColor: '#242F3D' }, dark, true, targets.slice(0, 1))
+  const pickedLine = (picked.split('\n').find((l) => l.includes('.kuvljq_card{')) || '')
+  const pm = /rgba\((\d+), (\d+), (\d+)/.exec(pickedLine)
+  check(pickedLine.includes('--changes-fill:rgba') && pm !== null
+    && Number(pm[1]) < 36, 'cardColor 作为卡片玻璃基色（预补偿后通道 < 原值，合成还原到 #242F3D）',
+    pm ? '涂 rgb(' + pm.slice(1, 4).join(',') + ')' : '缺失')
+  /* 没传 targets → 不输出**元素级**规则（body 级令牌仍保留，见 ⑨ 注释）。 */
+  check(!css.includes('.kuvljq_card{') && !css.includes('.flL80G_root{'),
+    '未检测到时不输出元素级覆盖（等重试重建）')
+  /* 括号平衡（带 targets 的组合） */
+  check((withTargets.match(/\{/g) || []).length === (withTargets.match(/\}/g) || []).length,
+    '含卡片元素级覆盖的表仍括号平衡')
+}
+
+/* ------------------------------------------------------------------ *
+ * M. 颜色预补偿（2026-10-22「卡片/代码块/输入卡变成正文背景色」回归锁）
+ *
+ * 差值浓度让浮层透，但浮层涂的色穿过列（base@α）稀释后会全是 base 味
+ * —— Mariana 各色板太接近，一稀释就分不出谁是谁。
+ * 不变量：合成后的**颜色**必须还原成该表面自己的色（而不是 base）。
+ * ------------------------------------------------------------------ */
+
+console.log('  M. 颜色预补偿（合成后颜色还原）')
+
+{
+  const { glassSurfaceColor, glassComposite } = t
+  /* 数学自检：C=B（与列同色）时不补偿 */
+  check(glassSurfaceColor('#343D46', '#343D46', 0.65, 0.75) === '#343D46',
+    'C=B → 原样（同色表面不受影响）')
+  /* 合成验算：涂 C'@a 在 B@α 上，逐通道应还原成 C */
+  const B = [52, 61, 70] /* base #343D46 */
+  const C = [46, 54, 63] /* code #2E363F */
+  const alpha = 0.65
+  const F = 0.79 /* α+0.14 */
+  const a = (F - alpha) / (1 - alpha)
+  const cp = glassSurfaceColor('#343D46', '#2E363F', alpha, F)
+  const cpx = [1, 3, 5].map((i) => parseInt(cp.slice(i, i + 2), 16))
+  /* 最终像素 = C'@a over (B@α over 任意背景) —— 只看 C' 与 B 的混合占比 */
+  const shown = cpx.map((v, i) => v * a + B[i] * (1 - a))
+  const err = shown.map((v, i) => Math.abs(v - C[i]))
+  check(Math.max(...err) <= 2, '预补偿后合成还原成目标色（通道误差 ≤2）',
+    '目标 rgb(' + C + ') 合成 rgb(' + shown.map((x) => Math.round(x)) + ')')
+  /* 生成的样式表里：代码块 pre 涂的不再是 code 原值（说明补偿生效） */
+  const preLine = lines.find((l) => l.includes('pre{background-color:rgba'))
+  check(preLine !== undefined && !preLine.includes('rgba(46, 54, 63'),
+    'pre 涂的是补偿色（不是 code 原值 —— 原值会被列冲淡）',
+    preLine ? (preLine.match(/rgba\([^)]+\)/) || ['?'])[0] : '缺失')
+  /* 输入卡基色不再是 base */
+  const cardLine = lines.find((l) => l.includes('RlGAzG_card"]{'))
+  check(cardLine !== undefined && !cardLine.includes('rgba(52, 61, 70'),
+    '输入卡不再直涂 base（旧版"和正文同色"的直接原因）')
+}
+
+/* ------------------------------------------------------------------ *
+ * N. 对齐 dsh-acrylic-light 的增量项（2026-10-22）
+ *   #2 输入卡聚焦态（阴影层数一致才能插值）
+ *   #3 关宿主菜单材质层的双重模糊（--dsw-menu-backdrop-filter）
+ *   #5 文件预览卡近实色（读小字的地方不玻璃）
+ *   #6 控制台调参入口 window.colorlab
+ * ------------------------------------------------------------------ */
+
+console.log('  N. 参考插件对齐项')
+
+{
+  /* #3：菜单/面板材质层自带 blur(40px)，我们给 dialog/menu 又加了一层
+   * —— 双重模糊发闷。令牌层必须把它关掉。 */
+  check(css.includes('--dsw-menu-backdrop-filter:none'),
+    '#3 宿主菜单材质层的 blur(40px) 被关（防双重模糊）')
+  /* #5：document-preview 的近实色（合成 ≥ α+0.20） */
+  const dpLine = lines.find((l) => l.includes('--dsw-alias-bg-document-preview:rgba'))
+  const dpM = dpLine === undefined ? null : /rgba\([^)]*?,\s*([\d.]+)\)/.exec(dpLine)
+  check(dpM !== null && t.glassComposite(0.65, Number(dpM[1])) >= 0.85,
+    '#5 预览卡合成 ≥0.85（近实色，读小字不压壁纸）',
+    dpM === null ? '缺失' : '本层 ' + dpM[1] + ' 合成 ' + t.glassComposite(0.65, Number(dpM[1])).toFixed(2))
+  /* #2：聚焦态存在且阴影层数与静置一致（5 层，才能逐层插值） */
+  const focusLine = lines.find((l) => l.includes('RlGAzG_card"]:focus-within'))
+  const restLine = lines.find((l) => {
+    const m = /RlGAzG_card"\]\{[^}]*box-shadow/.exec(l)
+    return m !== null
+  })
+  const countShadow = (l) => {
+    const m = /box-shadow:([^;}]+)/.exec(l || '')
+    if (m === null) return 0
+    /* 逗号分层：数 rgba( 的出现次数 */
+    return (m[1].match(/rgba\(/g) || []).length
+  }
+  check(focusLine !== undefined && restLine !== undefined
+    && countShadow(focusLine) === countShadow(restLine) && countShadow(focusLine) >= 5,
+    '#2 聚焦/静置阴影层数一致且 ≥5（插值不跳变）',
+    '静置 ' + countShadow(restLine) + ' / 聚焦 ' + countShadow(focusLine))
+  /* #6：控制台入口 */
+  check(src.includes('window.colorlab') && /api\.glass = \(\)/.test(src) && /api\.reset = \(\)/.test(src),
+    '#6 window.colorlab 调参入口（get/glass/reset/defaults）')
+  /* ①：玻璃滑块走即时应用，不再走草稿
+   *（例外：自选壁纸路径是文本输入，逐字符触发，仍走草稿）。 */
+  check(/updateGlassNow\(\{ glassTint/.test(src) && /updateGlassNow\(\{ glassFog/.test(src)
+    && /updateGlassNow\(\{ glassBlur/.test(src) && /updateGlassNow\(\{ glassHaze/.test(src)
+    && !/updateDraft\(\{ glassTint/.test(src) && !/updateDraft\(\{ glassFog/.test(src)
+    && !/updateDraft\(\{ glassBlur/.test(src) && !/updateDraft\(\{ glassHaze/.test(src),
+    '① 四个玻璃滑块即时应用（草稿路径已移除）')
+  /* ①：fog 不再被对话框规则硬编码 0 */
+  check(!/glassFloatTarget\(alpha, 0\)/.test(src),
+    '① 对话框/菜单不再硬编码 fog=0（读滑块值）')
 }
 
 console.log('')
