@@ -7040,11 +7040,16 @@ function makeColorizer(scheme) {
         /* 状态行（2026-10-22 整理）：一切正常时**完全隐身**——这五行芯片是
          * "设置页消失"排查期的产物，健康时纯噪音。任何一环异常才出现，
          * 且直接说人话（哪个坏了、什么后果）。
-         * ⚠️ 启动瞬态（pending/none/unknown）不算异常 —— 第一帧就闪一条
-         * 黄字反而像坏了。只有"落定后的坏"才显示。 */
-        (status.channel === 'style' || status.channel === 'none'
+         * ⚠️ 启动瞬态（pending/unknown）不算异常 —— 第一帧就闪一条
+         * 黄字反而像坏了。只有"落定后的坏"才显示。
+         * ⚠️ channel='none' 要分两种：插件关着 / 浅色+仅深色 = **预期**
+         * （前者不该有提示，后者上面已有蓝色提示条），只有"该生效却是
+         * none"才是真坏。 */
+        ((status.channel === 'style' || status.channel === 'none')
+            && snapshot.enabled !== 'off' && !hiddenByScheme
           || status.form === 'memory' || status.form === 'absent'
-          || (status.theme !== 'pending' && status.applied === 0)
+          || (status.theme !== 'pending' && status.applied === 0
+              && snapshot.enabled !== 'off' && !hiddenByScheme)
           || status.prose === 'error'
           || glassStatusLine === 'bad')
           ? h(
@@ -7054,9 +7059,11 @@ function makeColorizer(scheme) {
               className: 'dmt-diagText',
               'data-warn': '1',
             },
-            (status.channel === 'style' || status.channel === 'none')
+            ((status.channel === 'style' || status.channel === 'none')
+              && snapshot.enabled !== 'off' && !hiddenByScheme)
               ? '主题通道异常（' + channelLabel(status.channel) + '）；' : '',
-            (status.theme !== 'pending' && status.applied === 0) ? '未覆盖任何令牌；' : '',
+            (status.theme !== 'pending' && status.applied === 0
+              && snapshot.enabled !== 'off' && !hiddenByScheme) ? '未覆盖任何令牌；' : '',
             status.prose === 'error' ? '正文样式表挂载异常；' : '',
             (status.form === 'memory' || status.form === 'absent')
               ? '改动只在本次会话生效（读不到 profile 配置）；' : '',

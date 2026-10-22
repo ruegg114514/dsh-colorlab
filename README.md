@@ -13,6 +13,22 @@ warnings and light/dark modes — all from a settings panel, persisted to your p
 > headings and inline code are tinted, and the surface sits on Mariana's
 > cool blue-grey rather than pure black.
 
+### Glass UI (opt-in)
+
+With **Glass interface** on, the three columns become translucent panels over a
+background layer — your Windows wallpaper, a generated gradient, or a procedural
+topographic contour sheet. Blur is applied once, to the background itself, so
+every surface sees the same frosted world underneath; each layer paints only the
+*difference* between its tier and the one below, so cards stay legibly above the
+columns and the columns stay tinted with the theme instead of washing out.
+
+![Glass UI: wallpaper background, translucent panels, contour option](assets/screenshot-glass.png)
+
+> Screenshot: glass on over a wallpaper; title bar, sidebar and conversation
+> read as one continuous sheet of tinted glass; the composer card is lifted out
+> of the scroll flow, so streamed text clips cleanly at its top edge instead of
+> sliding underneath.
+
 It does not patch `app.asar`, and it does not fork the host. It uses DSH's
 official theme extension point (`ctx.theme.overrideTokens`) and layers its tokens
 on top of whatever theme is active.
@@ -78,6 +94,13 @@ Settings → **ColorLab**:
 | **File card colour** | Recolours the header band of "edited N files" cards and the whole card body of "delivered files" cards |
 | **Custom colours** | 18 slots (8 surfaces / 3 text / 7 syntax), each adjustable |
 | **Presets** | Save the current palette and load it back later, up to 12 |
+| **Glass interface** | Translucent panels over a background layer (off by default) |
+| **Background source** | Windows wallpaper / generated gradient / procedural **contour** lines (ported from dsh-theme-endfield, MIT) |
+| **Surface tint** | Column opacity 0–100 (65 default; lower = wallpaper shows through more) |
+| **Float tint** | How much more solid cards/menus/input sit above the columns (0–40) |
+| **Blur radius** | Background pre-blur 0–40 px |
+| **Advanced (fold)** | Background dimming (auto/fixed/off), saturation 0–200%, haze, custom wallpaper path |
+| **Contour speed** | static / 1x / 2x / 4x; renders in a Web Worker when CSP allows, with a visible backend note |
 | **Hand-drawn shape** | Uneven corner radii, paper shadows, hover lift and a glowing sidebar divider (off by default; mechanism borrowed from dsh-maid-whale-UI, no art assets) |
 
 **LaTeX gets a dedicated highlighter.** Sublime's own
@@ -171,17 +194,18 @@ Two colours, three targets. Summary and expanded content stay unchanged.
 10 categories are selectable (grouped into summary rows and tool rows), 5
 enabled by default. Both colours are independently adjustable.
 
-### A status bar tells you what is actually happening
+### A diagnostic line that stays hidden until something breaks
 
-At the top of the settings panel:
+The settings panel used to carry a row of status chips (channel / token count /
+prose / appearance / config). Healthy state is noise, so it is gone: the panel
+shows **nothing** when everything works, and a single plain-language warning
+line when it does not — fell back to the style channel, config not writable
+("changes last this session only"), glass layer failed to mount. Startup
+transients never flash yellow.
 
-- `channel override` — using the official extension point (normal)
-- `channel style` — fell back to the stylesheet channel (`ctx.theme` is
-  unsupported in your build)
-- `channel none` — not active right now (switched off, or the appearance is
-  light while the mode is dark-only)
-- `N tokens overridden`, `prose on/off`, `appearance dark/light`,
-  `config connected / memory-only`
+Low-frequency controls now live behind `<details>` folds (prose preview + 9
+slots, glass "advanced", the full 18-slot palette), each fold summarising its
+state in the header, e.g. "customised 3 of 18".
 
 > **The settings panel itself is currently in Chinese only.** The theme, the
 > preset names you type and everything else are language-independent.
@@ -262,6 +286,19 @@ Markdown 角色色、配色方案存取、实时 WCAG 对比度提示、深浅�
 > 过程条目按类型上色（工具行亮绿、汇总行亮黄），标题与行内代码着色，
 > 界面底色是 Mariana 的冷调蓝灰而不是纯黑。
 
+### 玻璃界面（可选）
+
+打开「玻璃界面」后，三列变成盖在背景层上的半透明面板 —— 背景可以是
+Windows 桌面壁纸、程序生成的渐变光斑、或**等高线**（移植自
+dsh-theme-endfield 的地形线）。模糊只做一次、做在背景层自己身上，
+所以所有面板"看到"的是同一张糊好的底；每一层只涂自己档位与下层之间的
+**差值**，卡片永远比正文列实一档，列永远保住主题色而不是被冲淡。
+
+![玻璃界面：壁纸背景 + 半透明面板 + 等高线选项](assets/screenshot-glass.png)
+
+> 截图：开玻璃 + 壁纸背景。侧栏、会话区、右栏读起来是一整张 tinted 玻璃；
+> 输入卡被硬裁在滚动内容之上，正文不会从卡片底下穿帮。
+
 它不改 `app.asar`，不补包，不 fork 宿主 —— 它走 DSH 官方的主题扩展点
 （`ctx.theme.overrideTokens`），把令牌叠加在当前主题之上。
 
@@ -318,6 +355,13 @@ Mariana 是 Sublime Text 3.0（2017）起及 Sublime Text 4 的默认配色，
 | **文件卡片颜色** | 「已编辑 N 个文件」卡片的头部横带，以及「交付文件」卡片的整张底色 |
 | **自定义配色** | 18 个槽位（界面底色 8 / 文字 3 / 语法色 7），逐个调 |
 | **配色方案** | 把当前配色存成方案，随时载入，最多 12 套 |
+| **玻璃界面** | 三列变半透明面板，透出背景层（默认关） |
+| **背景来源** | 桌面壁纸（跟随 Windows 当前壁纸）/ 渐变（配色派生光斑）/ **等高线**（程序生成的地形线，移植自 dsh-theme-endfield，MIT） |
+| **表面浓度** | 三列透明度 0–100（默认 65；越低壁纸越明显，主题色越淡） |
+| **浮层浓度** | 卡片/菜单/输入框比底板"实"多少（0–40） |
+| **模糊半径** | 背景层预模糊 0–40px |
+| **高级（折叠）** | 背景压暗（自动/固定档/关）、饱和度 0–200%、白雾、自选壁纸路径 |
+| **等高线速度** | 静止 / 1x / 2x / 4x；能起 Web Worker 时在主线程外渲染，设置页副标题会显示实际后端 |
 | **手绘造型** | 四角不等宽的圆角（手绘感）、纸片式双层投影、悬停微抬、侧栏右缘渐隐发光线。默认关，与玻璃界面互相独立（机制借鉴 dsh-maid-whale-UI，不含其美术） |
 
 **LaTeX 走专门的高亮通道。** 直接把 Sublime 的 `LaTeX.sublime-syntax` 与
@@ -401,14 +445,15 @@ WCAG 对比度，不是估算。
 10 个分类可勾选（分「汇总行」「工具行」两组），默认选中 5 项。
 两个颜色各自独立可调。
 
-### 状态条
+### 一条只在出事时才出现的诊断行
 
-设置页顶部有一条状态条，把「到底有没有生效」摊开：
+设置页顶部原来有一排状态芯片（通道/令牌数/正文/外观/配置）——健康状态下
+那是纯噪音，已经退役。现在一切正常时**什么都不显示**；真出事才出现一行
+人话（"回退到样式表通道"、"改动只在本次会话生效"、"背景层未建立"），
+启动瞬态不会闪黄字。
 
-- `主题通道 override` = 走官方扩展点（正常）
-- `主题通道 style` = 回退样式表通道（你的宿主版本不支持 `ctx.theme`）
-- `主题通道 none` = 当前没生效（开关关了，或浅色外观 + 仅深色模式）
-- `已覆盖 N 个令牌`、`正文高亮 开/关`、`外观 深色/浅色`、`配置 已连接/仅内存`
+低频控件收进了 `<details>` 折叠块（正文预览+9 槽、玻璃「高级」、完整
+18 槽调色板），折叠标题右侧带状态摘要，比如「已自定义 3 个」。
 
 > **设置页文案目前只有中文。** 主题本身、配色方案名称等与语言无关。
 

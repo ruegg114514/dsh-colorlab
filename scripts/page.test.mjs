@@ -329,9 +329,9 @@ function main() {
     }
     check((lightByClass.get('dmt-notice') || 0) === 1, '浅色 + 仅深色模式 → 出现提示条')
     check((lightByClass.get('dmt-chip') || 0) === 0, '旧芯片行已退役（浅色场景）')
-    /* 这个假 ctx 没带 configForms → form='memory' 是**真实状态**，
-     * 诊断行理应显形 —— 顺带验证"异常才显示"的正向路径。 */
-    check((lightByClass.get('dmt-diagLine') || 0) === 1, '浅色场景：memory 配置 → 诊断行显形（异常才显示的正向验证）')
+    /* 浅色 + 仅深色：channel=none 是**预期**（上面已有蓝色提示条负责说这事），
+     * 诊断行不该重复报警 —— "该生效却是 none"才算坏。 */
+    check((lightByClass.get('dmt-diagLine') || 0) === 0, '浅色+仅深色 → 诊断行不重复报警（提示条负责）')
     /* 提示条里的按钮是"切换到深色"，必须真的能调到 setTheme。 */
     const notice = lightNodes.find((node) => node.props && node.props.className === 'dmt-notice')
     check(notice !== undefined, '提示条节点存在')
