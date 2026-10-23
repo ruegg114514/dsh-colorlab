@@ -3633,34 +3633,40 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /* ══ 滚动降频（2026-10-22 二次修订：从"硬暂停"改来的）═════════
+    /* ══ 滚动让路（2026-10-22 三次修订：回到硬暂停）═══════════════
      *
-     * 第一版是滚动期间完全停帧。两个真机反作用：
-     *   ① 背景看起来死了（用户报"一滚动等高线就不动"）；
-     *   ② 每次手势开头的顿 = 停→恢复时那记冷启动帧（EMA 重建 + 首帧
-     *     extract 比稳态贵），暂停机制自己制造了它声称要治的卡顿。
-     * 现在：滚动期间循环**继续跑**，只把渲染间隔放宽到 ~6fps（150ms）。
-     * 主线程路径的帧已被 8ms 预算自动降档，150ms 一片 = 占空比 <6%，
-     * 对滚动手感无感；背景保持"活着"；没有暂停就没有恢复尖峰。
-     * worker 路径完全不降频（主线程每帧只有一条 postMessage）。
+     * 取舍只有一个：滚动丝滑 > 背景动画。降频（150ms）仍会在滚动中
+     * 插进 6fps 的渲染任务，每个任务吞掉一帧滚动 —— 用户实测"变卡"，
+     * 否决。现在滚动期间主线程路径**完全停帧**（零任务 = 物理上不可
+     * 能卡）。"背景冻住"是这条路径的固有代价：worker 起来后（副标题
+     * 显示"独立线程渲染"）滚动期间动画照常漂移，两全。
+     * 恢复时机在"停滚 140ms 后"—— 那时没有手势在和它抢主线程，
+     * 一帧 ≤8ms 的恢复无感。
      */
-    const CONTOUR_SCROLL_GAP = 150
-    let contourScrollActive = false
+    let contourScrollPaused = false
     let contourScrollTimer = null
 
     function contourOnScroll() {
       if (!contourActive) return
-      /* worker 活着：什么都不用让。 */
+      /* worker 活着：主线程每帧只有一条微秒级 postMessage，无需让路。 */
       if (contourWorker !== null) return
-      contourScrollActive = true
-      /* 滚动停下后回到满帧。计时器每次滚动都续期（debounce tail）。 */
+      if (!contourScrollPaused) {
+        contourScrollPaused = true
+        contourStopLoop() /* 立刻让路：这一帧之后不再有动画帧 */
+      }
+      /* 滚动停下 140ms 后恢复。计时器每次滚动都续期（debounce tail）。 */
       if (contourScrollTimer !== null) {
         try { clearTimeout(contourScrollTimer) } catch { /* 无 timer */ }
       }
       contourScrollTimer = setTimeout(() => {
         contourScrollTimer = null
-        contourScrollActive = false
-      }, CONTOUR_SCROLL_GAP)
+        contourScrollPaused = false
+        /* 恢复前把成本对账清零：恢复首帧不该被当成"超预算"触发降级。 */
+        contourOverBudget = 0
+        contourLastField = -1
+        contourSig = ''
+        contourApplySwitches()
+      }, 140)
       if (contourScrollTimer && typeof contourScrollTimer.unref === 'function') contourScrollTimer.unref()
     }
 
@@ -3857,13 +3863,7 @@ window.__ModuleLoader__.load({
       }
       const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
         ? performance.now() : Date.now()
-      /* 🔧 滚动降频（主线程路径）：循环继续、相位继续走，只是渲染间隔
-       * 放宽到 ~150ms —— 背景保持活着，占空比 <6%，无恢复尖峰。 */
-      const interval = Math.max(
-        1000 / CONTOUR_FPS,
-        contourLastCost > 0 ? contourLastCost / CONTOUR_DUTY : 0,
-        contourScrollActive ? CONTOUR_SCROLL_GAP : 0,
-      )
+      const interval = Math.max(1000 / CONTOUR_FPS, contourLastCost > 0 ? contourLastCost / CONTOUR_DUTY : 0)
       if (contourLastField < 0 || now - contourLastField >= interval) {
         /* 相位只按名义步进推进（绝不按挂钟补帧）—— 那是"抽搐"的来源；
          * 机器忙时表现为慢放，不是跳变。 */
@@ -3930,12 +3930,13 @@ window.__ModuleLoader__.load({
         contourBuildTimer = null
       }
       contourLastSize = null
-      /* 滚动降频的挂起计时器一并清掉。 */
+      /* 滚动让路的挂起恢复计时器一并清掉（不然销毁后 140ms 它会
+       * 把动画又拉起来 —— 泄漏进已死的层）。 */
       if (contourScrollTimer !== null) {
         try { clearTimeout(contourScrollTimer) } catch { /* 无 timer */ }
         contourScrollTimer = null
       }
-      contourScrollActive = false
+      contourScrollPaused = false
       if (contourRo !== null) {
         try { contourRo.disconnect() } catch { /* 已断 */ }
         contourRo = null

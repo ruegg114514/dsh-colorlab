@@ -232,20 +232,19 @@ console.log('  H. 接线')
     'destroy 停循环 + 断 ResizeObserver')
   check(/window\.addEventListener\('blur'/.test(src) && /visibilitychange/.test(src),
     '失焦/隐藏暂停动画（上游的省电纪律）')
-  /* 🔧 滚动让路的二次修订：硬暂停有两个真机反作用（背景冻住 + 恢复
-   * 尖峰自己就是"起手顿"），改成主线程路径**降频不冻结**。 */
+  /* 🔧 滚动让路的最终裁决（用户：滑动必须丝滑，优先级高于背景动画）：
+   * 主线程路径滚动期间**完全停帧**（零任务=物理上不可能卡）；
+   * 降频方案（150ms 仍插 6fps 任务）被真机否决。 */
   check(/document\.addEventListener\('scroll', onScroll, \{ capture: true, passive: true \}\)/.test(src),
     '滚动监听：捕获+passive 覆盖页面内所有滚动容器')
-  check(/contourScrollActive \? CONTOUR_SCROLL_GAP : 0/.test(src),
-    '主线程路径：滚动时循环继续、渲染间隔放宽到 150ms（降频不冻结）')
-  check(!/contourOnScroll[\s\S]{0,600}contourStopLoop\(\)/.test(src),
-    '不再有"滚动即停循环"的硬暂停（背景不许冻死，也不许恢复尖峰）')
-  check(/function contourOnScroll\(\) \{[\s\S]{0,400}if \(contourWorker !== null\) return/.test(src),
-    'worker 路径：滚动完全不干预')
-  check(/}, CONTOUR_SCROLL_GAP\)/.test(src) && /contourScrollTimer = setTimeout/.test(src),
-    '滚动停 150ms 后回满帧（debounce tail）')
+  check(/contourScrollPaused = true\s*\n\s*contourStopLoop\(\)/.test(src),
+    '主线程路径：滚动一开始就停循环（丝滑优先）')
+  check(/function contourOnScroll\(\) \{[\s\S]{0,300}if \(contourWorker !== null\) return/.test(src),
+    'worker 路径：滚动完全不干预（动画照常漂移）')
+  check(/}, 140\)/.test(src) && /contourScrollTimer = setTimeout/.test(src),
+    '停滚 140ms 后恢复（此刻没有手势在抢主线程）')
   check(/destroyContourLayer[\s\S]{0,900}contourScrollTimer = null/.test(src),
-    '销毁时清挂起的降频计时器')
+    '销毁时清挂起的恢复计时器')
   check(/contourPhase \+= CONTOUR_PHASE_STEP \* contourSpeedValue\(\)/.test(src),
     '相位只按名义步进（防抽搐），速度是用户档位（静止/1/2/4）')
   check(/if \(contourSpeedValue\(\) <= 0\) return false/.test(src),
