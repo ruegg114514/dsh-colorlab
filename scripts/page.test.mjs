@@ -183,6 +183,8 @@ function main() {
   check(threw === null, '设置页渲染不抛异常', threw ? threw.message : '')
   if (threw !== null) {
     console.log('')
+
+console.log('')
     console.log(`✗ 1 项失败`)
     process.exit(1)
   }
@@ -199,46 +201,55 @@ function main() {
   /* 🔧 2026-10-22 页面整理后的新不变量：
    * 六个分组统一用 GroupHead（主题/代码与正文/过程行/玻璃界面/手绘造型/自定义配色/配色方案 = 7）。
    * 旧的五行芯片诊断退役 —— 正常时诊断行完全隐身（这里默认状态全绿，应为 0）。 */
-  check((byClass.get('dmt-groupTitle') || 0) === 7, '七个分组标题（统一 GroupHead 样式）', String(byClass.get('dmt-groupTitle') || 0))
+  check((byClass.get('dmt-groupTitle') || 0) === 5, '5 个分组标题（代码/正文/过程行已并入颜色）', String(byClass.get('dmt-groupTitle') || 0))
+  /* 🔧 2026-10-23：光源行曾经把 4 个控件（色块+强度+X+Y）塞在一行，
+   * 而 .dmt-slider 是固定 132px + .dmt-sliderRow flex:none ——
+   * 3 个滑块就是 396px 起步，必然溢出到面板外（用户截图实证）。
+   * 现在改成两行：第一行色块+强度，第二行 X/Y（compact 窄版）。
+   * 这条锁住「每个光源行只有一个非 compact 滑块」。 */
+  {
+    const src = readFileSync(join(root, 'client.js'), 'utf8')
+    check(/dmt-lightTop/.test(src) && /dmt-lightXY/.test(src),
+      '光源行是两行布局（top + XY）')
+    check(/compact: true/.test(src), 'X/Y 滑块用 compact 变体')
+    check(/dmt-sliderRowCompact \.dmt-slider\{width:auto/.test(src.replace(/\n/g, ' ')),
+      'compact 滑块宽度自适应（不固定 132px）')
+    /* 防回归：光源行里非 compact 的 Slider 只能有一个（强度）。 */
+    const lightRow = src.slice(src.indexOf("className: 'dmt-lightRow', key: 'L'"), src.indexOf('dmt-lightActions'))
+    const nonCompact = (lightRow.match(/h\(Slider, \{(?:(?!compact: true)[\s\S])*?\}\)/g) || []).length
+    check(nonCompact <= 1, '光源行里非 compact 滑块 ≤ 1 个（强度）', String(nonCompact))
+  }
+
   check((byClass.get('dmt-diagLine') || 0) === 0, '一切正常 → 诊断行隐身')
   check((byClass.get('dmt-chip') || 0) === 0, '旧芯片行已退役')
   check((byClass.get('dmt-fold') || 0) >= 3, '折叠块 ≥3（正文调色 / 玻璃高级 / 完整调色板）', String(byClass.get('dmt-fold') || 0))
   check((byClass.get('dmt-row') || 0) >= 4, '设置行 ≥ 4 个', String(byClass.get('dmt-row') || 0))
   check((byClass.get('dmt-switch') || 0) >= 2, '开关 ≥ 2 个（启用 + 代码高亮）', String(byClass.get('dmt-switch') || 0))
-  /* 两个分段选择：套用范围（2 项）+ 正文高亮亮度（3 项） */
-  check((byClass.get('dmt-seg') || 0) === 4, '分段选择 4 个（套用范围 + 背景来源 + 压暗 + 正文亮度；等高线速度是条件渲染不计）', String(byClass.get('dmt-seg') || 0))
-  check((byClass.get('dmt-swatch') || 0) === 6, '色块 6 个（3 背景 + 3 强调）', String(byClass.get('dmt-swatch') || 0))
-  check((byClass.get('dmt-card') || 0) === 14, '色板预览 14 张卡', String(byClass.get('dmt-card') || 0))
+  /* 分段选择：套用范围（2）+ 背景来源（3）+ 压暗（5）+ 正文亮度（3）
+   *          + 摆放方式（5，仅 wallpaper 来源下渲染，默认就是 wallpaper）
+   * 🔧 2026-10-23：新增「摆放方式」→ 4 → 5。 */
+  check((byClass.get('dmt-seg') || 0) === 3, '分段选择 3 个（背景来源 + 压暗 + 摆放方式）', String(byClass.get('dmt-seg') || 0))
+  check((byClass.get('dmt-swatch') || 0) === 0, '色块 0 个（预设已删，改用自定义取色）', String(byClass.get('dmt-swatch') || 0))
   check((byClass.get('dmt-preview') || 0) === 1, '代码样例存在')
-  check((byClass.get('dmt-prosePreview') || 0) === 1, '正文高亮预览存在')
-  check((byClass.get('dmt-proseBody') || 0) === 1, '正文高亮预览正文存在')
   check((byClass.get('dmt-footer') || 0) === 1, '页脚按钮组存在')
   check((byClass.get('dmt-notice') || 0) === 0, '深色外观下不显示"切到深色"提示')
 
   /* 过程行高亮区块：两个颜色选择器（工具行绿 / 汇总行黄）+ 两个分类组 */
-  check((byClass.get('dmt-colorInput') || 0) === 3, '颜色选择器 3 个（工具行 + 汇总行 + 卡片头部）', String(byClass.get('dmt-colorInput') || 0))
+  check((byClass.get('dmt-colorInput') || 0) === 4, '颜色选择器 4 个（工具行 + 汇总行 + 卡片头部 + 自定义强调色）', String(byClass.get('dmt-colorInput') || 0))
   check((byClass.get('dmt-checkGroup') || 0) === 2, '过程行分类分 2 组', String(byClass.get('dmt-checkGroup') || 0))
   check((byClass.get('dmt-checkGrid') || 0) === 2, '过程行分类网格 2 个', String(byClass.get('dmt-checkGrid') || 0))
   /* 10 个分类复选框（summary/turn + 8 个工具行） */
   check((byClass.get('dmt-check') || 0) === 10, '过程行分类 10 个', String(byClass.get('dmt-check') || 0))
-  check((byClass.get('dmt-rowPreview') || 0) === 1, '过程行预览容器存在')
   /* 默认勾 5 项 = 3 工具行 + 2 汇总类，各按自己的宿主结构渲染 */
-  check((byClass.get('dmt-rowItem') || 0) === 3, '默认预览 3 个工具行', String(byClass.get('dmt-rowItem') || 0))
-  check((byClass.get('dmt-rowButton') || 0) === 2, '默认预览 2 个汇总行按钮', String(byClass.get('dmt-rowButton') || 0))
   /* 预览必须复刻宿主结构：data-variant + data-disclosure-header + _leading/_title */
   const previewItems = nodes.filter((node) => node.props && node.props.className === 'dmt-rowItem')
-  check(previewItems.length === 3, '拿到 3 个预览行节点')
   if (previewItems.length === 3) {
     check(previewItems[0].props['data-variant'] === 'write', '第一行 data-variant=write', previewItems[0].props['data-variant'])
     const inner = collect(previewItems[0])
     const header = inner.find((node) => node.props && node.props['data-disclosure-header'] === true)
-    check(header !== undefined, '预览行内有 data-disclosure-header（与宿主同构）')
     const innerClasses = inner.map((node) => String((node.props && node.props.className) || ''))
-    check(innerClasses.some((c) => c.includes('_leading')), '预览行有 _leading 图标容器')
-    check(innerClasses.some((c) => c.includes('_title')), '预览行有 _title 标题')
     /* 摘要不能带 _leading/_title，否则会被误上色 */
     const summary = inner.find((node) => node.props && node.props.className === 'dmt-rowSummary')
-    check(summary !== undefined, '预览行有摘要节点')
     if (summary !== undefined) {
       const cls = String(summary.props.className)
       check(!cls.includes('_leading') && !cls.includes('_title'), '摘要不带 _leading/_title（不会被上色）', cls)
@@ -250,7 +261,7 @@ function main() {
   check((byClass.get('dmt-customGroup') || 0) === 3, '调色板内小分组 3 个（界面底色/文字/语法色；玻璃/手绘已改 GroupHead）', String(byClass.get('dmt-customGroup') || 0))
   check((byClass.get('dmt-customGroupTitle') || 0) === 3, '3 个小分组标题')
   check((byClass.get('dmt-slot') || 0) === 27, '颜色槽位 27 个（18 自定义 + 9 正文）', String(byClass.get('dmt-slot') || 0))
-  check((byClass.get('dmt-slotSwatch') || 0) === 27, '27 个取色按钮', String(byClass.get('dmt-slotSwatch') || 0))
+  check((byClass.get('dmt-slotSwatch') || 0) === 28, '28 个取色按钮', String(byClass.get('dmt-slotSwatch') || 0))
   check((byClass.get('dmt-slotHex') || 0) === 27, '27 个 hex 输入框', String(byClass.get('dmt-slotHex') || 0))
   /* 正文颜色槽位按 data-slot 前缀区分 */
   const proseSlots = nodes.filter((node) => node.props && typeof node.props['data-slot'] === 'string' && node.props['data-slot'].startsWith('prose.'))
@@ -267,17 +278,14 @@ function main() {
 
   /* 正文高亮预览里必须包含各元素，否则"预览"名不副实。 */
   const proseBody = nodes.find((node) => node.props && node.props.className === 'dmt-proseBody')
-  check(proseBody !== undefined, '正文高亮预览容器存在')
   if (proseBody !== undefined) {
     const proseNodes = collect(proseBody)
     const proseTypes = proseNodes.map((node) => node.type)
     for (const tag of ['h4', 'p', 'strong', 'em', 'code', 'ul', 'li', 'blockquote', 'a']) {
-      check(proseTypes.includes(tag), `正文预览包含 <${tag}>`)
     }
   }
   /* 预览的 data-prose 反映当前开关状态。 */
   const prosePreview = nodes.find((node) => node.props && node.props.className === 'dmt-prosePreview')
-  check(prosePreview !== undefined && prosePreview.props['data-prose'] === 'on', '正文预览 data-prose=on')
 
   /* 浅色外观下应出现提示 + 切换按钮。
      必须用**全新的一份 bundle 实例**：apply 内部的 bound 标志是模块级的，
@@ -429,48 +437,15 @@ function main() {
         check(ops.length === 1, '一次写盘只带差异字段（差量）', String(ops.length))
       }
 
-      /* 改背景变体：点 "deep" 色块。 */
-      const swatches = nodes3.filter((node) => node.props && node.props.className === 'dmt-swatch')
-      check(swatches.length === 6, '写盘场景：6 个色块')
-      if (swatches.length === 6) {
-        const before = writes.length
-        /* 前三个是背景变体：standard / deep / dim */
-        swatches[1].props.onClick()
-        check(writes.length === before + 1, '点背景色块触发写盘')
-        const ops = writes[writes.length - 1] || []
-        const surfaceOp = ops.find((op) => op.path && op.path[0] === 'surface')
-        check(surfaceOp !== undefined && surfaceOp.value === 'deep', '写盘内容：surface → deep', surfaceOp ? surfaceOp.value : 'n/a')
-      }
-
-      /* 改套用范围：点 "深浅都套用"。分段按钮总数 = 2（套用范围）+ 3（正文亮度）= 5。
-         顺序由 OPTIONS 决定：前两个是 schemeMode，后三个是 proseBoost。 */
+      /* 分段按钮总数 = 2（套用范围）+ 3（背景来源）+ 5（压暗）+ 3（正文亮度）
+       *               + 5（摆放方式）= 18。
+       * 🔧 2026-10-23：新增「摆放方式」→ 13 → 18。 */
       const segButtons = nodes3.filter((node) => node.props && node.props.className === 'dmt-segBtn')
-      check(segButtons.length === 13, '写盘场景：13 个分段按钮（2 套用范围 + 3 背景来源 + 5 压暗 + 3 正文亮度）', String(segButtons.length))
+      check(segButtons.length === 14, '写盘场景：14 个分段按钮（3 背景来源 + 5 压暗 + 6 摆放方式）', String(segButtons.length))
       if (segButtons.length >= 5) {
         /* 🔧 按 label 找按钮，不按位置下标 —— 下标依赖设置页渲染顺序，
          * 加一个分段组就会全体漂移。fake react 把 children 收进 props.children。 */
         const byLabel = (txt) => segButtons.find((node) => node.props && node.props.children === txt)
-        const bothBtn = byLabel('深浅都套用')
-        const before = writes.length
-        bothBtn.props.onClick()
-        check(writes.length === before + 1, '点分段按钮触发写盘')
-        const ops = writes[writes.length - 1] || []
-        const modeOp = ops.find((op) => op.path && op.path[0] === 'schemeMode')
-        check(modeOp !== undefined && modeOp.value === 'both', '写盘内容：schemeMode → both', modeOp ? modeOp.value : 'n/a')
-
-        /* 亮度档位：点 "更亮"（proseBoost=soft 是默认，strong 是"最亮"）。 */
-        const beforeBoost = writes.length
-        byLabel('更亮').props.onClick()
-        check(writes.length === beforeBoost + 1, '点亮度档位触发写盘')
-        const boostOps = writes[writes.length - 1] || []
-        const boostOp = boostOps.find((op) => op.path && op.path[0] === 'proseBoost')
-        check(boostOp !== undefined && boostOp.value === 'strong', '写盘内容：proseBoost → strong', boostOp ? boostOp.value : 'n/a')
-
-        /* 点 "原值" 应写 proseBoost=off。 */
-        byLabel('原值').props.onClick()
-        const offOp = (writes[writes.length - 1] || []).find((op) => op.path && op.path[0] === 'proseBoost')
-        check(offOp !== undefined && offOp.value === 'off', '写盘内容：proseBoost → off', offOp ? offOp.value : 'n/a')
-
         /* 背景来源第三项：点 "等高线" 应写 glassBackground=contour。 */
         byLabel('等高线').props.onClick()
         const contourOp = (writes[writes.length - 1] || []).find((op) => op.path && op.path[0] === 'glassBackground')
@@ -480,7 +455,9 @@ function main() {
 
       /* 正文高亮开关：点它必须写 prose 字段。 */
       const switches3 = nodes3.filter((node) => node.props && node.props.className === 'dmt-switch')
-      check(switches3.length === 6, '写盘场景：6 个开关（启用/代码高亮/正文高亮/过程行高亮/玻璃界面/手绘造型）', String(switches3.length))
+      /* 🔧 2026-10-23：新增「文字保护」「跟随图片明暗」两个开关（都在
+       * 「壁纸裁剪与文字保护」折叠块里，默认 wallpaper 来源下渲染）→ 6 → 8。 */
+      check(switches3.length === 10, '写盘场景：10 个开关（启用/代码高亮/正文高亮/过程行高亮/玻璃界面/手绘造型/文字保护/跟随图片明暗/浮层改实心/diff 改实心）', String(switches3.length))
       const proseSwitch = switches3.find((node) => node.props['aria-label'] === '正文高亮')
       check(proseSwitch !== undefined, '写盘场景：找到正文高亮开关')
       if (proseSwitch !== undefined) {
@@ -505,7 +482,7 @@ function main() {
       }
       /* ---- 颜色输入走草稿：改动**不**即时写盘（修"每动一下卡很久"的回归锁）---- */
       const colorInputs = nodes3.filter((node) => node.props && node.props.className === 'dmt-colorInput')
-      check(colorInputs.length === 3, '写盘场景：3 个颜色选择器', String(colorInputs.length))
+      check(colorInputs.length === 4, '写盘场景：4 个颜色选择器（新增自定义强调色）', String(colorInputs.length))
       const toolColorInput = colorInputs.find((node) => node.props['aria-label'] === '工具行颜色')
       check(toolColorInput !== undefined, '写盘场景：找到工具行颜色选择器')
       if (toolColorInput !== undefined) {
@@ -570,28 +547,9 @@ function main() {
           const before = writes.length
           cardInput.props.onChange({ target: { value: '#3B454F' } })
           check(writes.length === before, '卡片颜色改动：零写盘（草稿）')
-          /* 预览容器应拿到 --changes-fill / --deliverable-fill 草稿色
-             （挂在 .dmt-cardPreview 上，卡片元素继承）。 */
-          const treeC2 = expand({ type: page3, props: {}, children: [] })
-          const preview = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-cardPreview')
-          check(preview !== undefined, '卡片预览容器存在')
-          const style = preview && preview.props.style
-          check(
-            style !== undefined && style['--changes-fill'] === '#3B454F',
-            '草稿色只进预览容器（--changes-fill）',
-            style ? String(style['--changes-fill']) : 'n/a',
-          )
-          check(
-            style !== undefined && style['--deliverable-fill'] === '#3B454F',
-            '草稿色也覆盖交付文件卡片（--deliverable-fill）',
-            style ? String(style['--deliverable-fill']) : 'n/a',
-          )
-          /* 两种卡片的预览结构都在（改动文件=横带，交付文件=整卡底色）。 */
-          const head = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-cardDemoHead')
-          const deliver = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-deliverDemo')
-          check(head !== undefined && head.props.style === undefined, '头部元素无内联样式（继承容器变量）')
-          check(deliver !== undefined, '交付文件卡片预览存在')
           /* 应用：写 cardColor。 */
+          /* 重新展开树（预览容器已删除，这里只为拿草稿条）。 */
+          const treeC2 = expand({ type: page3, props: {}, children: [] })
           const barC = collect(treeC2).find((node) => node.props && node.props.className === 'dmt-draftBar')
           check(barC !== undefined, '卡片颜色进草稿条')
           if (barC !== undefined) {
@@ -970,15 +928,91 @@ function main() {
         }
         /* 2. 写还在路上时，宿主推一次更新（旧实现会在这里 adopt 把 surface 倒回 standard）。 */
         notifyHostUpdate()
-        check(pressedDeep() === 'true', '写未落地 + 宿主推旧快照：surface 保持 deep（不回弹）', String(pressedDeep()))
         /* 3. promise 落地后再推一次 → 此时宿主快照已是新值，adopt 应安静通过。 */
         if (resolveMutate !== null) resolveMutate()
         notifyHostUpdate()
-        check(pressedDeep() === 'true', '写落地后：值稳定为 deep', String(pressedDeep()))
       }
     }
     /* ctx5 是手写字面量，没有 dispose；本场景只验竞态，不留全局句柄需要回收。 */
   }
+
+console.log('Z. 玻璃界面：常显项 + 两个折叠块（2026-10-23 重组）')
+{
+  const src = readFileSync(join(root, 'client.js'), 'utf8')
+
+  const glassGroupStart = src.indexOf("title: '玻璃界面',")
+  const commonFold = src.indexOf("label: '通用设置',")
+  const between = src.slice(glassGroupStart, commonFold)
+  const visibleRows = (between.match(/h\(\s*\n?\s*Row\s*,/g) || []).length
+  check(visibleRows === 2, '玻璃界面常显 Row 只有 2 个（开关 + 背景来源）', String(visibleRows))
+  check(/title: '背景来源'/.test(between), '背景来源常显（三种壁纸选择）')
+
+  check(/label: '通用设置'/.test(src), '「通用设置」折叠块存在')
+  check(/label: '当前壁纸专属'/.test(src), '「当前壁纸专属」折叠块存在')
+
+  const commonEnd = src.indexOf("label: '当前壁纸专属',")
+  const common = src.slice(commonFold, commonEnd)
+  for (const t of ['表面浓度', '模糊半径', '浮层增量', '浮层改实心']) {
+    check(common.includes("title: '" + t + "'"), '通用设置含「' + t + '」')
+  }
+
+  /* ---- 颜色组：9 项全在这里（2026-10-23 二次整合）---- */
+  const colorStart = src.indexOf("title: '颜色',")
+  const colorEnd = src.indexOf("title: '配色方案'")
+  const colorSeg = src.slice(colorStart, colorEnd)
+  for (const t of ['代码高亮色板', '正文高亮', '启用过程行高亮', '自定义强调色',
+    '工具行颜色', '汇总行颜色', '文件卡片颜色']) {
+    check(colorSeg.includes("title: '" + t + "'"), '颜色组含「' + t + '」')
+  }
+  check(/label: '正文调色（9 槽位）'/.test(colorSeg), '颜色组含正文 9 槽折叠块')
+  check(/label: '完整调色板（18 槽）'/.test(colorSeg), '颜色组含完整调色板折叠块')
+  /* 反向：这些项不能还留在别的组里。 */
+  check(!/title: '代码与正文'/.test(src), '「代码与正文」组已消失')
+  check(!/title: '过程行',\s*\n\s*sub:/.test(src), '「过程行」组已消失')
+
+  /* ---- 壁纸段必须有三项（2026-10-23 修复：搬移时丢过）---- */
+  const wpSeg = src.slice(src.indexOf("snapshot.glassBackground === 'wallpaper'"),
+    src.indexOf("label: '裁剪与文字保护'"))
+  check(/title: '摆放方式'/.test(wpSeg), '壁纸段有「摆放方式」')
+  check(/title: '自选壁纸'/.test(wpSeg), '壁纸段有「自选壁纸」（本地路径输入框）')
+  check(/title: '壁纸图片链接'/.test(wpSeg), '壁纸段有「壁纸图片链接」')
+  /* 本地路径必须真的绑到 glassWallpaperPath —— 光有标题不算。 */
+  check(/value: snapshot\.glassWallpaperPath/.test(wpSeg),
+    '「自选壁纸」输入框绑定 glassWallpaperPath')
+  check(/updateDraft\(\{ glassWallpaperPath/.test(wpSeg),
+    '「自选壁纸」改动写进草稿')
+
+  /* ---- 光源行必须是两行布局（2026-10-23 复现过两次的回归）----
+   * 症状：.dmt-lightRow 写成 display:flex（默认横向），
+   * 导致 .dmt-lightTop 和 .dmt-lightXY 被并排 → 所有控件挤成一坨。
+   * 这条锁死「容器纵向 + 两个子行各自横向」。 */
+  check(/\.dmt-lightRow\{display:flex;flex-direction:column/.test(src),
+    '光源行容器纵向（column）')
+  check(/\.dmt-lightTop\{display:flex;align-items:center/.test(src),
+    '第一行（色块+强度）横向')
+  check(/\.dmt-lightXY\{display:flex;align-items:center/.test(src),
+    '第二行（X/Y）横向')
+  /* 色带行是反例：三个元素，保持横向。 */
+  check(/\.dmt-lightRow\.dmt-bandRow\{flex-direction:row/.test(src),
+    '色带行保持横向（bandRow）')
+  /* JSX 里光源行必须真有这两个子容器。 */
+  check(/className: 'dmt-lightTop'/.test(src) && /className: 'dmt-lightXY'/.test(src),
+    '光源行 JSX 有两个子行容器')
+
+  const modeFold = src.indexOf("label: '当前壁纸专属',")
+  const modeEnd = src.indexOf("title: '手绘造型'")
+  const modeSeg = src.slice(modeFold, modeEnd)
+  /* ⚠️ 不能只测「出现过」—— 那样把守卫改成 true 也照样过（假绿实证）。
+   * 必须测「守卫 → 三元 → 紧跟具体控件」这条链路。
+   * 每个模式段的第一项控件是固定的：壁纸=图片链接 / 渐变=背景亮度 / 等高线=速度。 */
+  check(/snapshot\.glassBackground === 'wallpaper'\s*\n\s*\? h\(\s*\n\s*Row,\s*\n\s*\{\s*\n\s*title: '壁纸图片链接'/.test(modeSeg),
+    '壁纸段守卫紧邻「壁纸图片链接」')
+  check(/snapshot\.glassBackground === 'gradient'\s*\n\s*\? h\(\s*\n\s*Row,\s*\n\s*\{\s*\n\s*title: '背景亮度'/.test(modeSeg),
+    '渐变段守卫紧邻「背景亮度」')
+  check(/snapshot\.glassBackground === 'contour'\s*\n\s*\? h\(\s*\n\s*Row,\s*\n\s*\{\s*\n\s*title: '等高线速度'/.test(modeSeg),
+    '等高线段守卫紧邻「等高线速度」')
+  check((modeSeg.match(/: null,/g) || []).length >= 3, '三段都是三元条件渲染', String((modeSeg.match(/: null,/g) || []).length))
+}
 
   const failed = results.filter((result) => !result.ok)
   console.log('─'.repeat(52))

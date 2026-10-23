@@ -285,6 +285,138 @@ check(cardTargetsComplete([changesHit]) === false,
     '只找到一组时样式表只覆盖一半（所以必须继续重试）')
 }
 
+﻿/* ------------------------------------------------------------------ *
+ * 🔧 2026-10-23：宿主 CSS Module 有**两种命名格式**，原来的正则只认一种
+ * ------------------------------------------------------------------ */
+
+console.log('')
+console.log('H. 类名两种命名格式（2026-10-23 真 bug）')
+
+/* 宿主当前构建（320 个类）用的是「_局部名_哈希_序号」：_card_38jqx_9
+ * 旧构建用的是「哈希_局部名」：kuvljq_card
+ *
+ * 原正则「\.([a-zA-Z0-9]+_card)\b」有两个问题：
+ *   1. 只认第二种（局部名在后）
+ *   2. \b 在第一种上失效（下划线是单词字符，_card 后面跟 _9 不构成边界）
+ * 结果是「带序号后缀的类名全部漏检」。 */
+{
+  const cases = [
+    /* 格式 A + _card：用 --changes-fill（CARD_TARGETS 里 _card 对应的变量）。
+     * --dsw-hovercard-bg 归 FLOAT_TARGETS，在 I 段单独测。 */
+    { css: '._card_38jqx_9{--changes-fill: #123;background:var(--changes-fill)}', want: '_card_38jqx_9' },
+    /* 注意：_root 对应 --deliverable-fill（CARD_TARGETS 里 defClass: '_root' 的那项），
+     * 用 --changes-fill 会检测不到 —— 那是 _card 的变量。 */
+    { css: '._root_abc12_1{--deliverable-fill: #123;background:var(--deliverable-fill)}', want: '_root_abc12_1' },
+    { css: '.kuvljq_card{--changes-fill: #123;background:var(--changes-fill)}', want: 'kuvljq_card' },
+    { css: '.flL80G_root{--deliverable-fill: #123;background:var(--deliverable-fill)}', want: 'flL80G_root' },
+  ]
+  for (const c of cases) {
+    const doc = { styleSheets: [{ cssRules: toCssomRules(c.css) }] }
+    const found = loadPlugin(doc).__test.detectCardTargets()
+    check(found.length === 1 && found[0].defClass === c.want,
+      '检测到 ' + c.want + '（格式兼容）',
+      found.length === 0 ? '未检测到' : found[0].defClass)
+  }
+
+  /* 不能把更长的局部名误认成目标（_cardHeader 不是 _card）。 */
+  const headerDoc = { styleSheets: [{ cssRules: toCssomRules('._cardHeader_x_1{--changes-fill: #123}') }] }
+  const headerFound = loadPlugin(headerDoc).__test.detectCardTargets()
+  check(headerFound.length === 0, '不误匹配 _cardHeader（局部名前缀保护）',
+    headerFound.length === 0 ? '正确拒绝' : '误匹配 ' + headerFound[0].defClass)
+
+  /* 格式 B 的前缀保护：.kuvljq_cardHeader 不能被当成 .kuvljq_card。
+   * （这条才真正锁住 (?![\w-]) —— 格式 A 的正则靠 _ 本身就能边界。） */
+  const bHeaderDoc = { styleSheets: [{ cssRules: toCssomRules('.kuvljq_cardHeader{--changes-fill: #123}') }] }
+  const bHeaderFound = loadPlugin(bHeaderDoc).__test.detectCardTargets()
+  check(bHeaderFound.length === 0, '不误匹配 kuvljq_cardHeader（格式 B 前缀保护）',
+    bHeaderFound.length === 0 ? '正确拒绝' : '误匹配 ' + bHeaderFound[0].defClass)
+}
+
+console.log('')
+console.log('I. HoverCard 浮层检测（--dsw-hovercard-bg）')
+{
+  const hoverCss = '._card_38jqx_9{--dsw-hovercard-bg: #2C2C2E;position:fixed;z-index:100;background:var(--dsw-hovercard-bg);box-shadow:var(--dsw-shadow-lv3)}'
+  const doc = { styleSheets: [{ cssRules: toCssomRules(hoverCss) }] }
+  const test = loadPlugin(doc).__test
+
+  check(typeof test.detectFloatTargets === 'function', 'detectFloatTargets 已导出')
+  check(Array.isArray(test.FLOAT_TARGETS) && test.FLOAT_TARGETS.length === 1, 'FLOAT_TARGETS 有一项')
+  check(test.FLOAT_TARGETS[0].varName === '--dsw-hovercard-bg',
+    'FLOAT_TARGETS 目标是 --dsw-hovercard-bg', test.FLOAT_TARGETS[0].varName)
+
+  const floats = test.detectFloatTargets()
+  check(floats.length === 1 && floats[0] === '_card_38jqx_9',
+    '检测到 HoverCard 的真实类名', JSON.stringify(floats))
+
+  /* 关键：HoverCard 不能被 CARD_TARGETS 误捡（那会让「预览浓度」
+   * 滑块意外改到浮层底色）。 */
+  const cards = test.detectCardTargets()
+  check(cards.every((c) => c.varName !== '--dsw-hovercard-bg'),
+    'HoverCard 不进 CARD_TARGETS（两套语义分开）',
+    cards.map((c) => c.varName).join(',') || '(空)')
+}
+
+console.log('')
+console.log('J. 浮层改实心：按检测到的类名写覆盖')
+{
+  const darkSurf = { base: '#343D46', sidebar: '#2E363F', layer1: '#3B444D', layer2: '#424B55', layer3: '#49525C', overlay: '#1E242A', bubble: '#3B444D' }
+  const hoverCss = '._card_38jqx_9{--dsw-hovercard-bg: #2C2C2E;background:var(--dsw-hovercard-bg)}'
+  const doc = { styleSheets: [{ cssRules: toCssomRules(hoverCss) }] }
+  const test = loadPlugin(doc).__test
+  const floats = test.detectFloatTargets()
+
+  const build = (extra) => test.buildGlassSheet(
+    { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16', ...extra },
+    darkSurf, true, [], floats)
+
+  const on = build({ glassSolidFloats: 'on' })
+  const rule = on.match(/\._card_38jqx_9\{[^}]*\}/)
+  check(rule !== null, '打开 → 按真实类名覆盖 hovercard 变量', rule ? rule[0] : '未生成')
+  check(rule !== null && /--dsw-hovercard-bg:#[0-9a-fA-F]{6} !important/.test(rule[0]),
+    '覆盖值是 6 位 hex 实色')
+
+  /* 绝对不能写成 body 级 —— 自定义属性不从 body 继承过元素本地声明。 */
+  check(!/body\{--dsw-hovercard-bg/.test(on),
+    '不写在 body 上（元素本地声明会挡住 body 级 !important）')
+
+  const off = build({})
+  check(!/hovercard-bg/.test(off), '关闭 → 不覆盖 hovercard 变量')
+
+  /* 没检测到类名（还没扫描）→ 只生成 _float_/_preview_，不崩不瞎写。 */
+  const noTargets = test.buildGlassSheet(
+    { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16', glassSolidFloats: 'on' },
+    darkSurf, true, [], [])
+  check(/_float_/.test(noTargets) && !/hovercard-bg/.test(noTargets),
+    '未检测到类名时只生成 _float_/_preview_（不崩、不瞎写）')
+}
+
+console.log('')
+console.log('K. 浮层检测不被卡片进度阻塞（2026-10-23 真 bug）')
+{
+  /* 原实现把 detectFloatTargets() 放在 `if (have < total)` 里 ——
+   * 而 CARD_TARGETS 有 4 项，启动几秒内就找齐，之后整块跳过，
+   * 浮层检测**永远不跑**，floatTargets 恒为 undefined，
+   * 「浮层改实心」对 HoverCard 完全失效（用户实测：悬停浮层仍透明）。
+   *
+   * 这条锁的是「两个检测互不依赖」：卡片齐了浮层照样要检测。 */
+  const src = readFileSync(join(root, 'client.js'), 'utf8')
+  const i = src.indexOf('function syncCardSheet')
+  const seg = src.slice(i, i + 2600)
+  const cardGuard = seg.indexOf('if (have < total)')
+  const floatDetect = seg.indexOf('detectFloatTargets()')
+  check(cardGuard > 0 && floatDetect > 0, '两个检测都在 syncCardSheet 里')
+  check(floatDetect > cardGuard, '浮层检测在卡片守卫之后')
+  /* 关键：浮层检测必须在 `have < total` 块**之外**。 */
+  const guardBlockEnd = seg.indexOf('\n      }', cardGuard)
+  check(guardBlockEnd > 0 && floatDetect > guardBlockEnd,
+    '浮层检测在 have<total 块之外（卡片找齐后仍然跑）',
+    '守卫块结束 ' + guardBlockEnd + ' / 浮层检测 ' + floatDetect)
+
+  /* 浮层检测有自己的「没找到就重试」判定，不依赖 cardTargets。 */
+  check(/if \(!Array\.isArray\(floatTargets\) \|\| floatTargets\.length === 0\)/.test(seg),
+    '浮层检测有自己的重试判定（不受 cardTargets 进度影响）')
+}
+
 console.log('')
 if (failures > 0) {
   console.log(`✗ ${failures} 项失败`)

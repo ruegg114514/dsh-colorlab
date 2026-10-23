@@ -126,14 +126,73 @@ window.__ModuleLoader__.load({
     })
 
     /**
-     * 强调色三档。只影响 `state-business-*` 与 `brand-primary-new-color*`；
+     * 强调色三档预设。只影响 `state-business-*` 与 `brand-primary-new-color*`；
      * 不动 `brand-primary`（那是 DSH 的"主按钮反色"，必须保持中性才能保证对比度）。
+     *
+     * 🔧 2026-10-23：新增**任意自定义强调色**（`accentCustom`，`#RRGGBB`）。
+     * 预设仍是默认路径；给了自定义色就用它派生四档。
+     * 统一走 `resolveAccent()`，不要再直接读这个对象。
      */
     const ACCENTS = Object.freeze({
       teal: Object.freeze({ dark: '#5FB3B3', darkSoft: '#5FB3B355', light: '#3E8E8E', lightSoft: '#3E8E8E33' }),
       orange: Object.freeze({ dark: '#F9AE58', darkSoft: '#F9AE5855', light: '#C97A2B', lightSoft: '#C97A2B33' }),
       blue: Object.freeze({ dark: '#6699CC', darkSoft: '#6699CC55', light: '#4A7FB5', lightSoft: '#4A7FB533' }),
     })
+
+    /**
+     * 从任意 hex 派生四档强调色。
+     *
+     * 为什么不是直接返回同一个值：预设里深/浅两档是**手调过**的
+     * （浅色主题要压暗才够对比，深色主题要够亮才看得见）。
+     * 自定义色如果深浅共用同一个值，浅色主题下会比周围暗一档、看着脏。
+     *
+     * 派生规则：
+     *   · `dark`      = 原色（深色主题直接用）
+     *   · `darkSoft`  = 原色 + 33% alpha（原来的 `55` 后缀 = 0x55/255 ≈ 33%）
+     *   · `light`     = 压暗 22%（浅色主题下与浅底拉开对比）
+     *   · `lightSoft` = 压暗后的 + 20% alpha
+     *
+     * @param {string} hex - `#RRGGBB`。
+     * @returns {{dark: string, darkSoft: string, light: string, lightSoft: string}|null}
+     *   非法输入返回 null。
+     */
+    function deriveAccentFromHex(hex) {
+      if (typeof hex !== 'string') return null
+      const value = hex.trim()
+      if (!/^#[0-9a-fA-F]{6}$/.test(value)) return null
+      /* 压暗：按 sRGB 各通道乘系数（与 lightenHex 反方向，保持色相）。 */
+      const channel = (offset) => {
+        const n = parseInt(value.slice(offset, offset + 2), 16)
+        return Math.max(0, Math.min(255, Math.round(n * 0.78)))
+      }
+      const light = '#'
+        + channel(1).toString(16).padStart(2, '0')
+        + channel(3).toString(16).padStart(2, '0')
+        + channel(5).toString(16).padStart(2, '0')
+      return {
+        dark: value,
+        darkSoft: value + '55',
+        light,
+        lightSoft: light + '33',
+      }
+    }
+
+    /**
+     * 解析当前生效的强调色四档。
+     *
+     * 优先级：`accentCustom`（合法 `#RRGGBB`）> `accent` 预设 > teal。
+     *
+     * @param {object} from - 设置来源（构建令牌时传 `state`）。
+     * @returns {{dark: string, darkSoft: string, light: string, lightSoft: string}}
+     */
+    function resolveAccent(from) {
+      const source = from !== null && typeof from === 'object' ? from : state
+      const custom = source && typeof source.accentCustom === 'string' ? source.accentCustom : ''
+      const derived = deriveAccentFromHex(custom)
+      if (derived !== null) return derived
+      const key = source && source.accent
+      return ACCENTS[key] || ACCENTS.teal
+    }
 
     /** 浅色变体（`schemeMode: "both"` 时生效）。Mariana 本身没有浅色版，这是同色相提亮。 */
     const LIGHT = Object.freeze({
@@ -161,6 +220,9 @@ window.__ModuleLoader__.load({
       schemeMode: 'dark',
       surface: 'standard',
       accent: 'teal',
+      /* 自定义强调色：`#RRGGBB`，空串 = 用上面的 accent 预设（原行为）。
+       * 给了合法值就**优先于预设**，由 resolveAccent() 派生深/浅四档。 */
+      accentCustom: '',
       syntax: 'on',
       /* 正文高亮：给 Markdown 对话正文加颜色层次（标题/加粗/斜体/行内代码/列表/引用）。 */
       prose: 'on',
@@ -190,12 +252,109 @@ window.__ModuleLoader__.load({
       glassTint: '65',
       /* 浮层雾面浓度 0–40。 */
       glassFog: '16',
-      /* 模糊半径 0–40 px。 */
+      /* 模糊半径 0–80 px。🔧 2026-10-23：区间从 0–40 放宽到 0–80 ——
+       * 40px 在 4K / 高分屏上不够糊（背景信号仍然可辨），而参照插件
+       * dsh-glass-ranswork 的区间是 0–80。上限由 glassBlur 的钳制保证。 */
       glassBlur: '16',
+      /* ---- 分层浓度（2026-10-23 新增）------------------------------------
+       * 这三项原来写死在 GLASS_TIER 常量里，用户一个都调不了 ——
+       * 而它们恰恰是玻璃观感最需要调的三个数。见 glassTier()。
+       * 单位是百分点整数（0–40 / 0–20），换算成 0–1 增量在 glassTier() 里做。 */
+      /* 浮层增量：卡片 / 气泡 / 输入卡 / 菜单浮层比三列实多少（百分点）。 */
+      glassFloat: '10',
+      /* 代码块增量：代码块比三列实多少（百分点）。要逐字读，默认最实。 */
+      glassCode: '14',
+      /* 悬停增量：hover / active 反馈有多明显（百分点，active 自动 ×1.8）。 */
+      glassHover: '5',
+      /* ---- 按 UI 区域分的独立档（2026-10-23 第二轮，参照 dsh-glass-ranswork）----
+       *
+       * 上面三个 glassFloat/glassCode/glassHover 是「按离底板的浓度差」分层，
+       * 这三项解决的是另一类需求：**同一类元素里，有些要读字、有些只是装饰**。
+       *
+       * 为什么必须独立：把「表面浓度」拉低去看壁纸时，
+       *   · 文件 diff 卡片里的代码会一起糊掉（要读）；
+       *   · 统计/费用弹层里的表格会一起糊掉（要读）；
+       *   · 输入卡里的字会一起发虚（正在打字）。
+       * 为了看清它们去拉高表面浓度，又会把整个界面一起变实 —— 两个需求打架。
+       * 所以给它们各自的百分比/模糊值，拉高只影响这几处。
+       *
+       * 取值 -1 = **不覆盖**（跟随 glassFloat / glassBlur，即原来的行为）。
+       * 这样老 profile 不写这些字段时，行为与升级前完全一致。
+       */
+      /* 信息面板浓度 0–100（-1 = 跟随浮层档）：弹层、菜单、Modal、统计/费用面板。 */
+      glassPanelOpacity: '-1',
+      /* 文件预览/改动卡片浓度 0–100（-1 = 跟随代码块档）：diff、已编辑文件卡、文档预览。 */
+      glassPreviewOpacity: '-1',
+      /* 浮层模糊 0–80 px（-1 = 跟随 glassBlur + 10）：弹层、菜单、Modal 背后那层。 */
+      glassOverlayBlur: '-1',
+      /* 输入卡/任务卡模糊 0–80 px（-1 = 跟随 glassBlur）：发送框、审批卡、任务卡。 */
+      glassComposerBlur: '-1',
+      /* 侧栏浓度 0–100（-1 = 跟随表面浓度 glassTint）。
+       * 侧栏与正文列是两种视觉权重：有人要侧栏实、正文透，也有人反过来 ——
+       * 一个滑块管两列时这两种需求都满足不了。见 buildGlassSheet。 */
+      glassSidebarOpacity: '-1',
+      /* 背景亮度 0–100，50 = 中性（原行为）。<50 压暗、>50 提亮。
+       * 双向：原来只有 glassVeil 单向压暗，浅色主题下「想更亮」做不到。
+       * 离开中性时氛围层会自动淡出（见 buildGradientBackdrop）。 */
+      glassBrightness: '50',
+      /* ---- 背景地面模式（2026-10-23 第五轮）----
+       * "glow" 光晕 | "bands" 分割 | "blend" 叠加。见 buildGround()。 */
+      glassGroundMode: 'glow',
+      /* 光晕光源：JSON 数组 [{color,strength,x,y}]，最多 6 个。 */
+      glassLights: '',
+      /* 光晕整体浓度 0–70。 */
+      glassGlowAmount: '38',
+      /* 光晕扩散范围 40–140（%）。 */
+      glassGlowSpread: '100',
+      /* 分割方向 0 | 90 | 135 | 165。 */
+      glassBandDir: '165',
+      /* 分割色带：JSON 数组 [{color}]，最多 6 条。 */
+      glassBands: '',
+      /* 分割边缘柔和 0–100（0 = 硬边）。 */
+      glassBandSoft: '2',
+      /* ---- 「改实心」两个开关（2026-10-23 第三轮，用户点名要求）----------
+       *
+       * 玻璃下有两类东西**天然读不了**，不是浓度问题，是层级问题：
+       *
+       *   ① 历史消息 / 悬停预览浮层（`[class*="_float_"]`、`[class*="_preview_"]`）——
+       *      它们是 `position:fixed` 的普通 div，**没有 role 属性**，
+       *      所以压不到我们那组 `[role="dialog"]` 规则；而它们又浮在正文之上，
+       *      背后是活文字，半透明 + 只靠模糊挡不住。
+       *   ② diff 区域（`--dsw-alias-code-diff-added/deleted`）——
+       *      这两个变量本来就带 alpha（`#99C7941F`，仅 12%），
+       *      玻璃模式下卡片本身也半透明，12% 的淡色压在透明底上几乎看不见。
+       *      要读 diff 就必须让**行底色**回到不透明。
+       *
+       * 这两项默认 off（保持玻璃观感），打开后把那几处钉成实色。
+       * 刻意**不动卡片本身** —— 用户明确说过只动 diff 区域。
+       */
+      /* 浮层改实心 "on" | "off"：历史消息 / 悬停预览这类无 role 的 fixed 浮层。 */
+      glassSolidFloats: 'off',
+      /* diff 区域改实心 "on" | "off"：只改行底色，不动卡片与代码块。 */
+      glassSolidDiff: 'off',
       /* 白雾浓度 0–100。*/
       glassHaze: '8',
       /* 自选壁纸路径；空串 = 跟随系统桌面壁纸。 */
       glassWallpaperPath: '',
+      /* 壁纸图片链接（http/https）；空串 = 不用。给了就优先于本地路径，
+       * Host 代拉并校验（大小/超时/图片类型），失败自动回落本地路径。 */
+      glassWallpaperUrl: '',
+      /* 背景图摆放方式："cover" 填充（默认，原行为）| "contain" 适应 |
+       * "stretch" 拉伸 | "tile" 平铺 | "center" 居中。见 wallpaperFitStyle()。 */
+      glassFit: 'cover',
+      /* 背景图裁剪区域，JSON 字符串 {"x","y","w","h"}，**单位是占原图的比例**
+       * 而不是像素（换分辨率/换窗口都不用重算）。空串 = 整图。
+       * 见 normalizeGlassCrop() / glassCropNow()。 */
+      glassCrop: '',
+      /* 文字保护 "on" | "off"：有壁纸时给文字加一圈与明暗同向的光晕，
+       * 并把次要文字加深一档。**不加任何底色** —— 不覆盖用户调好的透明度。 */
+      glassGuard: 'off',
+      /* 跟随图片明暗 "on" | "off"：按壁纸（裁剪后）的平均亮度自动切换
+       * light/dark 主题，让文字颜色始终和图片对得上。见 applyGlassAutoTone()。 */
+      glassAutoTone: 'off',
+      /* 自动明暗切换**之前**用户的明暗偏好（""=没切过，内部状态）。
+       * 必须落盘：否则重启后用户删掉壁纸，主题会永远停在我们切的那个。 */
+      glassBaseTheme: '',
       /* 背景压暗："auto"（跟随表面浓度的公式）| "0"（关）| "20" | "35" | "50"
        *（手动百分比）。压暗层决定壁纸被压多暗 → 亮壁纸下文字是否可读。 */
       glassVeil: 'auto',
@@ -612,6 +771,22 @@ window.__ModuleLoader__.load({
         Object.freeze({ value: 'gradient', label: '渐变', hint: '用当前配色生成柔和光斑；壁纸读不到时也自动用这个' }),
         Object.freeze({ value: 'contour', label: '等高线', hint: '程序生成的地形等高线（移植自 dsh-theme-endfield，MIT）：强调色细线、缓慢漂移，跟配色走' }),
       ]),
+      /* 背景地面模式（2026-10-23 第五轮）。 */
+      glassGroundMode: Object.freeze([
+        Object.freeze({ value: 'glow', label: '光晕', hint: '几团柔和的彩色雾，没有边界和方向' }),
+        Object.freeze({ value: 'bands', label: '分割', hint: '按角度切开的色带，有明确方向' }),
+        Object.freeze({ value: 'blend', label: '叠加', hint: '色带 + 光晕，两者都有' }),
+      ]),
+      /* 分割方向已改为 0–360° 滑块（2026-10-23），不再需要预设枚举。 */
+      /* 背景图摆放方式：与 Windows 个性化 → 背景 的五种选项同名，不用学新概念。 */
+      glassFit: Object.freeze([        Object.freeze({ value: 'cover', label: '填充', hint: '等比放大到铺满窗口，超出部分裁掉（默认）' }),
+        Object.freeze({ value: 'contain', label: '适应', hint: '等比缩放到整张图都看得见，留白处透出渐变底' }),
+        Object.freeze({ value: 'stretch', label: '拉伸', hint: '强行拉满整块，比例会变形' }),
+        Object.freeze({ value: 'tile', label: '平铺', hint: '按原尺寸重复 —— 适合纹理/图案壁纸，别让 cover 把 512px 图放大 8 倍糊掉' }),
+        Object.freeze({ value: 'center', label: '居中', hint: '按原尺寸居中，四周透出渐变底' }),
+        Object.freeze({ value: 'blur', label: '模糊填充', hint: '整图完整显示，留白处用同一张图放大模糊铺底 —— 照片壁纸最常用的一档' }),
+      ]),
+
       /* 背景压暗：自动档跟随表面浓度；手动档固定强度。 */
       glassVeil: Object.freeze([
         Object.freeze({ value: 'auto', label: '自动', hint: '浓度越高压得越轻（公式 0.50−0.30·α）—— 多数情况不用管' }),
@@ -667,7 +842,7 @@ window.__ModuleLoader__.load({
       /* 自定义配色只覆盖深色那一套；浅色保持插件自带的派生值（见 CUSTOM_SLOTS 注释）。 */
       const PALETTE = withOverrides(PALETTE_BASE, custom.palette)
       const s = withOverrides(SURFACES[state && state.surface] || SURFACES.standard, custom.surface)
-      const a = ACCENTS[state && state.accent] || ACCENTS.teal
+      const a = resolveAccent(state)
       const syntax = !state || state.syntax !== 'off'
 
       /* ---- 深色值 ---- */
@@ -1074,6 +1249,24 @@ window.__ModuleLoader__.load({
     const WALLPAPER_ROUTE = '/dsh-colorlab/wallpaper'
 
     /**
+     * 裁剪框的最小宽/高（占原图比例）。
+     *
+     * 5% 是「再小就没法用了」的下限：更小的框裁出来的图放大后糊成一片，
+     * 而用户很难拖出那么小的框 —— 这个下限同时充当误触保护。
+     */
+    const GLASS_CROP_MIN = 0.05
+
+    /**
+     * 文字保护的光晕参数（与明暗同向）。
+     *
+     * 为什么这么小：1px 实边 + 2px 柔边 + 3px 更柔，是「描边」不是「发光」；
+     * 再大就会让字看着发虚，反而不清楚。这套数值直接取自参照插件
+     * dsh-glass-ranswork 的实测结果。
+     */
+    const GLASS_GUARD_SHADOW_LIGHT = '0 0 1px rgba(255,255,255,0.95), 0 0 2px rgba(255,255,255,0.85), 0 1px 3px rgba(255,255,255,0.55)'
+    const GLASS_GUARD_SHADOW_DARK = '0 0 1px rgba(0,0,0,0.95), 0 0 2px rgba(0,0,0,0.85), 0 1px 3px rgba(0,0,0,0.6)'
+
+    /**
      * 解析 0–100 的百分比设置。
      * @param {string|number|undefined} raw - 设置值。
      * @param {number} min - 下界。
@@ -1122,17 +1315,238 @@ window.__ModuleLoader__.load({
      * @param {boolean} isDark - 深色模式。
      * @returns {string} 可直接写进 `background` 的值。
      */
-    function buildGradientBackdrop(surfaces, isDark) {
+
+    /**
+     * 生成氛围光渐变背景。
+     *
+     * @param {object} surfaces - 表面色（默认色系从这里派生）。
+     * @param {boolean} isDark - 深色模式。
+     * @param {string} [accentId] - 氛围光配色 id（'' = 跟随表面色，原行为）。
+     * @returns {string} CSS background 值。
+     */
+    /* ══ 背景地面（2026-10-23 第五轮，预览工作台定稿）══════════════════
+     *
+     * 三种模式，参数全部可调：
+     *
+     *   glow  光晕：N 个光源（径向渐变），每个自选 颜色/强度/X/Y 坐标。
+     *              没有边界、没有方向 —— 就是几团彩色雾。
+     *   bands 分割：N 条色带（线性渐变），每条自选颜色。
+     *              有明确方向（165/135/90/0）和边界。
+     *   blend 叠加：两者都有（分割在下、光晕在上）。
+     *
+     * 与旧实现（三团写死的灰蓝 radial，alpha 0.9）的区别：
+     *   · alpha 从 0.9 降到 0.10–0.40 —— 旧值几乎不透明，叠起来就是一坨；
+     *   · 颜色从「三个同色系表面色」改成用户自选（默认青/紫/蓝，色相不同）；
+     *   · 范围从 circle（全屏）改成局部椭圆（70%×60%），有形状；
+     *   · 新增分割模式，提供有方向感的色带。
+     */
+
+    /** 光源/色带的出厂值（设置页「恢复默认」与首次渲染都用它）。 */
+    const GLOW_DEFAULTS = Object.freeze([
+      Object.freeze({ color: '#5FB3B3', strength: '100', x: '16', y: '10' }),
+      Object.freeze({ color: '#C594C5', strength: '85', x: '84', y: '18' }),
+      Object.freeze({ color: '#6699CC', strength: '70', x: '52', y: '94' }),
+    ])
+
+    /** 分割色带的出厂值（同色系明暗阶梯）。 */
+    const BAND_DEFAULTS = Object.freeze([
+      Object.freeze({ color: '#4A555F' }),
+      Object.freeze({ color: '#3D4650' }),
+      Object.freeze({ color: '#333B44' }),
+      Object.freeze({ color: '#2A3138' }),
+    ])
+
+    /** 光源最大数量（设置页 UI 与解析都按这个夹取）。 */
+    const MAX_LIGHTS = 6
+    /** 色带最大数量。 */
+    const MAX_BANDS = 6
+
+    /**
+     * 解析 JSON 数组设置（光源 / 色带）。
+     *
+     * 坏值一律退回出厂值 —— 用户手改 YAML 写坏了不该让背景直接消失。
+     *
+     * @param {unknown} raw - 设置里的 JSON 字符串。
+     * @param {ReadonlyArray<object>} fallback - 出厂值。
+     * @param {number} max - 最大条数。
+     * @returns {Array<object>} 规范化后的数组。
+     */
+    function parseLightList(raw, fallback, max) {
+      if (typeof raw !== 'string' || raw.trim() === '') return fallback.map((x) => ({ ...x }))
+      let parsed
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        return fallback.map((x) => ({ ...x }))
+      }
+      if (!Array.isArray(parsed) || parsed.length === 0) return fallback.map((x) => ({ ...x }))
+      const out = []
+      for (const entry of parsed.slice(0, max)) {
+        if (entry === null || typeof entry !== 'object') continue
+        const color = typeof entry.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(entry.color.trim())
+          ? entry.color.trim() : '#5FB3B3'
+        const num = (value, lo, hi, dflt) => {
+          const n = Number(value)
+          return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt
+        }
+        out.push({
+          color,
+          strength: String(num(entry.strength, 0, 100, 100)),
+          x: String(num(entry.x, 0, 100, 50)),
+          y: String(num(entry.y, 0, 100, 50)),
+        })
+      }
+      return out.length > 0 ? out : fallback.map((x) => ({ ...x }))
+    }
+
+    /** 解析色带数组（只有 color）。 */
+    function parseBandList(raw) {
+      const list = parseLightList(raw, BAND_DEFAULTS, MAX_BANDS)
+      return list.map((entry) => ({ color: entry.color }))
+    }
+
+    /**
+     * 生成背景地面。
+     *
+     * @param {object} surfaces - 表面色。
+     * @param {boolean} isDark - 深色模式。
+     * @param {object} cfg - 配置：
+     *   mode（'glow'|'bands'|'blend'）、lights、bands、dir、soft、glowA、spread、base
+     * @returns {string} CSS background 值。
+     */
+    function buildGround(surfaces, isDark, cfg) {
       const s = surfaces || {}
-      const base = s.base || (isDark ? '#343D46' : '#FFFFFF')
-      const layer1 = s.layer1 || base
-      const layer2 = s.layer2 || layer1
-      const sidebar = s.sidebar || layer1
-      const spot = (color, alpha) => hexToRgba(color, alpha)
-      return 'radial-gradient(circle at 18% 12%, ' + spot(sidebar, 0.9) + ' 0%, transparent 55%),'
-        + 'radial-gradient(circle at 82% 78%, ' + spot(layer2, 0.9) + ' 0%, transparent 58%),'
-        + 'radial-gradient(circle at 50% 50%, ' + spot(layer1, 0.7) + ' 0%, transparent 70%),'
-        + base
+      const c = cfg || {}
+      const mode = c.mode === 'bands' || c.mode === 'blend' ? c.mode : 'glow'
+      const rawBase = typeof c.base === 'string' && /^#[0-9a-fA-F]{6}$/.test(c.base)
+        ? c.base : (s.base || (isDark ? '#343D46' : '#FFFFFF'))
+
+      const lights = Array.isArray(c.lights) && c.lights.length > 0 ? c.lights : GLOW_DEFAULTS
+      const bands = Array.isArray(c.bands) && c.bands.length > 0 ? c.bands : BAND_DEFAULTS
+
+      /* 上限 100%（2026-10-23 用户要求调高）。
+       * 原来 70% 是参照「alpha 0.9 那种一坨」反向定的，但实际观感上
+       * 0.7 仍偏淡 —— 尤其表面浓度不为 0 时会被进一步稀释。
+       * 100% 意味着光源中心完全不透明，允许用户自己顶到头。 */
+      const glowA = Math.max(0, Math.min(100, Number(c.glowA) || 0)) / 100
+      const spread = Math.max(40, Math.min(140, Number(c.spread) || 100)) / 100
+      const soft = Math.max(0, Math.min(100, Number(c.soft) || 0)) / 100
+      /* 分割角度：0–360° 任意值（2026-10-23 用户要求自由调节）。
+       * 原来只接受 4 个预设值，其他值一律回退 165° —— 那样滑块拖到
+       * 200° 会突然跳回 165°，看起来像「滑块坏了」。
+       * 这里只做数值钳制：非数字 → 默认 165；超范围 → 取模归一。 */
+      const rawDir = Number(c.dir)
+      const dir = Number.isFinite(rawDir)
+        ? ((Math.round(rawDir) % 360) + 360) % 360
+        : 165
+
+      const rx = Math.round(70 * spread)
+      const ry = Math.round(60 * spread)
+
+      /* ---- 光晕层 ---- */
+      const glowLayers = []
+      if (mode !== 'bands' && glowA > 0) {
+        for (const L of lights) {
+          const alpha = glowA * (Math.max(0, Math.min(100, Number(L.strength) || 0)) / 100)
+          if (alpha <= 0) continue
+          glowLayers.push('radial-gradient(' + rx + '% ' + ry + '% at ' + L.x + '% ' + L.y + '%, '
+            + hexToRgba(L.color, alpha) + ', transparent 70%)')
+        }
+      }
+
+      /* ---- 分割层 ---- */
+      let bandLayer = null
+      if (mode !== 'glow') {
+        const n = bands.length
+        const gap = soft * (100 / n) * 0.95
+        const stops = []
+        bands.forEach((b, i) => {
+          const col = b.color
+          const startPct = (i / n) * 100
+          const endPct = ((i + 1) / n) * 100
+          if (i === 0) {
+            stops.push(col + ' 0%')
+            stops.push(col + ' ' + (endPct - gap / 2).toFixed(2) + '%')
+          } else if (i === n - 1) {
+            stops.push(col + ' ' + (startPct + gap / 2).toFixed(2) + '%')
+            stops.push(col + ' 100%')
+          } else {
+            stops.push(col + ' ' + (startPct + gap / 2).toFixed(2) + '%')
+            stops.push(col + ' ' + (endPct - gap / 2).toFixed(2) + '%')
+          }
+        })
+        bandLayer = 'linear-gradient(' + dir + 'deg,' + stops.join(',') + ')'
+      }
+
+      /* 层叠顺序：分割在下、光晕在上（与预览一致）。 */
+      const layers = []
+      if (bandLayer !== null) layers.push(bandLayer)
+      layers.push(...glowLayers)
+      layers.push(rawBase)
+      return layers.join(',')
+    }
+
+    /**
+     * 旧接口：保留给「氛围光配色」与亮度联动的老路径。
+     *
+     * ⚠️ 新代码请用 buildGround()。这个包装只负责把旧参数翻译过去，
+     * 让既有调用点与测试不必立刻全改。
+     *
+     * @deprecated 用 buildGround()。
+     */
+    function buildGradientBackdrop(surfaces, isDark, accentId, brightness, glow) {
+      const s = surfaces || {}
+      const rawBase = s.base || (isDark ? '#343D46' : '#FFFFFF')
+
+      /* 背景亮度（glassBrightness，0–100，50 = 中性）—— 双向。 */
+      const rawPct = Number(brightness)
+      const pct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : 50
+      const base = mixTowards(rawBase, pct)
+
+      /* 联动淡出：亮度离开中性越远，氛围层越弱。 */
+      const ambience = Math.max(0, 1 - Math.abs(pct - 50) / 50)
+      const glowOn = glow !== false
+
+      if (!glowOn) {
+        return 'linear-gradient(165deg, '
+          + hexToRgba(mixTowards(s.layer1 || rawBase, pct), 0.35 * ambience) + ' 0%, '
+          + 'transparent 55%, '
+          + hexToRgba(mixTowards('#000000', pct), 0.12 * ambience) + ' 100%),'
+          + base
+      }
+
+      /* 光斑开：沿用新默认光源（青/紫/蓝），alpha 吃 ambience。 */
+      const layers = GLOW_DEFAULTS.map((L) => {
+        const alpha = 0.38 * (Number(L.strength) / 100) * ambience
+        return 'radial-gradient(70% 60% at ' + L.x + '% ' + L.y + '%, '
+          + hexToRgba(L.color, alpha) + ', transparent 70%)'
+      })
+      return layers.join(',') + ',' + base
+    }
+
+    /**
+     * 把颜色朝黑或白混合（背景亮度用）。
+     *
+     * @param {string} hex - `#RRGGBB`。
+     * @param {number} pct - 0–100：50 = 原样，<50 混黑（压暗），>50 混白（提亮）。
+     * @returns {string} 混合后的 `#rrggbb`。
+     */
+    function mixTowards(hex, pct) {
+      const value = typeof hex === 'string' && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#343D46'
+      const t = Math.max(0, Math.min(100, Number(pct) || 0))
+      /* 0 → 全黑，50 → 原样，100 → 全白。 */
+      const target = t < 50 ? 0 : 255
+      const ratio = Math.abs(t - 50) / 50
+      const channel = (offset) => {
+        const n = parseInt(value.slice(offset, offset + 2), 16)
+        return Math.round(n + (target - n) * ratio)
+      }
+      /* ⚠️ 输出**大写** hex：项目里其它色值都是大写（#343D46），
+       * 混入小写会让「默认值原样透出」这类断言失效，也让生成的 CSS 不一致。 */
+      return ('#'
+        + channel(1).toString(16).padStart(2, '0')
+        + channel(3).toString(16).padStart(2, '0')
+        + channel(5).toString(16).padStart(2, '0')).toUpperCase()
     }
 
     /** 壁纸 objectURL 缓存（避免重复 fetch 与内存泄漏）。 */
@@ -1141,6 +1555,8 @@ window.__ModuleLoader__.load({
     let wallpaperStatus = 'idle'
     /** 壁纸层 DOM 元素。 */
     let wallpaperEl = null
+    /** 「模糊填充」的出血层（glassFit = 'blur' 时才有；见 syncWallpaperBleed）。 */
+    let wallpaperBleedEl = null
 
     /**
      * 加载壁纸：fetch Host 路由 → blob → objectURL。
@@ -1168,10 +1584,40 @@ window.__ModuleLoader__.load({
      * @param {string} customPath - 当前设置里的自选壁纸路径。
      * @returns {string} 请求 URL。
      */
-    function wallpaperUrl(customPath) {
-      const clean = typeof customPath === 'string' ? customPath : ''
-      if (clean === '') return WALLPAPER_ROUTE
-      return WALLPAPER_ROUTE + '?path=' + encodeURIComponent(clean)
+    function wallpaperUrl(customPath, customUrl) {
+      const cleanPath = typeof customPath === 'string' ? customPath : ''
+      const cleanUrl = typeof customUrl === 'string' ? customUrl.trim() : ''
+      const params = []
+      if (cleanPath !== '') params.push('path=' + encodeURIComponent(cleanPath))
+      if (cleanUrl !== '') params.push('url=' + encodeURIComponent(cleanUrl))
+      if (params.length === 0) return WALLPAPER_ROUTE
+      return WALLPAPER_ROUTE + '?' + params.join('&')
+    }
+
+    /**
+     * 壁纸来源签名 → 本地路径 / URL。
+     *
+     * 签名格式：`path\u0000url`（用 NUL 分隔，路径里不可能出现它）。
+     * 为什么打包成一个字符串：loadWallpaper 的「同签名才短路」逻辑只需要
+     * 一个可比对的值；拆成两个参数要改所有调用点，且容易漏。
+     *
+     * @param {string} sig - 来源签名。
+     * @returns {string} 本地路径部分（可能为空串）。
+     */
+    function pathOfSig(sig) {
+      const text = typeof sig === 'string' ? sig : ''
+      const at = text.indexOf('\u0000')
+      return at < 0 ? text : text.slice(0, at)
+    }
+
+    /**
+     * @param {string} sig - 来源签名。
+     * @returns {string} URL 部分（可能为空串）。
+     */
+    function urlOfSig(sig) {
+      const text = typeof sig === 'string' ? sig : ''
+      const at = text.indexOf('\u0000')
+      return at < 0 ? '' : text.slice(at + 1)
     }
 
     function loadWallpaper(signature) {
@@ -1191,9 +1637,10 @@ window.__ModuleLoader__.load({
       wallpaperSignature = sig
       wallpaperStatus = 'loading'
       const requestSeq = (wallpaperRequestSeq += 1)
-      wallpaperDiag = { url: wallpaperUrl(signature), status: 0, error: '', size: 0 }
+      const requestUrl = wallpaperUrl(pathOfSig(sig), urlOfSig(sig))
+      wallpaperDiag = { url: requestUrl, status: 0, error: '', size: 0 }
       try {
-        fetch(wallpaperUrl(signature), { cache: 'no-store' })
+        fetch(requestUrl, { cache: 'no-store' })
           .then((response) => {
             wallpaperDiag.status = response.status
             if (!response.ok) throw new Error('HTTP ' + response.status)
@@ -1215,7 +1662,9 @@ window.__ModuleLoader__.load({
             wallpaperObjectUrl = URL.createObjectURL(blob)
             wallpaperStatus = 'ready'
             diag.glass = 'wallpaper'
-            paintWallpaperLayer()
+            /* 🔧 新图到位 → 裁剪结果作废（旧裁剪是针对旧图算的），重画一次。 */
+            wallpaperCropSig = ''
+            applyWallpaperCrop()
           })
           .catch((error) => {
             wallpaperDiag.error = String(error && error.message ? error.message : error)
@@ -1262,7 +1711,28 @@ window.__ModuleLoader__.load({
 
     /** 背景层的完整 background（渐变兜底路径用，含当前 veil）。 */
     function backdropGradient(dark, isDark, veil) {
-      return composeBackdrop(veil === undefined ? wallpaperVeil : veil, buildGradientBackdrop(dark, isDark))
+      const st = state || {}
+      /* 亮度仍作用于底色（双向），并联动淡出光晕/分割的强度。 */
+      const rawPct = Number(st.glassBrightness)
+      const pct = Number.isFinite(rawPct) ? Math.max(0, Math.min(100, rawPct)) : 50
+      const ambience = Math.max(0, 1 - Math.abs(pct - 50) / 50)
+      const base = mixTowards((dark && dark.base) || (isDark ? '#343D46' : '#FFFFFF'), pct)
+
+      const cfg = {
+        mode: typeof st.glassGroundMode === 'string' ? st.glassGroundMode : 'glow',
+        lights: parseLightList(st.glassLights, GLOW_DEFAULTS, MAX_LIGHTS),
+        bands: parseBandList(st.glassBands),
+        /* 浓度 / 柔和都吃 ambience：亮度拉到端点时收成纯色。 */
+        glowA: (Number(st.glassGlowAmount) || 0) * ambience,
+        spread: Number(st.glassGlowSpread),
+        dir: Number(st.glassBandDir),
+        soft: Number(st.glassBandSoft),
+        base,
+      }
+      return composeBackdrop(
+        veil === undefined ? wallpaperVeil : veil,
+        buildGround(dark, isDark, cfg),
+      )
     }
 
     /**
@@ -1310,6 +1780,315 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 当前裁剪结果的 objectURL（null = 没有裁剪，直接用原图）。
+     *
+     * 为什么要有这个中间产物：`background-size` 没法表达「只显示原图的
+     * 某一块」—— 用 `background-position` 百分比模拟只对 cover 成立，
+     * 平铺/居中会露出整张原图。所以裁剪必须**真的重画一张新位图**。
+     */
+    let wallpaperCroppedUrl = null
+    /** 上次裁剪用的签名（避免同一组参数反复重画）。 */
+    let wallpaperCropSig = ''
+    /** 递增序号：丢弃过期的异步裁剪结果。 */
+    let wallpaperCropSeq = 0
+
+    /**
+     * 按裁剪区域重画壁纸，产出新 objectURL。
+     *
+     * 每次重画前 revoke 旧的，并用递增序号丢弃过期结果 —— 否则
+     * 「刚拖回整图」会被上一次的异步裁剪结果覆盖（参照插件踩过这个坑）。
+     *
+     * @param {string} sourceUrl - 原图 objectURL。
+     * @param {{x:number,y:number,w:number,h:number}} crop - 比例裁剪区域。
+     */
+    function renderWallpaperCrop(sourceUrl, crop) {
+      const sig = sourceUrl + '|' + crop.x + ',' + crop.y + ',' + crop.w + ',' + crop.h
+      if (sig === wallpaperCropSig) return
+      wallpaperCropSig = sig
+      wallpaperCropSeq += 1
+      const seq = wallpaperCropSeq
+
+      const isFull = crop.x === 0 && crop.y === 0 && crop.w === 1 && crop.h === 1
+      const dropCropped = () => {
+        if (wallpaperCroppedUrl !== null) {
+          try { URL.revokeObjectURL(wallpaperCroppedUrl) } catch { /* 无 URL */ }
+          wallpaperCroppedUrl = null
+        }
+      }
+      if (isFull) {
+        dropCropped()
+        paintWallpaperLayer()
+        return
+      }
+      if (typeof document === 'undefined' || typeof Image === 'undefined'
+        || typeof document.createElement !== 'function') {
+        return
+      }
+      const image = new Image()
+      image.onload = () => {
+        /* 过期结果：这期间用户又改了裁剪 → 丢掉。 */
+        if (seq !== wallpaperCropSeq) return
+        try {
+          const nw = image.naturalWidth || image.width
+          const nh = image.naturalHeight || image.height
+          if (nw === 0 || nh === 0) return
+          const sx = Math.round(crop.x * nw)
+          const sy = Math.round(crop.y * nh)
+          const sw = Math.max(1, Math.round(crop.w * nw))
+          const sh = Math.max(1, Math.round(crop.h * nh))
+          const canvas = document.createElement('canvas')
+          canvas.width = sw
+          canvas.height = sh
+          const context = canvas.getContext('2d')
+          if (context === null) return
+          context.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh)
+          canvas.toBlob((blob) => {
+            if (seq !== wallpaperCropSeq) return
+            if (blob === null) return
+            dropCropped()
+            wallpaperCroppedUrl = URL.createObjectURL(blob)
+            paintWallpaperLayer()
+          }, 'image/webp', 0.92)
+        } catch (error) {
+          /* canvas 被跨源污染 / toBlob 失败：退回原图（比白屏好）。 */
+          note('render wallpaper crop', error)
+          if (seq === wallpaperCropSeq) {
+            dropCropped()
+            paintWallpaperLayer()
+          }
+        }
+      }
+      image.onerror = () => {
+        if (seq === wallpaperCropSeq) {
+          dropCropped()
+          paintWallpaperLayer()
+        }
+      }
+      image.src = sourceUrl
+    }
+
+    /**
+     * 按当前设置决定「要不要裁剪、裁哪块」，然后交给 renderWallpaperCrop。
+     *
+     * 拆成独立函数是为了让三个调用点（壁纸加载完成 / 设置变更 / 尺寸变化）
+     * 走同一条路，不会出现「某一处忘了应用裁剪」。
+     */
+    function applyWallpaperCrop() {
+      if (wallpaperObjectUrl === null || wallpaperStatus !== 'ready') {
+        paintWallpaperLayer()
+        return
+      }
+      renderWallpaperCrop(wallpaperObjectUrl, glassCropNow())
+    }
+
+    /* ══ 跟随图片明暗（glassAutoTone，2026-10-23，可选、默认关）══════════
+     *
+     * ## 为什么需要
+     *
+     * 文字颜色是跟**主题模式**走的（浅色主题深字、深色主题浅字），
+     * 而**壁纸的明暗和模式无关**。用户换一张暗色壁纸后，浅色主题的深色字
+     * 压在暗图上完全看不清 —— 光晕和加深 token 都救不了「方向错了」。
+     *
+     * ## 做法
+     *
+     * 把背景图（**裁剪后**那块）画到 32×32 画布上，算平均相对亮度
+     * （0.2126R + 0.7152G + 0.0722B）：
+     *   < 0.42 → 切 dark；> 0.58 → 切 light；0.42–0.58 → **不切**
+     *   （明暗参半的图来回切会晃眼，交给文字保护兜）。
+     *
+     * ## 三条纪律（照抄参照插件踩过的坑）
+     *
+     *   ① 走官方 `themeService.setTheme()`，不是自己改 `data-ds-dark-theme`
+     *      属性 —— 改属性宿主内部的调色板/组件状态不会跟着变，
+     *      而且下一次主题变更就被覆盖。
+     *   ② **只动内置 light / dark / system**：用户如果选了第三方主题 id，
+     *      一律不碰（`setTheme('dark')` 会把第三方主题顶掉）。
+     *   ③ 切换前把用户原来的偏好存进 `glassBaseTheme`，删图 / 关开关时还原 ——
+     *      否则重启后用户删掉壁纸，主题会永远停在我们切的那个。
+     *      还原前要确认当前偏好**仍是**我们切的那个（用户中途自己改过就别覆盖）。
+     */
+
+    /** 平均亮度低于此值 → 切深色主题。 */
+    const GLASS_TONE_DARK_BELOW = 0.42
+    /** 平均亮度高于此值 → 切浅色主题。 */
+    const GLASS_TONE_LIGHT_ABOVE = 0.58
+    /** 亮度采样网格边长（32×32 = 1024 个采样点，足够判断「整体亮还是暗」）。 */
+    const GLASS_TONE_GRID = 32
+    /** 上一次测到的亮度（设置页副标题显示用）。 */
+    let glassToneLuma = null
+    /** 上次测量用的签名（避免同一张图反复解码）。 */
+    let glassToneSig = ''
+
+    /** 内置主题 id —— 只有这几个可以被自动明暗切换。 */
+    const BUILTIN_THEME_IDS = Object.freeze(['light', 'dark', 'system'])
+
+    /** 当前用户偏好（light/dark/system），拿不到时返回空串。 */
+    function currentPreference() {
+      try {
+        const snapshot = themeService !== null ? themeService.getTheme() : undefined
+        const preference = snapshot && snapshot.preference
+        if (typeof preference === 'string' && preference !== '') return preference
+      } catch (error) {
+        note('currentPreference', error)
+      }
+      return ''
+    }
+
+    /**
+     * 测量一张图的平均相对亮度。
+     *
+     * 用 `fetch` → `blob:` → `Image` 而不是直接用原 objectURL：
+     * 同源 blob 画进 canvas **一定**读得出来，不会被跨源污染卡住。
+     *
+     * @param {string} url - 图片地址（objectURL）。
+     * @param {{x:number,y:number,w:number,h:number}} crop - 裁剪区域（比例）。
+     * @returns {Promise<number|null>} 0–1 的平均亮度；测不到返回 null。
+     */
+    function measureGlassLuma(url, crop) {
+      return new Promise((resolve) => {
+        if (typeof document === 'undefined' || typeof Image === 'undefined') {
+          resolve(null)
+          return
+        }
+        const image = new Image()
+        image.onload = () => {
+          try {
+            const nw = image.naturalWidth || image.width
+            const nh = image.naturalHeight || image.height
+            if (nw === 0 || nh === 0) {
+              resolve(null)
+              return
+            }
+            const canvas = document.createElement('canvas')
+            canvas.width = GLASS_TONE_GRID
+            canvas.height = GLASS_TONE_GRID
+            const context = canvas.getContext('2d')
+            if (context === null) {
+              resolve(null)
+              return
+            }
+            context.drawImage(
+              image,
+              Math.round(crop.x * nw), Math.round(crop.y * nh),
+              Math.max(1, Math.round(crop.w * nw)), Math.max(1, Math.round(crop.h * nh)),
+              0, 0, GLASS_TONE_GRID, GLASS_TONE_GRID,
+            )
+            const data = context.getImageData(0, 0, GLASS_TONE_GRID, GLASS_TONE_GRID).data
+            let sum = 0
+            let count = 0
+            for (let i = 0; i < data.length; i += 4) {
+              const a = data[i + 3] / 255
+              if (a === 0) continue
+              /* sRGB → 相对亮度（WCAG 公式，与对比度计算同源）。 */
+              const channel = (value) => {
+                const v = value / 255
+                return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+              }
+              sum += (0.2126 * channel(data[i])
+                + 0.7152 * channel(data[i + 1])
+                + 0.0722 * channel(data[i + 2])) * a
+              count += a
+            }
+            resolve(count === 0 ? null : sum / count)
+          } catch (error) {
+            /* canvas 被污染 / getImageData 失败：测不到，交给调用方退避。 */
+            note('measureGlassLuma', error)
+            resolve(null)
+          }
+        }
+        image.onerror = () => resolve(null)
+        image.src = url
+      })
+    }
+
+    /**
+     * 按壁纸亮度自动切换明暗主题。
+     *
+     * 只改设置里的 `glassBaseTheme`（记原偏好）+ 调一次 setTheme，
+     * 不动 `glassAutoTone` 本身（那是用户的开关）。
+     */
+    async function applyGlassAutoTone() {
+      const autoOn = state && state.glassAutoTone === 'on'
+      const isWallpaper = state && state.glassBackground === 'wallpaper'
+      /* 关掉 / 不是壁纸模式 / 图还没好 → 走还原路径。 */
+      if (!autoOn || !isWallpaper || wallpaperStatus !== 'ready' || wallpaperObjectUrl === null) {
+        restoreGlassBaseTheme()
+        return
+      }
+      const crop = glassCropNow()
+      const sig = wallpaperObjectUrl + '|' + crop.x + ',' + crop.y + ',' + crop.w + ',' + crop.h
+      if (sig === glassToneSig) return
+      glassToneSig = sig
+      const luma = await measureGlassLuma(wallpaperObjectUrl, crop)
+      /* 测量期间用户可能又改了设置 —— 签名变了就丢弃这次结果。 */
+      if (sig !== glassToneSig) return
+      glassToneLuma = luma
+      if (luma === null) {
+        publish()
+        return
+      }
+      const want = luma < GLASS_TONE_DARK_BELOW ? 'dark'
+        : (luma > GLASS_TONE_LIGHT_ABOVE ? 'light' : '')
+      if (want === '') {
+        /* 明暗参半：保持用户当前模式，但仍然把基准记下来（下次换图要能还原）。 */
+        publish()
+        return
+      }
+      const preference = currentPreference()
+      /* ③ 只动内置主题：第三方主题 id 一律不碰。 */
+      if (!BUILTIN_THEME_IDS.includes(preference)) {
+        publish()
+        return
+      }
+      if (preference === want) {
+        publish()
+        return
+      }
+      /* 第一次切换前记住原偏好（空串 = 还没切过）。 */
+      const base = state && typeof state.glassBaseTheme === 'string' ? state.glassBaseTheme : ''
+      if (base === '' && preference !== '') {
+        state.glassBaseTheme = preference
+        persistNow()
+      }
+      try {
+        if (themeService !== null && typeof themeService.setTheme === 'function') {
+          themeService.setTheme(want)
+        }
+      } catch (error) {
+        note('autoTone setTheme', error)
+      }
+      publish()
+    }
+
+    /**
+     * 还原自动明暗切走的用户偏好。
+     *
+     * 三条判定：
+     *   · 没记过基准（`glassBaseTheme` 空）= 我们从没切过 → 什么都不做；
+     *   · 当前偏好**已经不是我们切的那个** → 用户中途自己改过，只清基准、不覆盖；
+     *   · 否则还原成基准值。
+     */
+    function restoreGlassBaseTheme() {
+      const base = state && typeof state.glassBaseTheme === 'string' ? state.glassBaseTheme : ''
+      if (base === '') return
+      const preference = currentPreference()
+      /* 用户自己改过：只清基准，别把他的选择盖掉。 */
+      const changed = preference !== '' && preference !== base
+      try {
+        if (!changed && BUILTIN_THEME_IDS.includes(base) && themeService !== null
+          && typeof themeService.setTheme === 'function') {
+          themeService.setTheme(base)
+        }
+      } catch (error) {
+        note('restoreGlassBaseTheme', error)
+      }
+      state.glassBaseTheme = ''
+      glassToneSig = ''
+      glassToneLuma = null
+      persistNow()
+    }
+
+    /**
      * 把背景画到背景层元素上。
      *
      * 优先级：壁纸 objectURL > 渐变。
@@ -1317,6 +2096,69 @@ window.__ModuleLoader__.load({
      * 🔧 压暗层（veil）合成进背景层自身的渐变（见 glassVeilColor 的注释）；
      * 每次整体重赋 `background`，浓度/配色随设置即时生效。签名守卫防重复赋值。
      */
+    /**
+     * 「模糊填充」的出血层（2026-10-23）。
+     *
+     * 只在 `glassFit === 'blur'` 时需要：一张 cover 铺满、且**单独挂
+     * `filter: blur()`** 的同图副本，位于壁纸层之下。上层壁纸用 contain
+     * 完整显示，留白处就是这层糊掉的图 —— 而不是一块死板的纯色。
+     *
+     * ## 为什么必须是独立元素
+     *
+     * `filter` 是**元素级**属性，不是 background 层的属性。CSS 里
+     * `background` 简写没法「只糊第一层」。所以：
+     *   · 想糊出血层 → 必须给它单独一个元素；
+     *   · 不能糊壁纸层本身（那会把上层清晰的 contain 图一起糊掉）。
+     *
+     * ## 层级
+     *
+     * 出血层 `z-index: -1`，壁纸层（`#dmt-wallpaper`）本身 z-index 0 ——
+     * 两者都在 `#root` 之下，所以不影响任何内容层。
+     * 出血层插在壁纸层的**前面**（DOM 顺序即层叠顺序，同 z-index 时后者在上）。
+     *
+     * @param {boolean} needed - 是否需要出血层。
+     * @param {string} source - 图片地址（objectURL）。
+     */
+    function syncWallpaperBleed(needed, source) {
+      if (typeof document === 'undefined' || typeof document.createElement !== 'function') return
+      if (!needed) {
+        if (wallpaperBleedEl !== null) {
+          try { wallpaperBleedEl.remove() } catch { /* 已移除 */ }
+          wallpaperBleedEl = null
+        }
+        return
+      }
+      if (wallpaperEl === null) return
+      if (wallpaperBleedEl === null) {
+        const el = document.createElement('div')
+        el.setAttribute('aria-hidden', 'true')
+        el.style.cssText = [
+          'position:fixed',
+          'inset:-40px', /* 外扩：模糊会让边缘透出底色，外扩 40px 抵消 */
+          'z-index:-1',
+          'pointer-events:none',
+          'background-position:center',
+          'background-size:cover',
+          'background-repeat:no-repeat',
+          /* 出血层糊得比主模糊更重：它是「背景的背景」，糊透一点才不抢上层。 */
+          'filter:blur(48px) saturate(1.1)',
+          'transform:scale(1.06)',
+        ].join(';')
+        /* 插到壁纸层之前（DOM 顺序在前 = 层叠在下）。 */
+        try {
+          wallpaperEl.parentNode.insertBefore(el, wallpaperEl)
+        } catch {
+          /* 父节点异常：这一档退化成纯 contain（上层仍然正确）。 */
+          return
+        }
+        wallpaperBleedEl = el
+      }
+      const url = 'url("' + source + '")'
+      if (wallpaperBleedEl.style.backgroundImage !== url) {
+        wallpaperBleedEl.style.backgroundImage = url
+      }
+    }
+
     function paintWallpaperLayer() {
       if (wallpaperEl === null) return
       const { dark, isDark } = wallpaperSurfaces
@@ -1334,14 +2176,36 @@ window.__ModuleLoader__.load({
         /* 多层背景：压暗渐变是**第一层**（画在最上），壁纸 url 在第二层。
          * ⚠️ 渐变层只接受合法颜色 —— 必须用 backdropImage() 加 veil，
          * 否则会出现 `linear-gradient(, ,)` 这种非法值让整条 background-image 失效。
-         * 各层尺寸各给一份：veil 铺满（auto），壁纸 cover。 */
-        const value = backdropImage('url("' + wallpaperObjectUrl + '")')
-        if (wallpaperEl.__dmtBackdrop === value) return
-        wallpaperEl.__dmtBackdrop = value
+         * 各层尺寸各给一份：veil 铺满（auto），壁纸按用户选的摆放方式。
+         *
+         * 🔧 2026-10-23 裁剪：有裁剪区域时用 `wallpaperCroppedUrl`
+         * （canvas 真重画出来的新位图），而不是用 background-position 模拟 ——
+         * 百分比位移只对「填充」成立，平铺/居中会露出整张原图（参照插件的实测结论）。 */
+        const source = wallpaperCroppedUrl !== null ? wallpaperCroppedUrl : wallpaperObjectUrl
+        const fit = wallpaperFitStyle()
+        /* 🔧 2026-10-23「模糊填充」（glassFit = 'blur'）：
+         *
+         * 需要**两层同图**：
+         *   底层 cover + blur()   → 铺满，留白处由它填（观感「满屏都是这张图」）
+         *   上层 contain          → 完整显示，不被裁掉
+         *
+         * ⚠️ 为什么不用 `background: url() center/contain, url() center/cover`：
+         * CSS 的 `background` 简写**没法给单层加 filter** —— filter 是元素级属性，
+         * 一加就是整张画布糊（连上层清晰的图一起糊掉）。
+         * 所以出血层必须做成**独立元素**（wallpaperBleedEl），
+         * 单独挂 filter: blur()，位于壁纸层之下。
+         *
+         * 这也是为什么 `blur` 不能只靠 wallpaperFitStyle 的三件套表达 ——
+         * 它返回 `bleed: true` 就是在告诉这里「去建那个出血层」。 */
+        syncWallpaperBleed(fit.bleed, source)
+        const value = backdropImage('url("' + source + '")')
+        const cacheKey = value + '|' + fit.size + '|' + fit.position + '|' + fit.repeat
+        if (wallpaperEl.__dmtBackdrop === cacheKey) return
+        wallpaperEl.__dmtBackdrop = cacheKey
         wallpaperEl.style.backgroundImage = value
-        wallpaperEl.style.backgroundSize = wallpaperVeil === '' ? 'cover' : 'auto, cover'
-        wallpaperEl.style.backgroundPosition = wallpaperVeil === '' ? 'center' : 'center, center'
-        wallpaperEl.style.backgroundRepeat = wallpaperVeil === '' ? 'no-repeat' : 'no-repeat, no-repeat'
+        wallpaperEl.style.backgroundSize = wallpaperVeil === '' ? fit.size : 'auto, ' + fit.size
+        wallpaperEl.style.backgroundPosition = wallpaperVeil === '' ? fit.position : 'center, ' + fit.position
+        wallpaperEl.style.backgroundRepeat = wallpaperVeil === '' ? fit.repeat : 'no-repeat, ' + fit.repeat
         wallpaperEl.style.backgroundColor = 'transparent'
         return
       }
@@ -1351,6 +2215,121 @@ window.__ModuleLoader__.load({
         wallpaperEl.style.backgroundImage = 'none'
         wallpaperEl.style.background = gradient
       }
+    }
+
+    /**
+     * 背景图摆放方式 → CSS `background-size / position / repeat` 三件套。
+     *
+     * 六种。前五种与 Windows「设置 → 个性化 → 背景」一一对应，
+     * 用户不用学新概念；第六种 `blur` 借自 dsh-dream-skin：
+     *
+     *   cover   填充 ：等比放大到铺满窗口，超出部分裁掉（默认，原行为）
+     *   contain 适应 ：等比缩放到整张图都看得见，留白处透出渐变底
+     *   stretch 拉伸 ：强行拉满整块，比例会变形
+     *   tile    平铺 ：按原尺寸重复，适合纹理/图案壁纸
+     *   center  居中 ：按原尺寸居中，四周透出渐变底
+     *   blur    模糊填充：整图完整显示（contain），**留白处用同一张图
+     *           放大模糊铺底**（不是纯色）—— 观感上「满屏都是这张图」，
+     *           又不会被裁掉内容。照片/视频壁纸最常用的一档。
+     *
+     * ⚠️ `blur` 需要**两层**背景（模糊底层 + 清晰上层），
+     * 三件套表达不了 —— 所以返回 `bleed: true`，由调用方
+     * `paintWallpaperLayer` 多拼一层 url。见那里的注释。
+     *
+     * ⚠️ 为什么 tile/center 不能用 cover 蒙混：cover 会把图放大到铺满，
+     * 一张 512×512 的纹理壁纸在 4K 屏上会被放大 8 倍糊成一片 ——
+     * 而用户选「平铺」要的正是原尺寸重复。
+     *
+     * @param {object} [from] - 从哪份设置读（构建 CSS 表时必须传 `s`，
+     *   理由同 glassTier()）。
+     * @returns {{size: string, position: string, repeat: string, bleed: boolean}}
+     *   CSS 三件套 + `bleed`（是否需要在背后铺一层模糊出血图）。
+     */
+    function wallpaperFitStyle(from) {
+      const source = from !== null && typeof from === 'object' ? from : state
+      const raw = source && typeof source.glassFit === 'string' ? source.glassFit : 'cover'
+      const fit = ['cover', 'contain', 'stretch', 'tile', 'center', 'blur'].includes(raw) ? raw : 'cover'
+      if (fit === 'contain') return { size: 'contain', position: 'center', repeat: 'no-repeat', bleed: false }
+      if (fit === 'stretch') return { size: '100% 100%', position: 'center', repeat: 'no-repeat', bleed: false }
+      if (fit === 'tile') return { size: 'auto', position: 'left top', repeat: 'repeat', bleed: false }
+      if (fit === 'center') return { size: 'auto', position: 'center', repeat: 'no-repeat', bleed: false }
+      /* 模糊填充：上层 contain（完整显示），下层由调用方补 cover 出血图。 */
+      if (fit === 'blur') return { size: 'contain', position: 'center', repeat: 'no-repeat', bleed: true }
+      return { size: 'cover', position: 'center', repeat: 'no-repeat', bleed: false }
+    }
+
+    /**
+     * 把任意输入规范成一个合法的裁剪区域。
+     *
+     * 规则与参照插件 dsh-glass-ranswork 一致（直接采用它的语义，避免用户
+     * 在两个玻璃插件之间迁移时手感不一致）：
+     *   · x/y/w/h 都夹到 [0,1]；w/h 不小于 `GLASS_CROP_MIN`；
+     *   · 框不能越出图片右/下边界 —— 越界时**保持宽高、把左上角往回推**，
+     *     而不是把框压扁（用户看到的是「框被挡在边上停住」，
+     *     和桌面裁剪工具的手感一致）。
+     *
+     * @param {unknown} input - 任意输入（undefined / 字符串 / 半个对象）。
+     * @returns {{x: number, y: number, w: number, h: number}} 新的裁剪区域。
+     */
+    function normalizeGlassCrop(input) {
+      const source = input !== null && typeof input === 'object' ? input : {}
+      const number = (value, fallback) => {
+        const parsed = typeof value === 'number' ? value : Number(value)
+        return Number.isFinite(parsed) ? parsed : fallback
+      }
+      const unit = (value) => Math.min(1, Math.max(0, value))
+      const round = (value) => Math.round(value * 10000) / 10000
+      const w = Math.min(1, Math.max(GLASS_CROP_MIN, unit(number(source.w, 1))))
+      const h = Math.min(1, Math.max(GLASS_CROP_MIN, unit(number(source.h, 1))))
+      const x = Math.min(round(1 - w), Math.max(0, unit(number(source.x, 0))))
+      const y = Math.min(round(1 - h), Math.max(0, unit(number(source.y, 0))))
+      return { x: round(x), y: round(y), w: round(w), h: round(h) }
+    }
+
+    /** 当前裁剪区域（从设置里的 JSON 字符串解析；坏值退回整图）。 */
+    function glassCropNow() {
+      const raw = state && typeof state.glassCrop === 'string' ? state.glassCrop : ''
+      if (raw === '') return { x: 0, y: 0, w: 1, h: 1 }
+      try {
+        return normalizeGlassCrop(JSON.parse(raw))
+      } catch {
+        /* 手改坏了 YAML：安全退回整图，不抛错、不丢其他设置。 */
+        return { x: 0, y: 0, w: 1, h: 1 }
+      }
+    }
+
+    /**
+     * 从**设置快照**（而不是模块级 state）解析裁剪区域 —— 设置页渲染用。
+     *
+     * 为什么不能用 glassCropNow()：设置页拿的是 `snapshot` 参数，
+     * 而 glassCropNow() 读的是模块级 `state`。两者在「应用更改」前可能
+     * 不一致（草稿机制），设置页必须显示它自己那份快照。
+     *
+     * @param {unknown} raw - snapshot.glassCrop（JSON 字符串或空串）。
+     * @returns {{x: number, y: number, w: number, h: number}} 规范化后的区域。
+     */
+    function parseCropSafe(raw) {
+      if (typeof raw !== 'string' || raw === '') return { x: 0, y: 0, w: 1, h: 1 }
+      try {
+        return normalizeGlassCrop(JSON.parse(raw))
+      } catch {
+        return { x: 0, y: 0, w: 1, h: 1 }
+      }
+    }
+
+    /**
+     * 把裁剪区域序列化回设置字符串；整图时返回空串。
+     *
+     * 为什么整图要存空串：默认值就是空串，存成 `{"x":0,...}` 会让
+     * 「没有裁剪」也被写进 profile（违背「只存偏离默认的项」的既有纪律）。
+     *
+     * @param {{x:number,y:number,w:number,h:number}} crop - 裁剪区域。
+     * @returns {string} JSON 字符串或空串。
+     */
+    function serializeGlassCrop(crop) {
+      const c = normalizeGlassCrop(crop)
+      if (c.x === 0 && c.y === 0 && c.w === 1 && c.h === 1) return ''
+      return JSON.stringify(c)
     }
 
     /**
@@ -1381,6 +2360,8 @@ window.__ModuleLoader__.load({
             note('remove wallpaper layer', error)
           }
         }
+        /* 出血层跟着一起清（它只在 blur 档存在，但玻璃关掉时必须一起走）。 */
+        syncWallpaperBleed(false, '')
         wallpaperEl = null
         return
       }
@@ -1437,11 +2418,24 @@ window.__ModuleLoader__.load({
       /* 🔧 等高线模式不糊也不饱和：线是 1px 高频细节，糊了等于没有；
        * 线色由强调色直出，saturate 会把它改歪 —— 它的"玻璃感"来自
        * 列的 alpha 透过，不需要任何底图后处理。 */
-      const blur = contourActive ? 0 : Math.max(0, Math.min(40, wallpaperBlur))
+      /* 🔧 2026-10-23（用户报「光晕还是差一档」，此时表面浓度已调到 0）：
+       * **渐变模式不糊背景层**。
+       *
+       * 这层 filter 是给**照片壁纸**设计的 —— 壁纸有高频细节，糊掉才能让
+       * 上层的文字读得清。但渐变光晕本身就是低频柔和色雾：
+       *   · blur(16px) 会把 70%×60% 的光团边缘抹平，中心色被稀释；
+       *   · scale(1.08) 又把整个渐变放大，半径更散；
+       * 两者叠加后光晕几乎看不出形状 —— 这正是「差一档」的来源。
+       *
+       * 与 veil 的处理保持一致：只改渐变模式，壁纸模式完全不变。 */
+      const gradientMode = state && state.glassBackground === 'gradient'
+      const blur = (contourActive || gradientMode) ? 0 : Math.max(0, Math.min(40, wallpaperBlur))
       /* 饱和度 0–200%（100 = 原样）。和 blur 一样做在**底图**上 ——
        * 一次 filter 串，全窗统一，面板上不需要各自再 sat（Win11 亚克力
        * 的 saturate 同理：调的是透过率里的世界，不是玻璃本身）。 */
-      const sat = contourActive ? 100 : wallpaperSat
+      /* 饱和度同理：渐变模式的色相是我们自己调的，再 saturate 会改歪。
+       * （等高线早就是这么处理的，见上面的注释。） */
+      const sat = (contourActive || gradientMode) ? 100 : wallpaperSat
       const parts = []
       if (blur > 0) parts.push('blur(' + blur + 'px)')
       if (sat !== 100) parts.push('saturate(' + (sat / 100) + ')')
@@ -1449,6 +2443,8 @@ window.__ModuleLoader__.load({
       if (wallpaperEl.__dmtFilter === value) return
       wallpaperEl.__dmtFilter = value
       wallpaperEl.style.filter = value
+      /* scale 只在真的模糊时才有意义（抵消模糊边缘的透明晕边）。
+       * 渐变模式不糊，也就不该放大 —— 放大会让光晕半径变散。 */
       wallpaperEl.style.transform = blur > 0 ? 'scale(1.08)' : 'none'
     }
 
@@ -1485,8 +2481,16 @@ window.__ModuleLoader__.load({
       * （portal 父层透明，单层）；输入卡的座透明、卡本体走浮层档。
       */
 
-    /** 三档增量（合成目标 − 列合成）。做成常量方便整体调口味。 */
-    const GLASS_TIER = Object.freeze({
+    /** 三档增量（合成目标 − 列合成）的**出厂值**。
+     *
+     *  🔧 2026-10-23：原来这是纯常量，用户一个都调不了 —— 而这恰恰是玻璃观感
+     *  最需要调的三个数（浮层实不实、代码块实不实）。现在它们通过
+     *  `glassTier()` 从设置里读，这里的对象退化成「默认值表」。
+     *
+     *  ⚠️ 不要直接读这个对象做计算 —— 一律走 `glassTier()`，
+     *  否则设置里的值会被绕过（这正是之前 contour 那几个「拖了没反应」的成因）。
+     */
+    const GLASS_TIER_DEFAULTS = Object.freeze({
       float: 0.10,      /* 浮层基础增量（fog=0 时） */
       code: 0.14,       /* 代码块增量 */
       banner: 0.04,     /* 代码块横幅在代码块档上再加 */
@@ -1494,6 +2498,146 @@ window.__ModuleLoader__.load({
       active: 0.09,     /* active 态同理 */
       fogPer: 0.30,     /* fog 滑块（0–40%）最多再加的增量（2026-10-22 扩：0.10 观感太弱） */
     })
+
+    /**
+     * 当前生效的分层增量（设置 → 玻璃界面「分层浓度」）。
+     *
+     * 设置字段用**百分点整数**（0–100）而不是浮点小数：滑块天然是整数，
+     * 也避免浮点在 YAML 里被写成 `0.10000000000000001` 这种值。
+     * 这里换算成 0–1 的增量。
+     *
+     * 三个可调项对应三档「要读字的程度」：
+     *   · `glassFloat` → float 档：卡片 / 气泡 / 输入卡 / 菜单浮层
+     *   · `glassCode`  → code 档：代码块（要逐字读，默认最实）
+     *   · `glassHover` → hover / active 微增量（悬停反馈有多明显）
+     * banner / fogPer 保持常量：前者是代码块横幅的固定微调，
+     * 后者是 fog 滑块的换算系数（再暴露一个只会让两个滑块互相打架）。
+     *
+     * @param {object} [from] - 从哪份设置读。**必须传**给所有「构建 CSS 表」
+     *   的调用点（`buildGlassSheet` 收的是参数 `s` 而不是模块级 `state`）——
+     *   否则设置页预览用的快照与实际生效值会分叉。省略时读模块级 `state`
+     *   （运行时路径用）。
+     * @returns {{float: number, code: number, banner: number, hover: number,
+     *            active: number, fogPer: number}} 0–1 的增量表。
+     */
+    function glassTier(from) {
+      const source = from !== null && typeof from === 'object' ? from : state
+      /* ⚠️ fallback 传的是**出厂增量的百分点**（10/14/5），read 内部统一
+       * 除以 100 换算成 0–1 —— 两者必须是同一个单位，否则缺字段时会得到
+       * 10 而不是 0.1（= 1000% 不透明度，把整窗刷成实心）。
+       * 这个坑踩过一次：glassTier({}) 返回 float:10，玻璃表合成全是 1.00。 */
+      const read = (key, fallbackPct, max) => {
+        const raw = source && source[key] !== undefined ? Number(source[key]) : NaN
+        const pct = Number.isFinite(raw) ? raw : fallbackPct
+        return Math.max(0, Math.min(max, pct)) / 100
+      }
+      /* 上限 40%：再高就等于「等于不透明」，玻璃失去意义，也不该让用户调坏。 */
+      const float = read('glassFloat', GLASS_TIER_DEFAULTS.float * 100, 40)
+      const code = read('glassCode', GLASS_TIER_DEFAULTS.code * 100, 40)
+      const hover = read('glassHover', GLASS_TIER_DEFAULTS.hover * 100, 20)
+      return {
+        float,
+        code,
+        banner: GLASS_TIER_DEFAULTS.banner,
+        hover,
+        /* active 按 hover 的 1.8 倍走：两者是同一套「按下更明显」的语义，
+         * 分开给两个滑块只会让用户困惑。 */
+        active: Math.min(0.30, hover * 1.8),
+        fogPer: GLASS_TIER_DEFAULTS.fogPer,
+      }
+    }
+
+    /* ══ 按 UI 区域分的四个独立档（2026-10-23 第二轮）════════════════════
+     *
+     * 与 glassTier() 的分层思路不同：那三个是「离底板多远」，
+     * 这四个是「这块 UI 要不要读字」。取值 -1 = 不覆盖，跟随默认档。
+     */
+
+    /**
+     * 读一个「-1 = 不覆盖」的独立档。
+     *
+     * @param {object} from - 设置来源（构建 CSS 表时传 `s`）。
+     * @param {string} key - 字段名。
+     * @param {number} max - 上限（下限固定 0）。
+     * @returns {number|null} 0..max 的数值；-1 或非法值返回 null（= 不覆盖）。
+     */
+    function glassIndependent(from, key, max) {
+      const source = from !== null && typeof from === 'object' ? from : state
+      const raw = source && source[key] !== undefined ? Number(source[key]) : NaN
+      if (!Number.isFinite(raw) || raw < 0) return null
+      return Math.max(0, Math.min(max, raw))
+    }
+
+    /**
+     * 信息面板的浓度（0–1）；null = 跟随浮层档。
+     *
+     * 「要读字的地方」：弹层、菜单、Modal、会话统计、费用面板、文件预览 PDF 底。
+     * 这些地方默认比装饰性表面更实，滑块拉到底也不会把正文拖没。
+     */
+    function glassPanelAlpha(from) {
+      const pct = glassIndependent(from, 'glassPanelOpacity', 100)
+      return pct === null ? null : pct / 100
+    }
+
+    /**
+     * 文件预览 / 改动卡片的浓度（0–1）；null = 跟随代码块档。
+     *
+     * 为什么和代码块分开：代码块是「围栏里的代码」，文件预览是「宿主画的
+     * diff 卡片」，两者由不同的宿主类名承载。用户可能想调其中一个而不动另一个。
+     */
+    function glassPreviewAlpha(from) {
+      const pct = glassIndependent(from, 'glassPreviewOpacity', 100)
+      return pct === null ? null : pct / 100
+    }
+
+    /**
+     * 浮层模糊半径（px）；null = 跟随 `glassBlur + 10`（封顶 40）。
+     *
+     * 原来浮层模糊是**从 glassBlur 硬算出来的**（`Math.min(40, blur + 10)`），
+     * 用户没法单独调。现在可以：浮层面积小、离正文近，半径过大边缘会发虚，
+     * 需要独立一档兼顾「糊得掉背景」与「看得清字」。
+     */
+    function glassOverlayBlurPx(from, blur) {
+      const px = glassIndependent(from, 'glassOverlayBlur', 80)
+      if (px !== null) return px
+      return Math.min(40, blur + 10)
+    }
+
+    /**
+     * 输入卡 / 任务卡的模糊半径（px）；null = 跟随 `glassBlur`。
+     *
+     * ⚠️ **与参照插件的分歧（有意为之）**：
+     * dsh-glass-ranswork 把 composerBlur 挂在 `[data-composer-card]::before`
+     * 上做真模糊 —— 因为**它没有做输入卡硬裁**，输入卡背后是活的正文，
+     * 必须糊掉才不穿帮。
+     *
+     * 我们做了 seat lift（见 syncSeatLift）：输入卡被抬成滚动容器的 flex
+     * 兄弟，聊天内容**物理硬断在卡片上沿**，卡片背后根本没有文字。
+     * 所以 2026-10-22 就已经把这张卡的 backdrop-filter 删掉了
+     * （保留只有「成为 fixed 后代包含块 → tooltip 坐标错乱」的风险，
+     * 没有任何收益）。
+     *
+     * 那么本字段在我们这里管什么？——**输入卡的浓度**，不是模糊。
+     * 见 glassComposerAlpha()。模糊值本身仍然保留并接线，
+     * 用于「任务卡」这类**没有硬裁**、背后确实有内容的卡片。
+     */
+    function glassComposerBlurPx(from, blur) {
+      const px = glassIndependent(from, 'glassComposerBlur', 80)
+      return px === null ? blur : px
+    }
+
+    /**
+     * 输入卡的浓度（0–1）；null = 跟随浮层档。
+     *
+     * 这才是 `glassComposerBlur` 在我们架构里的真实消费者 —— 见上方注释。
+     * 用户报「输入框里的字发虚」时，真正要调的是浓度而不是模糊。
+     */
+    function glassComposerAlpha(from, floatAlpha) {
+      const pct = glassIndependent(from, 'glassComposerBlur', 100)
+      return pct === null ? floatAlpha : pct / 100
+    }
+
+
 
     /** 合成：下层不透明度 under，本层涂 a，结果不透明度。 */
     function glassComposite(under, a) {
@@ -1513,9 +2657,12 @@ window.__ModuleLoader__.load({
     }
 
     /** 浮层档合成目标（列 α + 基础增量 + fog 微调）。 */
-    function glassFloatTarget(alpha, fogRatio) {
-      return Math.min(1, alpha + GLASS_TIER.float
-        + Math.max(0, Math.min(1, fogRatio)) * GLASS_TIER.fogPer)
+    function glassFloatTarget(alpha, fogRatio, from) {
+      /* 只取一次 tier：下面三处若各调一次 glassTier()，会重新解析三遍设置，
+       * 而这是每次 applyNow 都会走的路径。 */
+      const tier = glassTier(from)
+      return Math.min(1, alpha + tier.float
+        + Math.max(0, Math.min(1, fogRatio)) * tier.fogPer)
     }
 
     /**
@@ -1566,8 +2713,8 @@ window.__ModuleLoader__.load({
     }
 
     /** 浮层（卡片/气泡/输入卡/行内代码）自身该涂的浓度。 */
-    function glassFloatAlpha(alpha, fogRatio) {
-      return glassDeltaAlpha(alpha, glassFloatTarget(alpha, fogRatio))
+    function glassFloatAlpha(alpha, fogRatio, from) {
+      return glassDeltaAlpha(alpha, glassFloatTarget(alpha, fogRatio, from))
     }
 
     /**
@@ -1578,8 +2725,8 @@ window.__ModuleLoader__.load({
      *   b) 玻璃表 `pre{background-color:…}` 的 !important（直接压宿主规则）。
      * 两条若公式不一致，改浓度滑块会出现「横幅透、正文不透」这类分层错位。
      */
-    function glassSolidAlpha(alpha) {
-      return glassDeltaAlpha(alpha, Math.min(1, alpha + GLASS_TIER.code))
+    function glassSolidAlpha(alpha, from) {
+      return glassDeltaAlpha(alpha, Math.min(1, alpha + glassTier(from).code))
     }
 
      /**
@@ -1608,7 +2755,7 @@ window.__ModuleLoader__.load({
      * @param {number} fog - 浮层浓度 0..1（浮层需要更浓，否则读不清字）。
      * @returns {string[]} 令牌声明数组（不含 selector 包裹）。
      */
-    function glassTokenDecls(surf, isDark, alpha, fog) {
+    function glassTokenDecls(surf, isDark, alpha, fog, from) {
       const out = []
       /* 🔧 push 升级为「颜色预补偿」语义（2026-10-22，修「卡片/代码块/
        * 输入卡变成正文背景色」）：浓度仍按差值档（调用方不变），但涂的
@@ -1642,14 +2789,15 @@ window.__ModuleLoader__.load({
       const layerAlpha = Math.min(1, alpha)
       /* 浮层档：卡片/气泡/菜单/输入卡/行内代码 —— 合成目标 α+0.10(+fog 微调)，
          本层涂差值。 */
-      const floatTarget = glassFloatTarget(layerAlpha, fogRatio)
-      const fogAlpha = glassFloatAlpha(layerAlpha, fogRatio)
+      const floatTarget = glassFloatTarget(layerAlpha, fogRatio, from)
+      const fogAlpha = glassFloatAlpha(layerAlpha, fogRatio, from)
       /* 代码块档：合成目标 α+0.14（读长代码，比卡片再实一点）。
          与选择器层的 `pre` 规则共用 glassSolidAlpha，见该函数注释。 */
-      const solidAlpha = glassSolidAlpha(layerAlpha)
+      const solidAlpha = glassSolidAlpha(layerAlpha, from)
       /* hover/active：浮层之上的第 3 层，增量小、瞬态。 */
-      const hoverAlpha = glassDeltaAlpha(floatTarget, Math.min(1, floatTarget + GLASS_TIER.hover))
-      const activeAlpha = glassDeltaAlpha(floatTarget, Math.min(1, floatTarget + GLASS_TIER.active))
+      const tier = glassTier(from)
+      const hoverAlpha = glassDeltaAlpha(floatTarget, Math.min(1, floatTarget + tier.hover))
+      const activeAlpha = glassDeltaAlpha(floatTarget, Math.min(1, floatTarget + tier.active))
 
       /* ① 整页底：透明，让背景层透上来。
        *    注意这一步不改成半透明 —— 透明才能看到背景层。 */
@@ -1719,11 +2867,11 @@ window.__ModuleLoader__.load({
       /* ⑥ 代码块：**代码块档**（合成目标 α+0.14，比卡片实一点读得清，
        *    又不至于把壁纸信号连乘吃掉）。 */
       const code = surf.code || layer2
-      const solidTarget = Math.min(1, layerAlpha + GLASS_TIER.code)
+      const solidTarget = Math.min(1, layerAlpha + tier.code)
       push('--dsw-alias-markdown-code-block', code, solidAlpha)
       /* 横幅：列上的第 2 层，合成目标 = 代码块档 + banner 增量。 */
       push('--dsw-alias-markdown-code-block-banner', code,
-        glassDeltaAlpha(layerAlpha, Math.min(1, solidTarget + GLASS_TIER.banner)))
+        glassDeltaAlpha(layerAlpha, Math.min(1, solidTarget + tier.banner)))
       /* ⚠️ 关键：Shiki 把 --shiki-background 写在 <pre> 的**内联样式**上，
        * 内联样式优先级高于任何 CSS 规则。
        * 只改 --dsw-alias-markdown-code-block 不够 —— Shiki 读的是
@@ -1827,14 +2975,14 @@ window.__ModuleLoader__.load({
      * @param {boolean} isDark - 深色模式。
      * @returns {string} CSS 文本；功能关闭时为空串。
      */
-    function buildGlassSheet(state, surfaces, isDark, cardTargetsForSheet) {
+    function buildGlassSheet(state, surfaces, isDark, cardTargetsForSheet, floatTargetsForSheet) {
       const s = state || {}
       if (s.glass !== 'on') return ''
       const surf = surfaces || {}
       /* 代码色（pre 的 !important 底色与令牌层同源：code → layer2 → base）。 */
       const codeSurface = surf.code || surf.layer2 || surf.base || '#2E363F'
       const alpha = parsePercent(s.glassTint, 0, 100, 65) / 100
-      const blur = parsePercent(s.glassBlur, 0, 40, 16)
+      const blur = parsePercent(s.glassBlur, 0, 80, 16)
       /* 🔧 2026-10-23（真机"一开等高线就卡"的元凶之一）：**背景层的 filter
        * 关掉了，但这两处 backdrop-filter 没关**。
        *
@@ -1937,8 +3085,17 @@ window.__ModuleLoader__.load({
       const sidebarColor = surf.sidebar || surf.layer1 || surf.base
       const centerColor = surf.base || surf.layer1
       if (sidebarColor) {
+        /* 🔧 2026-10-23：侧栏浓度可以独立调（glassSidebarOpacity）。
+         * 默认 -1 = 跟随表面浓度（原行为）。
+         *
+         * 为什么值得单独一档：侧栏和正文列是**两种视觉权重** ——
+         * 有人想让正文列透出壁纸、但侧栏保持实（导航要一眼看清），
+         * 也有人反过来（侧栏融进壁纸当装饰，正文列保住可读性）。
+         * 一个滑块管两列时这两种需求都满足不了。 */
+        const sidebarOverride = glassIndependent(s, 'glassSidebarOpacity', 100)
+        const sidebarAlpha = sidebarOverride === null ? alpha : sidebarOverride / 100
         lines.push(g + '[class*="_sidebarCol"]{'
-          + 'background:' + hexToRgba(sidebarColor, alpha) + ' !important;'
+          + 'background:' + hexToRgba(sidebarColor, sidebarAlpha) + ' !important;'
           + 'border-right:.5px solid ' + hexToRgba(isDark ? '#FFFFFF' : '#0F1115', 0.06) + ' !important}')
       }
       if (centerColor) {
@@ -2044,7 +3201,9 @@ window.__ModuleLoader__.load({
         + 'box-shadow:' + glassShadow5 + ' !important;'
         + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
 
-      const frosted = Math.min(40, blur + 10)
+      /* 🔧 2026-10-23：浮层模糊现在可以独立调（glassOverlayBlur）。
+       * 不给值时保持原行为（blur + 10，封顶 40）。 */
+      const frosted = glassOverlayBlurPx(s, blur)
       /* 🔧 等高线模式同 `_frame::before`：这两处的底图是活的（8fps 换像素），
        * 26px 高斯重算 8 次/秒纯属浪费 —— 而且设置页本身就是 role="dialog"，
        * 用户正是在那个面板里把背景切成等高线的，卡顿最直观的时刻就在这里。 */
@@ -2058,11 +3217,17 @@ window.__ModuleLoader__.load({
        * 本层涂浮层档差值（再多 +0.02 的菜单可读性补偿），
        * 颜色预补偿穿过列的 base 稀释还原成 overlay 色。
        * 🔧 2026-10-22：fog 不再硬编码 0 —— 用户报"浮层浓度调了没反应"，
-       * 其中一条原因就是菜单/对话框无视 fog 滑块。 */
+       * 其中一条原因就是菜单/对话框无视 fog 滑块。
+       * 🔧 2026-10-23：`glassPanelOpacity` 给了值就**直接用它**（独立档），
+       * 否则走原来的浮层档。这里是「要读字」的地方，用户常常需要单独拉高。 */
       const overlayColor = surf.overlay || surf.layer2 || surf.base
       if (overlayColor) {
         const menuFog = Math.max(0, Math.min(1, parsePercent(s.glassFog, 0, 40, 16) / 40))
-        const menuAlpha = glassDeltaAlpha(alpha, Math.min(1, glassFloatTarget(alpha, menuFog) + 0.02))
+        const panelOverride = glassPanelAlpha(s)
+        const menuTarget = panelOverride === null
+          ? Math.min(1, glassFloatTarget(alpha, menuFog, s) + 0.02)
+          : panelOverride
+        const menuAlpha = glassDeltaAlpha(alpha, menuTarget)
         lines.push(g + '[role="dialog"],'
           + g + '[role="menu"],'
           + g + '[role="listbox"],'
@@ -2188,8 +3353,8 @@ window.__ModuleLoader__.load({
         * 拆成独立规则：pre、pre code（行间 code 完全不碰，见上）。 */
       lines.push(g + 'pre{'
         + 'background-color:' + hexToRgba(
-          glassSurfaceColor(centerColor, codeSurface, alpha, glassComposite(alpha, glassSolidAlpha(alpha))),
-          glassSolidAlpha(alpha)) + ' !important}')
+          glassSurfaceColor(centerColor, codeSurface, alpha, glassComposite(alpha, glassSolidAlpha(alpha, s))),
+          glassSolidAlpha(alpha, s)) + ' !important}')
       /* pre 里的 code 不再自铺一层（底色由 pre 承担，否则叠两次）。 */
       lines.push(g + 'pre code{'
         + 'background:transparent !important;'
@@ -2266,7 +3431,10 @@ window.__ModuleLoader__.load({
         *    更下面是已糊的壁纸层）—— 见下方 2026-10-22 的包含块教训。 */
       const inputColor = surf.bubble || surf.hover || surf.layer1 || surf.base
       const inputFogRatio = Math.max(0, Math.min(1, parsePercent(s.glassFog, 0, 40, 16) / 40))
-      const inputAlpha = glassFloatAlpha(alpha, inputFogRatio)
+      /* 🔧 2026-10-23：输入卡浓度可独立调（glassComposerBlur 字段在我们这里
+       * 管的是浓度，不是模糊 —— 原因见 glassComposerBlurPx 的注释：
+       * 我们做了硬裁，卡片背后没有文字可糊）。 */
+      const inputAlpha = glassComposerAlpha(s, glassFloatAlpha(alpha, inputFogRatio, s))
       /* 🔧 2026-10-22（dsh-theme-endfield 的 glass.md 实测教训，正是这张卡）：
        * **不加 backdrop-filter** —— filter 让卡片成为 fixed 后代的包含块，
        * 上游因此踩了"发送按钮 tooltip 坐标错乱 + ResizeObserver 抖动"。
@@ -2332,7 +3500,7 @@ window.__ModuleLoader__.load({
        * 覆盖它不会碰 DOM 结构、不会与哈希类名冲突、宿主所有引用者一起生效。
        * 之前几轮失败的根因之一就是在 DOM 上硬贴选择器 —— 既漏层又容易崩。 */
       const fog = parsePercent(s.glassFog, 0, 40, 16) / 100
-      const tokenLines = glassTokenDecls(surf, isDark, alpha, fog)
+      const tokenLines = glassTokenDecls(surf, isDark, alpha, fog, s)
       if (tokenLines.length > 0) {
         /* 深浅两套都写：DSH 的深色块特异性更高，只写裸 body 会被压过去。 */
         /* ⚠️ 必须以 } 收尾。曾漏掉闭括号：本行起把后面的文字提亮块与压暗层
@@ -2438,9 +3606,18 @@ window.__ModuleLoader__.load({
        * 顺带解决 ❺：用户挑了「文件卡片颜色」(cardColor) 时，玻璃以它为
        * 基色派生 rgba —— 不再像以前那样被 body 级令牌无声覆盖。 */
       const cardFogRatio = Math.max(0, Math.min(1, fog / 0.4))
-      const cardFillA = glassFloatAlpha(alpha, cardFogRatio)
+      /* 🔧 2026-10-23：文件预览/改动卡片有独立浓度（glassPreviewOpacity）。
+       * 这几处要读 diff，用户把表面浓度拉低看壁纸时它们会一起糊掉；
+       * 为了看清它们去拉高表面浓度，又会把整个界面一起变实 —— 两个需求打架。
+       * 给了独立值就直接用它，否则走原来的浮层档。 */
+      const previewOverride = glassPreviewAlpha(s)
+      const cardFillA = previewOverride === null
+        ? glassFloatAlpha(alpha, cardFogRatio, s)
+        : glassDeltaAlpha(alpha, previewOverride)
       const cardHoverA = glassDeltaAlpha(alpha, Math.min(1,
-        glassFloatTarget(alpha, cardFogRatio) + 0.05))
+        (previewOverride === null
+          ? glassFloatTarget(alpha, cardFogRatio, s)
+          : previewOverride) + 0.05))
       const cardBase = HEX_PATTERN.test(String(s.cardColor || ''))
         ? s.cardColor
         : (surf.layer2 || surf.base)
@@ -2461,6 +3638,141 @@ window.__ModuleLoader__.load({
         lines.push(g + '.' + target.defClass + '{'
           + target.varName + ':' + hexToRgba(cardFillAdj, cardFillA) + ' !important;'
           + hoverVar + ':' + hexToRgba(cardHoverAdj, cardHoverA) + ' !important}')
+      }
+
+      /* ⑦ 浮层改实心（2026-10-23 第三轮，默认关）。
+       *
+       * ## 为什么需要单独一条
+       *
+       * 这类浮层是 `position:fixed` 的普通 `<div>`，**没有 role 属性**，
+       * 所以上面那组 `[role="dialog"]` / `[role="menu"]` 规则**压不到它们**。
+       * 它们又浮在正文之上、背后是活文字，半透明下只靠模糊挡不住 ——
+       * 用户看到的就是「字压字」。
+       *
+       * ## 三类浮层，三种底色来源（2026-10-23 修正）
+       *
+       * 从 app.asar 的宿主 CSS 实读，这三个是不同的东西，别当成一个：
+       *
+       *   ① `._card_38jqx_9`（HoverCard 气泡）
+       *      `--dsw-hovercard-bg: #2C2C2E; position:fixed; background:var(--dsw-hovercard-bg)`
+       *      ⚠️ **硬编码深色，不走任何 --dsw-alias-* 令牌** ——
+       *      所以我们所有令牌级覆盖都碰不到它，只能直接压选择器。
+       *   ② `._preview_38jqx_52`（悬停文件预览）
+       *      `background: var(--dsw-alias-bg-layer-1)` —— 走令牌，会被令牌层改，
+       *      但它自己是独立元素，仍然需要单独钉实。
+       *   ③ `._float_6nhg2_156`（dockkit 浮层容器）
+       *      `background: var(--dsw-alias-bg-layer-2)`
+       *
+       * 第一版只匹配了 `_float_` / `_preview_`，漏掉 `_card_` ——
+       * 而用户截图里那个黑底浮层正是 `_card_`（硬编码色，最不该漏的一个）。
+       *
+       * ## 为什么用实色而不是「更高的 alpha」
+       *
+       * 这类浮层是**瞬态**的（悬停出现），用户在里面是要读内容的，
+       * 不是看壁纸的。所以直接钉成不透明，而不是调一个「稍微实一点」的
+       * 中间值 —— 中间值仍然是字压字。
+       *
+       * ## 选择器为什么用子串匹配
+       *
+       * 类名是 `<哈希>_<局部名>_<序号>`，哈希每次构建都变、局部名稳定
+       * （与 markdown 那套同一个约定）。所以匹配局部名，不做全树扫描。
+       *
+       * ⚠️ `_card_` 是**通用局部名**，宿主里多个模块都用它（消息卡片、
+       * 计划卡片…）。所以这里**不能**光写 `[class*="_card_"]` ——
+       * 那会把正文里的卡片一起钉实。必须限定在 HoverCard 那个模块的
+       * 特征上：`._card_38jqx_9` 是唯一带 `--dsw-hovercard-bg` 的。
+       * 用 `[class*="_card_"][style*="hovercard"]` 匹配不到（变量在类里，
+       * 不在 style 属性上），所以走「变量定义在类上」这条路：
+       * 直接覆盖 `--dsw-hovercard-bg` 这个变量本身。
+       */
+      if (s.glassSolidFloats === 'on') {
+        /* 底色用当前主题的实色：深色取 layer2（比正文列高一档），
+         * 浅色取 layer1（比白底稍暗，有卡片感）。 */
+        const solidFloat = isDark
+          ? (surf.layer2 || surf.base || '#2A323B')
+          : (surf.layer1 || surf.base || '#F5F6F7')
+        lines.push(g + '[class*="_float_"],'
+          + g + '[class*="_preview_"]{'
+          + 'background-color:' + solidFloat + ' !important;'
+          + 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}')
+        /* ① HoverCard 气泡：覆盖它自己的**硬编码**变量。
+         *
+         * ⚠️ **不能写在 body 上**。宿主把 `--dsw-hovercard-bg` 声明在
+         * `._card_38jqx_9{…}` 这个类**自己**身上，而 CSS 自定义属性一旦
+         * 元素有本地声明就**不从 body 继承** —— body 上的 `!important`
+         * 只作用于 body 自己的计算值，传不下去。
+         * 这条本项目在卡片填充（`--changes-fill`）上已经踩过一次，
+         * 修法一样：直接压到定义变量的那个类上。
+         *
+         * ⚠️ 也**不能**写 `[class*="_card_"]`：那是通用局部名，宿主里
+         * 消息卡片/计划卡片都用它，会把正文卡片一起钉实。
+         *
+         * 所以走运行时检测（`detectFloatTargets()`，与卡片检测同一套扫描
+         * 逻辑）：按变量名找到定义它的真实哈希类，再按类名写覆盖。
+         * 哈希变了自动跟上，不写死。 */
+        const floatTargets = Array.isArray(floatTargetsForSheet) ? floatTargetsForSheet : []
+        for (const defClass of floatTargets) {
+          if (typeof defClass !== 'string' || defClass === '') continue
+          lines.push(g + '.' + defClass + '{'
+            + '--dsw-hovercard-bg:' + solidFloat + ' !important}')
+        }
+      }
+
+      /* ⑧ diff 区域改实心（2026-10-23 第三轮，默认关）。
+       *
+       * ## 为什么 diff 会看不见
+       *
+       * 宿主的 diff 行底色是**变量**，而且这两个变量本身就带 alpha：
+       *   `--dsw-alias-code-diff-added: #99C7941F`（0x1F ≈ 12%）
+       *   `--dsw-alias-code-diff-deleted: #EC5F671F`
+       * 玻璃模式下卡片本身也半透明，12% 的淡绿/淡红压在透明底上几乎不可辨。
+       *
+       * ## 改法：只把这两个变量换成**不透明**的同色相实色
+       *
+       * 保留色相与语义（绿=增、红=删），只把 alpha 拉满。
+       * ⚠️ **不动卡片、不动代码块** —— 用户明确说过只动 diff 区域。
+       * 所以这里只改变量值，不写任何容器选择器。
+       *
+       * 深浅两套：深色主题下用更暗的实色（否则亮绿行在暗背景上刺眼），
+       * 浅色主题下用更亮的实色。 */
+      if (s.glassSolidDiff === 'on') {
+        const added = isDark ? '#1E3A2A' : '#DCF3E4'
+        const deleted = isDark ? '#3A2026' : '#FBE0E3'
+        lines.push(g + 'body{'
+          + '--dsw-alias-code-diff-added:' + added + ' !important;'
+          + '--dsw-alias-code-diff-deleted:' + deleted + ' !important}')
+      }
+
+      /* ⑥ 文字保护（2026-10-23，可选、默认关）。
+       *
+       * 为什么需要：壁纸铺满整窗，侧栏/顶栏/输入框里的字都压在照片上。
+       * 最自然的诱惑是「把表面调实一点」—— 但那等于替用户改掉了他调好的
+       * 透明度（有人就是要把表面压到 5%、模糊调到 0 来看壁纸）。
+       * 所以这里**背景一个像素都不动**，只做两件事：
+       *
+       *   ① text-shadow 光晕：与明暗同向（浅色白晕、深色黑晕），
+       *      可继承属性，写在 body 上就覆盖全部文字（含 portal 到 body 的浮层）。
+       *      1px 实边 + 2px 柔边 + 3px 更柔，是「描边」不是「发光」——
+       *      再大就会让字看着发虚，反而不清楚。
+       *   ② 把次要文字 token 加深/提亮一档：光晕在浅灰字上是**帮倒忙**
+       *      （灰字压在白晕上对比度反而更低），必须把字本身改深。
+       *      只改颜色的明度，不碰字号字重 → 不会引起重排。
+       *      内联 SVG 图标用 currentColor，会跟着一起变清楚。
+       *
+       * ⚠️ 这条规则里**不许出现任何 background** —— 靠加底色「修」可读性
+       * 会直接违背用户调好的透明度。测试把这条钉成了回归断言。
+       */
+      if (s.glassGuard === 'on') {
+        const shadow = isDark ? GLASS_GUARD_SHADOW_DARK : GLASS_GUARD_SHADOW_LIGHT
+        /* 次要文字：浅色往下压深、深色往上提亮（同一套 bluish 调色板）。 */
+        const secondary = isDark
+          ? { s: '--dsw-static-neutral-bluish-200', t: '--dsw-static-neutral-bluish-300', c: '--dsw-static-neutral-bluish-400' }
+          : { s: '--dsw-static-neutral-bluish-750', t: '--dsw-static-neutral-bluish-700', c: '--dsw-static-neutral-bluish-700' }
+        lines.push(g + 'body{'
+          + 'text-shadow:' + shadow + ';'
+          + '--dsw-alias-label-secondary:var(' + secondary.s + ');'
+          + '--dsw-alias-label-tertiary:var(' + secondary.t + ');'
+          + '--dsw-alias-label-caption:var(' + secondary.c + ')}')
       }
 
       return lines.join('\n')
@@ -2613,18 +3925,31 @@ window.__ModuleLoader__.load({
        * veil 现在合成进背景层自身的 background-image（见 glassVeilColor），
        * paint 时读 wallpaperVeil —— 顺序反了会画一帧没压暗的底。
        * 玻璃关掉时清空，teardown 重绘不会带上残留。
-       * ❸：veil 默认与表面浓度联动；glassVeil 设置可切固定档或关。 */
+       * ❸：veil 默认与表面浓度联动；glassVeil 设置可切固定档或关。
+       *
+       * 🔧 2026-10-23（用户报「光晕比预览差好多」）：**渐变模式下 auto 档不压暗**。
+       *
+       * veil 的目的是「亮照片下文字不发灰」—— 它给**照片壁纸**压暗是对的。
+       * 但渐变背景是我们自己生成的，本来就落在暗色区间，再压 31% 就是纯损失：
+       * 光晕是低对比的柔和色雾，压掉三分之一后几乎看不见。
+       * 实测对比（深色 + 默认 3 光源）：不压暗时光晕清晰可辨，压暗后发灰发闷。
+       *
+       * 只改 auto 档：用户手动设了 20/35/50 说明他**明确想要更暗**，尊重原意。
+       * 壁纸模式行为完全不变。 */
+      const veilMode = state && state.glassBackground === 'gradient' && state.glassVeil === 'auto'
+        ? '0'
+        : (state && state.glassVeil)
       wallpaperVeil = on
         ? glassVeilColor(surfaces, isDark,
           parsePercent(state && state.glassTint, 0, 100, 65) / 100,
-          state && state.glassVeil)
+          veilMode)
         : ''
 
       /* ⚠️ 顺序：**先建背景层，再开总闸**。
        * 反过来的话，一旦建层失败（DOM 异常），总闸已经打开、
        * 容器全透明却没有背景 → 露出 Electron 窗口黑底，就是「主面板纯黑」。
        * 先建层能保证「开了就一定有东西可看」。 */
-      const blurValue = parsePercent(state && state.glassBlur, 0, 40, 16)
+      const blurValue = parsePercent(state && state.glassBlur, 0, 80, 16)
       const satValue = parsePercent(state && state.glassSat, 0, 200, 120)
       /* 🔧 等高线模式：背景层里铺的是 canvas（强调色细线），不是壁纸图 ——
        * 壁纸 fetch 停掉、壁纸层也不加 blur（线本身就是 1px 高频细节，
@@ -2637,10 +3962,20 @@ window.__ModuleLoader__.load({
         wallpaperStatus = 'fallback' /* 不 fetch 壁纸；diag 走 contour 自己的语义 */
         diag.glass = 'contour'
       } else if (on && state.glassBackground !== 'gradient') {
-        loadWallpaper(String(state.glassWallpaperPath || ''))
+        /* 签名 = 本地路径 + NUL + URL：任一变化都要重新拉。 */
+        loadWallpaper(String(state.glassWallpaperPath || '') + '\u0000' + String(state.glassWallpaperUrl || ''))
       } else if (on) {
         wallpaperStatus = 'fallback'
         diag.glass = 'gradient'
+      }
+      /* 🔧 2026-10-23 裁剪：只改裁剪框（不改路径）时 loadWallpaper 会因为
+       * 签名没变而早退、不会重新 fetch —— 所以这里补一次裁剪重画。
+       * 壁纸还在 fetch 中（status 不是 ready）就跳过：它完成时会自己调
+       * applyWallpaperCrop（见 loadWallpaper 的 then 分支）。 */
+      if (!contourMode && on && wallpaperStatus === 'ready') {
+        applyWallpaperCrop()
+        /* 跟随图片明暗：裁剪区域变了要重测亮度（内部有签名守卫，不会重复解码）。 */
+        applyGlassAutoTone()
       }
       syncContourLayer(contourMode)
 
@@ -2656,7 +3991,7 @@ window.__ModuleLoader__.load({
        * 上（body 级覆盖会被元素本地声明挡住，见 buildGlassSheet 一节）。
        * applyNowOnce 里 syncCardSheet 先于本函数跑，检测结果是最新的；
        * 懒加载没跟上的组由 syncCardSheet 的重试循环再次 applyNow 重建。 */
-      const css = on ? buildGlassSheet(state, surfaces, isDark, cardTargets) : ''
+      const css = on ? buildGlassSheet(state, surfaces, isDark, cardTargets, floatTargets) : ''
       if (css === '') {
         if (glassEl !== null) {
           try {
@@ -4278,25 +5613,8 @@ window.__ModuleLoader__.load({
       contourOverBudget = 0
       contourWorkerStepOverride = 0
       contourWorkerOverBudget = 0
-      if (contourWorker !== null) {
-        const size = contourLastSize
-        if (size === null) return false
-        contourWorkerBusy = true
-        contourWorkerMsg({
-          op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr,
-          step: 0, /* 0 = 起步档重测 */
-          seed: contourSeed,
-          phase: contourPhase,
-          color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
-          smooth: contourSmoothPasses(),
-          look: contourLookNow(),
-        })
-        return true
-      }
-      if (contourEngine === null || contourLastSize === null) return false
-      contourEngine.setSeed(contourSeed)
-      contourScheduleBuild(0)
-      return true
+      /* 两条后端共用一条重建入口（worker 发 rebuild 带 seed，主线程 setSeed 后走阶梯）。 */
+      return contourRequestRebuild(0, contourSeed)
     }
 
     function contourScheduleBuild(delayMs) {
@@ -4350,9 +5668,7 @@ window.__ModuleLoader__.load({
 
     /** 当前强调色（按深浅外观取值），供等高线描边用。 */
     function contourAccentHex() {
-      const key = state && typeof state.accent === 'string' && Object.prototype.hasOwnProperty.call(ACCENTS, state.accent)
-        ? state.accent : 'teal'
-      const entry = ACCENTS[key]
+      const entry = resolveAccent(state)
       return (resolvedScheme() !== 'light' ? entry.dark : entry.light)
     }
 
@@ -4368,17 +5684,26 @@ window.__ModuleLoader__.load({
       /* 动画态 1 遍 Chaikin、静止态 2 遍（见 contourSmoothPasses）。 */
       const smooth = contourSmoothPasses()
       if (contourWorker !== null) {
+        /* 🔧 2026-10-23（真 bug）：frame/recolor **必须带上 look**。
+         * worker 侧只在 `if (m.look) engine.setLook(m.look)` 才更新档位，
+         * 所以漏了 look 就等于「档位只在 init/rebuild 那一刻生效」——
+         * 用户拖「密集程度 / 起伏 / 漂移 / 粗细」时主线程确实重画了一帧，
+         * 但 worker 用的还是旧 look，屏幕上看不出任何变化。
+         * 这正是上一版想修的"改了要重新加载才生效"，只是当时只修了主线程路径。
+         * 与主线程路径（下面 contourEngine.setLook(contourLookNow())）保持一致：
+         * 每帧推一次，look 是纯值对象，成本就是一次小对象分配。 */
+        const look = contourLookNow()
         if (contourWorkerBusy) {
           /* 合帧里优先保留带相位的 frame；纯重画用 pending 槽。 */
           contourWorkerPending = forceGeometry
-            ? {op: 'frame', phase: contourPhase, color, smooth}
-            : {op: 'recolor', color, smooth}
+            ? {op: 'frame', phase: contourPhase, color, smooth, look}
+            : {op: 'recolor', color, smooth, look}
           return
         }
         contourWorkerBusy = true
         contourWorkerMsg(forceGeometry
-          ? {op: 'frame', phase: contourPhase, color, smooth}
-          : {op: 'recolor', color, smooth})
+          ? {op: 'frame', phase: contourPhase, color, smooth, look}
+          : {op: 'recolor', color, smooth, look})
         return
       }
       if (contourEngine === null) return
@@ -4465,7 +5790,15 @@ window.__ModuleLoader__.load({
      *  现在这些档位全进签名，一变就走重画/重建。 */
     function contourLookSig() {
       const l = contourLookNow()
+      /* 🔧 2026-10-23（真 bug）：`labels` / `labelBg` 也必须进签名。
+       * 它们由 contourLookNow() 产出、被引擎 drawTo 消费（`if (look.labels)`），
+       * 但上一版漏进了签名 —— 于是切「高程标注」时 sig 不变、
+       * contourApplySwitches 第 4524 行直接 return，既不重画也不重建，
+       * 开关点了完全没反应（主线程路径同样坏）。
+       * ⚠️ 顺序：`maxCells` 必须仍在第 4 段（index 3）—— contourApplyLook
+       * 靠 split('|')[3] 判断"要不要重建"，新增项只能往后追加。 */
       return l.relief + '|' + l.drift + '|' + l.levelsWanted + '|' + l.maxCells + '|' + l.lineWidth
+        + '|' + (l.labels ? '1' : '0') + '|' + l.labelBg
     }
 
     /** 上一次生效的观感签名（用来判断"网格上限变了才需要重建"）。 */
@@ -4476,12 +5809,13 @@ window.__ModuleLoader__.load({
     /** 观感档位变了：能只重画的就重画，非重建不可的（密度/网格）才重建。
      *
      *  分两类（省掉不必要的几十毫秒 build）：
-     *   · levels / relief / drift / lineWidth → 只影响求值与描边 → 重画一帧；
+     *   · levels / relief / drift / lineWidth / labels → 只影响求值与描边 → 重画一帧；
      *   · maxCells（地形密度）→ 决定网格 step → 必须 build。
      *  重建走防抖：拖滑块时连续触发只建最后一次。 */
     function contourApplyLook() {
       const l = contourLookNow()
-      const sig = l.relief + '|' + l.drift + '|' + l.levelsWanted + '|' + l.maxCells + '|' + l.lineWidth
+      /* 与 contourLookSig() 同一个口径（避免两处手写签名漂移）。 */
+      const sig = contourLookSig()
       if (sig === contourLookSigApplied) return
       const prevMax = contourLookSigApplied.split('|')[3]
       contourLookSigApplied = sig
@@ -4497,14 +5831,54 @@ window.__ModuleLoader__.load({
           contourStepNow = 0
           contourOverBudget = 0
           contourLastField = -1
-          contourScheduleBuild(0)
+          /* 🔧 2026-10-23（真 bug）：这里原来只调 contourScheduleBuild(0)，
+           * 而它在 `contourEngine === null` 时直接 return —— worker 模式下
+           * contourEngine 恒为 null（引擎活在 worker 里），于是**改「地形密度」
+           * 什么都不发**，而 contourLookSigApplied 已在上面被更新成新签名，
+           * 之后也不会再重试。净效果：密度滑块在 worker 后端下完全失效。
+           * 现在按后端分流：worker 发 rebuild 消息，主线程走阶梯重建。 */
+          contourRequestRebuild(0)
         }, CONTOUR_LOOK_DEBOUNCE)
         if (contourLookRebuildTimer && typeof contourLookRebuildTimer.unref === 'function') contourLookRebuildTimer.unref()
         return
       }
-      /* 只需重画：extract 会按新层数/起伏/漂移重算，draw 会用新粗细。 */
+      /* 只需重画：extract 会按新层数/起伏/漂移重算，draw 会用新粗细与标注。 */
       contourLastField = -1
       contourRefresh(true)
+    }
+
+    /** 按当前后端请求一次地形重建（step 0 = 从起步档重新爬阶梯）。
+     *
+     *  worker 活着：画布控制权已转移，主线程碰不了它 → 只能发 rebuild 消息，
+     *  并把 look/seed/尺寸一起带上（worker 里算，无长任务风险）。
+     *  否则走主线程阶梯（contourScheduleBuild）。
+     *
+     *  @param {number} step - 目标网格步长；0 = 从起步档重新测画质。
+     *  @param {number} [seed] - 给了就换种子（「换一张地形」用）。
+     */
+    function contourRequestRebuild(step, seed) {
+      if (!contourActive) return false
+      const hasSeed = typeof seed === 'number' && Number.isFinite(seed)
+      if (contourWorker !== null) {
+        const size = contourLastSize
+        if (size === null) return false
+        const msg = {
+          op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr,
+          step: typeof step === 'number' ? step : 0,
+          phase: contourPhase,
+          color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
+          smooth: contourSmoothPasses(),
+          look: contourLookNow(),
+        }
+        if (hasSeed) msg.seed = seed
+        contourWorkerBusy = true
+        contourWorkerMsg(msg)
+        return true
+      }
+      if (contourEngine === null || contourLastSize === null) return false
+      if (hasSeed) contourEngine.setSeed(seed)
+      contourScheduleBuild(typeof step === 'number' ? step : 0)
+      return true
     }
 
     /** 动画开关（reduced-motion / 页面隐藏）与配色、观感签名的对账。 */
@@ -5676,6 +7050,27 @@ function makeColorizer(scheme) {
     ])
 
     /**
+     * HoverCard 浮层的检测目标（2026-10-23）。
+     *
+     * 与 CARD_TARGETS **刻意分开**：那四个是正文里的卡片，走「卡片填充」
+     * 那套浓度逻辑（`glassPreviewOpacity` / `glassFloat`）；
+     * 这一个是 `position:fixed` 的**浮层**，走「改实心」开关
+     * （`glassSolidFloats`）—— 两者语义完全不同，混在一张表里会让
+     * 「预览浓度」滑块意外改到浮层底色。
+     *
+     * 它需要检测的原因是：底色是**硬编码**的
+     * `._card_38jqx_9{--dsw-hovercard-bg:#2C2C2E}`，不走任何
+     * `--dsw-alias-*` 令牌，所以令牌级覆盖碰不到；而类名哈希每次构建都变
+     * （`38jqx` 只是本次的），不能写死。
+     *
+     * 实测宿主里这个变量**只定义一次、只消费一次**，都在同一个类上，
+     * 所以按变量名扫出来的类名就是唯一正确的目标。
+     */
+    const FLOAT_TARGETS = Object.freeze([
+      Object.freeze({ varName: '--dsw-hovercard-bg', defClass: '_card' }),
+    ])
+
+    /**
      * 生成文件卡片底色的覆盖规则。
      *
      * 背景：文件卡片的底色不走 `--dsw-alias-*` 令牌，而是定义在**哈希类**上的
@@ -5726,6 +7121,18 @@ function makeColorizer(scheme) {
      * @returns {Array<{defClass:string,varName:string,hoverVar:string}>} 检测到的目标组。
      */
     function detectCardTargets() {
+      return detectTargetsFor(CARD_TARGETS)
+    }
+
+    /**
+     * 通用检测：扫描所有样式表，找出**定义了 `targets` 里某个变量**的规则，
+     * 取它的类选择器，返回 `{defClass, varName, hoverVar}`。
+     *
+     * @param {ReadonlyArray<{varName:string,defClass:string,hoverVar?:string}>} targets -
+     *   目标表（CARD_TARGETS / FLOAT_TARGETS）。
+     * @returns {Array<{defClass:string,varName:string,hoverVar:string}>} 检测到的目标组。
+     */
+    function detectTargetsFor(targets) {
       if (typeof document === 'undefined') return []
       /* CSSStyleSheet 是类数组（没有 Symbol.iterator），必须用下标遍历 ——
          for...of 在真实浏览器和测试替身里都会抛。 */
@@ -5752,24 +7159,56 @@ function makeColorizer(scheme) {
           const style = rule.style
           const canQuery = style !== undefined && style !== null && typeof style.getPropertyValue === 'function'
           const selector = rule.selectorText || ''
-          for (const target of CARD_TARGETS) {
+          for (const target of targets) {
             if (found.some((entry) => entry.varName === target.varName)) continue
             const has = canQuery
               ? style.getPropertyValue(target.varName) !== ''
               /* 老浏览器 / 测试替身：退回文本匹配。 */
               : (rule.cssText || '').includes(target.varName)
             if (!has) continue
-            /* 类名后缀是宿主 CSS Module 的约定（_card / _root），但前缀哈希每次构建都变。
-               所以只固定后缀，不固定前缀。 */
+            /* 类名匹配。**宿主有两种 CSS Module 命名格式**（2026-10-23 实测）：
+             *
+             *   格式 A：`_<局部名>_<哈希>_<序号>` —— `_card_38jqx_9`
+             *           当前构建的 320 个类**全是这个格式**
+             *   格式 B：`<哈希>_<局部名>` —— `kuvljq_card`
+             *           旧构建的格式（本项目早期代码里写的就是它）
+             *
+             * 原正则 `\\.([a-zA-Z0-9]+_card)\\b` 只能匹配格式 B，且 `\b`
+             * 在格式 A 上还会因为 `_` 是单词字符而失效 —— 双重失效。
+             *
+             * 现在两种都匹配：
+             *   · 先试「局部名在前」：`_card_<哈希>_<序号>` → 取 `_card_38jqx_9`
+             *   · 再试「哈希在前」：`<哈希>_card` → 取 `kuvljq_card`
+             * `(?![\\w-])` 保证不是更长局部名的前缀（如 `_cardHeader`）。 */
             const suffix = target.defClass
-            const match = new RegExp('\\.([a-zA-Z0-9]+' + suffix + ')\\b').exec(selector || rule.cssText || '')
-            if (match !== null) {
-              found.push({ defClass: match[1], varName: target.varName, hoverVar: target.hoverVar })
+            const text = selector || rule.cssText || ''
+            const localFirst = new RegExp('(\\._' + suffix.slice(1) + '_[a-z0-9]+_\\d+)(?![\\w-])').exec(text)
+            const hashFirst = new RegExp('\\.([a-zA-Z0-9]+' + suffix + ')(?![\\w-])').exec(text)
+            const picked = localFirst !== null ? localFirst[1] : (hashFirst !== null ? '.' + hashFirst[1] : null)
+            if (picked !== null) {
+              found.push({
+                defClass: picked.slice(1), /* 去掉开头的点 */
+                varName: target.varName,
+                hoverVar: target.hoverVar,
+              })
             }
           }
         }
       }
       return found
+    }
+
+    /**
+     * 检测 HoverCard 浮层（`--dsw-hovercard-bg`）的真实哈希类名。
+     *
+     * 复用 detectCardTargets 的扫描逻辑，只是换一张目标表 ——
+     * 两者都是「宿主把底色声明在元素自己的类上」，检测方式完全一致，
+     * 但**用途不同**（浮层改实心 vs 卡片浓度），所以结果分开用。
+     *
+     * @returns {string[]} 定义 `--dsw-hovercard-bg` 的真实类名（通常 1 个）。
+     */
+    function detectFloatTargets() {
+      return detectTargetsFor(FLOAT_TARGETS).map((entry) => entry.defClass)
     }
 
     /**
@@ -5831,6 +7270,32 @@ function makeColorizer(scheme) {
       soft: Object.freeze({ t: 0.18, label: '提亮', hint: '默认；全部角色对比度上升' }),
       strong: Object.freeze({ t: 0.32, label: '更亮', hint: '最亮一档，删除线也达 4.5:1' }),
     })
+
+    /**
+     * HSL → hex。给「随机强调色」用。
+     *
+     * @param {number} h - 色相 0–360。
+     * @param {number} s - 饱和度 0–100。
+     * @param {number} l - 明度 0–100。
+     * @returns {string} `#rrggbb`。
+     */
+    function hslToHex(h, s, l) {
+      const hue = ((h % 360) + 360) % 360
+      const sat = Math.max(0, Math.min(100, s)) / 100
+      const light = Math.max(0, Math.min(100, l)) / 100
+      const c = (1 - Math.abs(2 * light - 1)) * sat
+      const x = c * (1 - Math.abs(((hue / 60) % 2) - 1))
+      const m = light - c / 2
+      const rgb = hue < 60 ? [c, x, 0]
+        : hue < 120 ? [x, c, 0]
+          : hue < 180 ? [0, c, x]
+            : hue < 240 ? [0, x, c]
+              : hue < 300 ? [x, 0, c]
+                : [c, 0, x]
+      return '#' + rgb
+        .map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0'))
+        .join('')
+    }
 
     /**
      * 把 hex 颜色朝白色插值（线性 sRGB 空间，通道各自向 255 靠拢）。
@@ -5907,7 +7372,7 @@ function makeColorizer(scheme) {
     function resolveProseTokens(state) {
       const custom = parseCustom(state && state.custom)
       const base = withOverrides(PALETTE_BASE, custom.palette)
-      const a = ACCENTS[state && state.accent] || ACCENTS.teal
+      const a = resolveAccent(state)
       const t = (PROSE_BOOSTS[state && state.proseBoost] || PROSE_BOOSTS.off).t
       const p = t > 0
         ? {
@@ -6041,6 +7506,31 @@ function makeColorizer(scheme) {
 .dmt-slotHex{font-family:var(--ds-font-family-code);font-size:11px;line-height:15px;color:var(--dsw-alias-label-caption);text-transform:uppercase;border:none;background:transparent;padding:0;width:100%;color:var(--dsw-alias-label-caption);outline:none}
 .dmt-slotHex:focus{color:var(--dsw-alias-label-primary)}
 .dmt-slotReset{border:none;background:transparent;cursor:pointer;color:var(--dsw-alias-label-caption);font-size:14px;line-height:1;padding:2px 4px;border-radius:var(--dsw-radius-xs);flex:none}
+/* 背景地面的光源 / 色带列表（2026-10-23 第五轮） */
+.dmt-lightList{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+/* ⚠️ 必须纵向：光源行是「第一行颜色+强度 / 第二行 X+Y」两行结构。
+   写成 display:flex（默认横向）会把 .dmt-lightTop 和 .dmt-lightXY 并排，
+   于是所有控件挤成一坨 —— 2026-10-23 复现过两次。 */
+.dmt-lightRow{display:flex;flex-direction:column;gap:0;padding:5px 8px;background:var(--dsw-alias-bg-layer-2);border:.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm)}
+.dmt-lightIdx{font-size:10px;color:var(--dsw-alias-label-caption);min-width:12px;flex:none}
+.dmt-lightRow .dmt-colorInput{flex:none;width:24px;height:22px;padding:0;border:.5px solid var(--dsw-alias-border-l3);border-radius:4px;background:transparent;cursor:pointer}
+.dmt-lightRow .dmt-colorInput::-webkit-color-swatch-wrapper{padding:0}
+.dmt-lightRow .dmt-colorInput::-webkit-color-swatch{border:none;border-radius:3px}
+.dmt-lightRow .dmt-sliderWrap{flex:1;min-width:0}
+.dmt-lightHex{font-family:var(--ds-font-family-code);font-size:11px;color:var(--dsw-alias-label-caption);text-transform:uppercase;flex:1;min-width:0}
+.dmt-lightActions{display:flex;gap:6px;margin-top:2px}
+/* 色带行只有三个元素（序号/色块/hex），保持横向一行更紧凑。 */
+.dmt-lightRow.dmt-bandRow{flex-direction:row;align-items:center;gap:7px}
+/* 光源行：两行布局（2026-10-23，修溢出）
+   第一行：序号 + 色块 + 强度；第二行：X / Y 两个 compact 滑块 */
+.dmt-lightTop{display:flex;align-items:center;gap:7px;min-width:0}
+.dmt-lightTop .dmt-sliderRow{flex:1;min-width:0}
+.dmt-lightTop .dmt-slider{width:auto;flex:1;min-width:60px}
+.dmt-lightXY{display:flex;align-items:center;gap:6px;margin-top:5px;padding-left:19px;min-width:0}
+.dmt-lightXY .dmt-sliderRowCompact{flex:1;min-width:0;gap:5px}
+.dmt-lightXY .dmt-sliderRowCompact .dmt-slider{width:auto;flex:1;min-width:40px;height:16px}
+.dmt-lightXY .dmt-sliderRowCompact .dmt-sliderValue{min-width:30px;font-size:11px}
+.dmt-lightXYLabel{font-size:10px;color:var(--dsw-alias-label-caption);flex:none;min-width:9px}
 .dmt-slotReset:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .dmt-warn{display:inline-flex;align-items:center;gap:5px;font-size:11px;line-height:16px;color:var(--dsw-alias-state-warn-primary)}
 /* 配色方案 */
@@ -6510,6 +8000,13 @@ function makeColorizer(scheme) {
     /** 卡片覆盖样式表元素 + 检测到的卡片类名（null = 还没检测到，稍后重试）。 */
     let cardEl = null
     let cardTargets = undefined
+    /**
+     * HoverCard 浮层的真实类名（`--dsw-hovercard-bg` 的定义处）。
+     *
+     * 与 cardTargets 分开：那个走「卡片浓度」，这个走「浮层改实心」。
+     * 同样要等宿主样式表进 DOM 才检测得到，所以也在 syncCardSheet 里顺带刷新。
+     */
+    let floatTargets = undefined
     let cardRetryTimer = null
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
@@ -6581,6 +8078,20 @@ function makeColorizer(scheme) {
           cardTargets = mergeCardTargets(cardTargets, detectCardTargets())
           have = cardTargets.length
         }
+      }
+      /* 🔧 2026-10-23（真 bug）：浮层检测**不能**放在上面那个
+       * `if (have < total)` 里面。
+       *
+       * 那个守卫的语义是「卡片目标还没找齐才重扫」，而卡片目标（4 个）
+       * 通常在启动几秒内就齐了 —— 一旦找齐，整块跳过，
+       * `detectFloatTargets()` 就**永远不跑**，floatTargets 恒为 undefined，
+       * 「浮层改实心」对 HoverCard 完全失效（用户实测：悬停浮层仍然透明）。
+       *
+       * 现在单独一段，用自己的「有没有找到」判定：没找到就每次 applyNow
+       * 都重试（浮层类名同样等宿主样式表进 DOM，但不受卡片进度影响）。 */
+      if (!Array.isArray(floatTargets) || floatTargets.length === 0) {
+        const foundFloats = detectFloatTargets()
+        if (foundFloats.length > 0) floatTargets = foundFloats
       }
       const css = buildCardSheet(state, cardTargets)
       const wanted = state.enabled !== 'off' && shouldApply() && css !== ''
@@ -7194,9 +8705,12 @@ function makeColorizer(scheme) {
      */
     function Slider(props) {
       const disabled = props.disabled === true
+      /* compact：给「一行里要塞多个滑块」的场景用（光源行的 X/Y）。
+       * 固定 132px 的默认宽度在 4 个控件并排时必然溢出。 */
+      const rowClass = props.compact === true ? 'dmt-sliderRow dmt-sliderRowCompact' : 'dmt-sliderRow'
       return h(
         'span',
-        { className: 'dmt-sliderRow' },
+        { className: rowClass },
         h('input', {
           type: 'range',
           className: 'dmt-slider',
@@ -7444,7 +8958,7 @@ function makeColorizer(scheme) {
       return [
         pick('surface.base', surface.base),
         pick('palette.fg', PALETTE_BASE.fg),
-        (ACCENTS[preset.accent] || ACCENTS.teal).dark,
+        resolveAccent(preset).dark,
         pick('palette.purple', PALETTE_BASE.purple),
         pick('palette.green', PALETTE_BASE.green),
       ]
@@ -7553,17 +9067,6 @@ function makeColorizer(scheme) {
         updateDraft({ proseColors: Object.keys(next).length === 0 ? '' : JSON.stringify(next) })
       }
       const resetProseColor = (key, token) => setProseColor(key, token, proseDerived[token].dark)
-
-      /* 预览容器的**局部**变量：草稿色只盖在预览子树上，全局令牌一个字节不动。
-         注入的样式表都写成 var(--dmt-*, 兜底)，所以容器内联变量天然优先。 */
-      const previewVars = { '--dmt-row-color': snapshot.rowColor, '--dmt-summary-color': snapshot.summaryColor }
-      /* 卡片底色：挑了色才覆盖预览的 --changes-fill / --deliverable-fill；
-         空串保持宿主默认观感。两种卡片共用同一个颜色。 */
-      if (HEX_PATTERN.test(snapshot.cardColor)) {
-        previewVars['--changes-fill'] = snapshot.cardColor
-        previewVars['--deliverable-fill'] = snapshot.cardColor
-      }
-      for (const slot of PROSE_COLOR_SLOTS) previewVars[slot.token] = proseEffective[slot.token].dark
 
       /* 草稿条：snapshot.draftFields 由 publish 合并进快照。 */
       const draftFields = Array.isArray(snapshot.draftFields) ? snapshot.draftFields : []
@@ -7733,44 +9236,1142 @@ function makeColorizer(scheme) {
           h(Switch, { on: snapshot.enabled !== 'off', label: '启用 ColorLab', onToggle: toggle('enabled') }),
         ),
 
-        /* 外观模式 */
+        /* ---- 玻璃界面（原「透明与壁纸」，2026-10-22 页面整理）----------- *
+         * 玻璃的原理：把一张背景铺进页面最底层，它就成了「画布内像素」，
+         * 上面的 backdrop-filter 才有东西可糊。只靠 CSS 糊不到桌面壁纸 ——
+         * 那张图在 Chromium 画布之外，永远采不到。
+         * 整理决策：核心五档常显（开关/来源/浓度/浮层/模糊），其余
+         *（压暗、饱和度、白雾、自选壁纸）收进「高级」；壁纸状态不再占
+         * 整行，改成来源行下面的一句动态副标题。 */
+        h(
+          GroupHead,
+          {
+            title: '玻璃界面',
+            sub: snapshot.glass === 'off'
+              ? '关闭状态 —— 打开后可调背景与浓度'
+              : status.glass === 'contour'
+                ? '等高线背景 · ' + (status.contour === 'worker'
+                  ? '独立线程渲染'
+                  : status.contour === 'main'
+                    ? '主线程渲染（worker 未起，已按低预算自动降档，滚动时暂停）'
+                    : '准备中…')
+                : status.glass === 'wallpaper'
+                  ? '壁纸已加载'
+                  : status.glass === 'gradient'
+                    ? (snapshot.glassBackground === 'gradient' ? '渐变背景' : '壁纸读取中／失败，暂用渐变')
+                    : '正在读取壁纸…',
+          },
+        ),
+
+        /* 玻璃界面：总开关。关掉即恢复完全不透明，且移除背景层。 */
         h(
           Row,
-          { title: '套用范围', hint: 'Mariana 是深色主题；浅色外观下可只做同色相提亮' },
+          {
+            title: '玻璃界面',
+            hint: '让面板、浮层与输入框变成半透明玻璃，透出背后的壁纸。关闭后恢复完全不透明。',
+          },
+          h(Switch, { on: snapshot.glass !== 'off', label: '玻璃界面', onToggle: toggle('glass') }),
+        ),
+
+        /* 背景来源：桌面壁纸 / 渐变 / 等高线。 */
+        h(
+          Row,
+          {
+            title: '背景来源',
+            hint: '「桌面壁纸」读取 Windows 当前壁纸；「渐变」用配色生成光斑；「等高线」程序生成地形线（移植自 dsh-theme-endfield）。取不到壁纸时自动用渐变。',
+          },
           h(Segmented, {
-            label: '套用范围',
-            value: snapshot.schemeMode,
-            options: OPTIONS.schemeMode,
-            onChange: setField('schemeMode'),
+            label: '背景来源',
+            value: snapshot.glassBackground,
+            options: OPTIONS.glassBackground,
+            onChange: setField('glassBackground'),
           }),
         ),
 
-        /* 背景变体 */
+        /* ===== 通用设置（所有背景来源都生效）=====
+         * 2026-10-23 重组：表面浓度 / 模糊 / 分层浓度 / 改实心
+         * 这些跟「用哪种壁纸」无关，所以收进一个折叠块。 */
+        h(
+          Fold,
+          {
+            label: '通用设置',
+            summary: '表面 ' + parsePercent(snapshot.glassTint, 0, 100, 65) + '%'
+              + ' · 模糊 ' + parsePercent(snapshot.glassBlur, 0, 80, 16) + 'px'
+              + ' · 浮层 +' + parsePercent(snapshot.glassFloat, 0, 40, 10) + '%',
+          },
+
+          /* 表面浓度：三列的 alpha。只在玻璃开启时可调。
+             🔧 玻璃滑块走「即时应用 + 防抖写盘」，不进草稿 —— 它们的效果
+             就在整个界面上，草稿反而"拖了看不到"（用户报）。 */
+          h(
+            Row,
+            {
+              title: '表面浓度',
+              hint: '三列的底色浓度。100% = 原生 Mariana；越低壁纸越明显，但主题色会被冲淡。建议 60–85。即时生效。',
+            },
+            h(Slider, {
+              label: '表面浓度',
+              min: 0,
+              max: 100,
+              value: parsePercent(snapshot.glassTint, 0, 100, 65),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassTint: String(next) }),
+            }),
+          ),
+
+          /* 模糊半径。 */
+          h(
+            Row,
+            {
+              title: '模糊半径',
+              hint: '玻璃背后的模糊半径。0 = 不模糊；40 以上适合 4K / 高 DPI 屏。即时生效。',
+            },
+            h(Slider, {
+              label: '模糊半径',
+              min: 0,
+              max: 80,
+              value: parsePercent(snapshot.glassBlur, 0, 80, 16),
+              suffix: 'px',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassBlur: String(next) }),
+            }),
+          ),
+
+/* 浮层增量。 */
+          h(
+            Row,
+            {
+              title: '浮层增量',
+              hint: '卡片、气泡、输入卡、菜单比三列「实」多少。数值是合成不透明度的直接增量：'
+                + '0 = 浮层与三列同透（会分不清层次），40 = 几乎不透明。默认 10。即时生效。',
+            },
+            h(Slider, {
+              label: '浮层增量',
+              min: 0,
+              max: 40,
+              value: parsePercent(snapshot.glassFloat, 0, 40, 10),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassFloat: String(next) }),
+            }),
+          ),
+
+          /* 代码块增量。 */
+          h(
+            Row,
+            {
+              title: '代码块增量',
+              hint: '代码块比三列「实」多少。代码要逐字读，所以默认比浮层更实（14）。'
+                + '调低会让代码块跟着壁纸透，调高会挡住背后的壁纸信号。即时生效。',
+            },
+            h(Slider, {
+              label: '代码块增量',
+              min: 0,
+              max: 40,
+              value: parsePercent(snapshot.glassCode, 0, 40, 14),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassCode: String(next) }),
+            }),
+          ),
+
+          /* 悬停增量。 */
+          h(
+            Row,
+            {
+              title: '悬停增量',
+              hint: '鼠标划过卡片 / 菜单项时「亮起来」多少。0 = 没有悬停反馈；'
+                + '按下态自动取它的 1.8 倍。默认 5。即时生效。',
+            },
+            h(Slider, {
+              label: '悬停增量',
+              min: 0,
+              max: 20,
+              value: parsePercent(snapshot.glassHover, 0, 20, 5),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassHover: String(next) }),
+            }),
+          ),
+        
+/* 侧栏浓度。 */
+          h(
+            Row,
+            {
+              title: '侧栏浓度',
+              hint: '左侧导航栏的不透明度，与正文列分开。想让导航一眼看清就把这里拉实、'
+                + '正文列保持透；想让侧栏融进壁纸当装饰就反过来。'
+                + '留空 = 跟随「表面浓度」。即时生效。',
+            },
+            h(Slider, {
+              label: '侧栏浓度',
+              min: 0,
+              max: 100,
+              value: Number(snapshot.glassSidebarOpacity) >= 0
+                ? Number(snapshot.glassSidebarOpacity)
+                : parsePercent(snapshot.glassTint, 0, 100, 65),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassSidebarOpacity: String(next) }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '清除独立值，回到跟随「表面浓度」',
+              onClick: () => updateGlassNow({ glassSidebarOpacity: '-1' }),
+            }, Number(snapshot.glassSidebarOpacity) >= 0 ? '跟随默认' : '已在跟随'),
+          ),
+
+          /* 信息面板浓度。 */
+          h(
+            Row,
+            {
+              title: '信息面板浓度',
+              hint: '弹层、菜单、Modal、会话统计、费用面板的不透明度。这些地方要读字，'
+                + '默认比装饰性表面更实；拉低会一起玻璃化。留空 = 跟随「浮层增量」。即时生效。',
+            },
+            h(Slider, {
+              label: '信息面板浓度',
+              min: 0,
+              max: 100,
+              value: Number(snapshot.glassPanelOpacity) >= 0 ? Number(snapshot.glassPanelOpacity) : 85,
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassPanelOpacity: String(next) }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '清除独立值，回到跟随「浮层增量」',
+              onClick: () => updateGlassNow({ glassPanelOpacity: '-1' }),
+            }, Number(snapshot.glassPanelOpacity) >= 0 ? '跟随默认' : '已在跟随'),
+          ),
+
+          /* 文件预览 / 改动卡片浓度。 */
+          h(
+            Row,
+            {
+              title: '文件预览浓度',
+              hint: '文件 diff、已编辑文件卡、文档预览的不透明度。它们要读代码，'
+                + '所以单独一档：拉高它不会把整个界面一起变实。留空 = 跟随「浮层增量」。即时生效。',
+            },
+            h(Slider, {
+              label: '文件预览浓度',
+              min: 0,
+              max: 100,
+              value: Number(snapshot.glassPreviewOpacity) >= 0 ? Number(snapshot.glassPreviewOpacity) : 85,
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassPreviewOpacity: String(next) }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '清除独立值，回到跟随「浮层增量」',
+              onClick: () => updateGlassNow({ glassPreviewOpacity: '-1' }),
+            }, Number(snapshot.glassPreviewOpacity) >= 0 ? '跟随默认' : '已在跟随'),
+          ),
+
+          /* 浮层模糊。 */
+          h(
+            Row,
+            {
+              title: '浮层模糊',
+              hint: '弹层、菜单、Modal 背后那层的模糊半径。留空 = 跟随「模糊半径」。即时生效。',
+            },
+            h(Slider, {
+              label: '浮层模糊',
+              min: 0,
+              max: 80,
+              value: Number(snapshot.glassOverlayBlur) >= 0
+                ? Number(snapshot.glassOverlayBlur)
+                : Math.min(40, parsePercent(snapshot.glassBlur, 0, 80, 16) + 10),
+              suffix: 'px',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassOverlayBlur: String(next) }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '清除独立值，回到「模糊半径 + 10」',
+              onClick: () => updateGlassNow({ glassOverlayBlur: '-1' }),
+            }, Number(snapshot.glassOverlayBlur) >= 0 ? '跟随默认' : '已在跟随'),
+          ),
+
+          /* 输入卡浓度（注意：不是模糊）。 */
+          h(
+            Row,
+            {
+              title: '输入卡浓度',
+              hint: '发送框、审批卡、任务卡的不透明度。留空 = 跟随「浮层增量」。即时生效。',
+            },
+            h(Slider, {
+              label: '输入卡浓度',
+              min: 0,
+              max: 100,
+              value: Number(snapshot.glassComposerBlur) >= 0 ? Number(snapshot.glassComposerBlur) : 85,
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassComposerBlur: String(next) }),
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '清除独立值，回到跟随「浮层增量」',
+              onClick: () => updateGlassNow({ glassComposerBlur: '-1' }),
+            }, Number(snapshot.glassComposerBlur) >= 0 ? '跟随默认' : '已在跟随'),
+          ),
+
+          /* 背景压暗。 */
+          h(
+            Row,
+            {
+              title: '背景压暗',
+              hint: '把壁纸压暗一档，保证亮壁纸下文字不发灰。「自动」跟随表面浓度（浓度高→压得轻）；固定档不随浓度变；「关」原样透出。',
+            },
+            h(Segmented, {
+              label: '背景压暗',
+              value: snapshot.glassVeil,
+              options: OPTIONS.glassVeil,
+              onChange: setField('glassVeil'),
+            }),
+          ),
+
+          /* 背景饱和度：和模糊一样做在底图上，全窗一次生效。 */
+          h(
+            Row,
+            {
+              title: '背景饱和度',
+              hint: '透过玻璃看到的色彩浓度：0 = 完全灰阶，100 = 原样，200 = 翻倍。等高线模式不作用（线色由强调色直出）。即时生效。',
+            },
+            h(Slider, {
+              label: '背景饱和度',
+              min: 0,
+              max: 200,
+              value: parsePercent(snapshot.glassSat, 0, 200, 120),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassSat: String(next) }),
+            }),
+          ),
+
+          /* 白雾浓度：磨砂的"厚度感"来自这层薄白，不是来自模糊。 */
+          h(
+            Row,
+            {
+              title: '白雾浓度',
+              hint: '表面那层极淡的白，负责"厚度感"。0% 只剩模糊、缺少材质感；超过 30% 会把背后的模糊盖平。',
+            },
+            h(Slider, {
+              label: '白雾浓度',
+              min: 0,
+              max: 100,
+              value: parsePercent(snapshot.glassHaze, 0, 100, 8),
+              suffix: '%',
+              disabled: snapshot.glass === 'off',
+              onChange: (next) => updateGlassNow({ glassHaze: String(next) }),
+            }),
+          ),
+
+        /* ---- 改实心（2026-10-23 第三轮）-----------------------------------
+         * 这两处不是「浓度不够」，是「层级不对」：浮层没有 role 压不到，
+         * diff 的变量本身就带 12% alpha。所以单独给两个开关。 */
+        /* 改实心：并入「玻璃界面」组（2026-10-23 整理）——
+         * 只有两个开关，单独成组太碎。 */
+        /* 浮层改实心。 */
         h(
           Row,
-          { title: '背景变体', hint: '标准 = Sublime 原值；深 = ST3 早期 tmTheme 的一档' },
-          h(Swatches, {
-            label: '背景变体',
-            value: snapshot.surface,
-            options: OPTIONS.surface,
-            onChange: setField('surface'),
+          {
+            title: '浮层改实心',
+            hint: '历史消息浮层、悬停预览浮层改成不透明。它们是没有 role 的 fixed 浮层，'
+              + '玻璃规则压不到，半透明下只靠模糊挡不住背后的正文。默认关。',
+          },
+          h(Switch, {
+            on: snapshot.glassSolidFloats === 'on',
+            label: '浮层改实心',
+            onToggle: () => updateGlassNow({ glassSolidFloats: snapshot.glassSolidFloats === 'on' ? 'off' : 'on' }),
           }),
         ),
 
-        /* 强调色 */
+        /* diff 区域改实心。 */
         h(
           Row,
-          { title: '强调色', hint: '只影响业务态高亮与品牌点缀，不动正文与按钮反色' },
-          h(Swatches, {
-            label: '强调色',
-            value: snapshot.accent,
-            options: OPTIONS.accent,
-            onChange: setField('accent'),
+          {
+            title: 'diff 区域改实心',
+            hint: '文件 diff 的增删行底色改成不透明。宿主的 diff 底色本来就只有 12% 不透明度，'
+              + '压在玻璃上几乎看不见。**只改行底色，不动卡片和代码块**。默认关。',
+          },
+          h(Switch, {
+            on: snapshot.glassSolidDiff === 'on',
+            label: 'diff 区域改实心',
+            onToggle: () => updateGlassNow({ glassSolidDiff: snapshot.glassSolidDiff === 'on' ? 'off' : 'on' }),
           }),
         ),
+        ),
 
-        /* 代码高亮 */
-        h(GroupHead, { title: '代码与正文', sub: '语法色板、Markdown 正文层次与调色' }),
+        /* ===== 当前壁纸专属设置（2026-10-23 重组）=====
+         * 只显示「当前背景来源」对应的那套参数，另外两套完全隐藏 ——
+         * 切到渐变时看不到壁纸裁剪，切到等高线时看不到光晕参数。
+         * 每段内部已各自带 snapshot.glassBackground 条件守卫。 */
+        h(
+          Fold,
+          {
+            label: '当前壁纸专属',
+            summary: snapshot.glassBackground === 'wallpaper'
+              ? '桌面壁纸 · 摆放 / 裁剪 / 文字保护'
+              : snapshot.glassBackground === 'contour'
+                ? '等高线'
+                : '渐变 · ' + (snapshot.glassGroundMode === 'bands' ? '分割'
+                  : snapshot.glassGroundMode === 'blend' ? '叠加' : '光晕')
+                  + ' · ' + parsePercent(snapshot.glassGlowAmount, 0, 100, 38) + '%',
+          },
+
+          /* ---------------- 桌面壁纸 ---------------- */
+          /* 摆放方式：与 Windows 个性化 → 背景的五种选项同名，不用学新概念。 */
+          snapshot.glassBackground === 'wallpaper'
+            ? h(
+              Row,
+              {
+                title: '摆放方式',
+                hint: '和 Windows「个性化 → 背景」一样：填充会裁掉超出部分，适应保留整张图，'
+                  + '拉伸会变形，平铺按原尺寸重复（适合纹理壁纸），居中按原尺寸居中。即时生效。',
+              },
+              h(Segmented, {
+                label: '摆放方式',
+                value: snapshot.glassFit,
+                options: OPTIONS.glassFit,
+                onChange: (value) => updateGlassNow({ glassFit: value }),
+              }),
+            )
+            : null,
+
+          /* 自选壁纸路径：只在「桌面壁纸」来源下出现（其余模式它是死行）。
+             用文本输入而不是文件选择器 —— 浏览器沙箱拿不到真实绝对路径
+             （input[type=file] 只给文件名），而 Host 侧需要绝对路径去读文件。 */
+          snapshot.glassBackground === 'wallpaper'
+            ? h(
+              Row,
+              {
+                title: '自选壁纸',
+                hint: '填本机图片的完整路径（如 D:\\pics\\bg.jpg），留空则跟随系统桌面壁纸。'
+                  + '支持 jpg / png / webp。点「应用更改」生效。',
+              },
+              h('input', {
+                type: 'text',
+                className: 'dmt-pathInput',
+                style: { flex: 'none', width: '300px' },
+                placeholder: '跟随系统壁纸',
+                value: snapshot.glassWallpaperPath,
+                'aria-label': '自选壁纸路径',
+                spellcheck: false,
+                onChange: (event) => updateDraft({ glassWallpaperPath: event.target.value }),
+              }),
+            )
+            : null,
+
+          /* 壁纸图片链接（2026-10-23）：与本地路径并列的第二种来源。
+             给了 URL 就**优先于本地路径** —— 它更明确是「我就要这张」。
+             拉取失败自动回落本地路径 / 系统壁纸 / 渐变，不会黑屏。 */
+          snapshot.glassBackground === 'wallpaper'
+            ? h(
+              Row,
+              {
+                title: '壁纸图片链接',
+                hint: '填一个 http/https 图片地址（如 https://example.com/bg.jpg），'
+                  + '由插件代拉（24MB 上限、8 秒超时、只接受图片）。'
+                  + '**填了它就用它**，优先于上面的本地路径；拉不到会自动回落到本地路径 / 系统壁纸。点「应用更改」生效。',
+              },
+              h('input', {
+                type: 'text',
+                className: 'dmt-pathInput',
+                style: { flex: 'none', width: '300px' },
+                placeholder: 'https://example.com/bg.jpg',
+                value: snapshot.glassWallpaperUrl,
+                'aria-label': '壁纸图片链接',
+                spellcheck: false,
+                onChange: (event) => updateDraft({ glassWallpaperUrl: event.target.value }),
+              }),
+            )
+            : null,
+
+
+
+          /* 裁剪区域 + 文字保护：只在「桌面壁纸」来源下出现 ——
+               渐变/等高线没有图可裁，也没有照片要防。
+               裁剪四个滑块用「左/上/宽/高」而不是拖拽框：拖拽要处理 pointer
+               捕获、四角手柄、边界回推等交互细节，而裁剪壁纸是低频一次性操作 ——
+               四个滑块已经够用，且天然不会出现「框越界」的坏状态。 */
+            snapshot.glassBackground === 'wallpaper'
+              ? h(Fold, {
+                  label: '裁剪与文字保护',
+                  summary: '左 ' + Math.round(parseCropSafe(snapshot.glassCrop).x * 100) + '%'
+                    + ' · 上 ' + Math.round(parseCropSafe(snapshot.glassCrop).y * 100) + '%'
+                    + ' · 宽 ' + Math.round(parseCropSafe(snapshot.glassCrop).w * 100) + '%'
+                    + ' · 高 ' + Math.round(parseCropSafe(snapshot.glassCrop).h * 100) + '%',
+                },
+                h(
+                  Row,
+                  {
+                    title: '裁剪：左侧起点',
+                    hint: '只显示原图这个位置右边的部分。0 = 从最左边开始。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '裁剪左侧起点',
+                    min: 0,
+                    max: 95,
+                    value: Math.round(parseCropSafe(snapshot.glassCrop).x * 100),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({
+                      glassCrop: serializeGlassCrop({ ...parseCropSafe(snapshot.glassCrop), x: next / 100 }),
+                    }),
+                  }),
+                ),
+                h(
+                  Row,
+                  {
+                    title: '裁剪：上方起点',
+                    hint: '只显示原图这个位置下边的部分。0 = 从最上边开始。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '裁剪上方起点',
+                    min: 0,
+                    max: 95,
+                    value: Math.round(parseCropSafe(snapshot.glassCrop).y * 100),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({
+                      glassCrop: serializeGlassCrop({ ...parseCropSafe(snapshot.glassCrop), y: next / 100 }),
+                    }),
+                  }),
+                ),
+                h(
+                  Row,
+                  {
+                    title: '裁剪：宽度',
+                    hint: '保留原图多宽。100% = 整张图。低于 5% 会失去意义（会被夹住）。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '裁剪宽度',
+                    min: 5,
+                    max: 100,
+                    value: Math.round(parseCropSafe(snapshot.glassCrop).w * 100),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({
+                      glassCrop: serializeGlassCrop({ ...parseCropSafe(snapshot.glassCrop), w: next / 100 }),
+                    }),
+                  }),
+                ),
+                h(
+                  Row,
+                  {
+                    title: '裁剪：高度',
+                    hint: '保留原图多高。100% = 整张图。低于 5% 会失去意义（会被夹住）。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '裁剪高度',
+                    min: 5,
+                    max: 100,
+                    value: Math.round(parseCropSafe(snapshot.glassCrop).h * 100),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({
+                      glassCrop: serializeGlassCrop({ ...parseCropSafe(snapshot.glassCrop), h: next / 100 }),
+                    }),
+                  }),
+                ),
+                /* 一键回到整图。 */
+                h(
+                  Row,
+                  {
+                    title: '恢复整图',
+                    hint: '把裁剪区域清掉，回到完整壁纸。',
+                  },
+                  h('button', {
+                    type: 'button',
+                    className: 'dmt-btn',
+                    onClick: () => updateGlassNow({ glassCrop: '' }),
+                  }, '整图'),
+                ),
+
+                /* 文字保护。 */
+                h(
+                  Row,
+                  {
+                    title: '文字保护',
+                    hint: '有壁纸时给文字加一圈与明暗同向的光晕，并把次要说明文字加深一档，'
+                      + '让字从照片里跳出来。**不加任何底色**，不影响你调好的透明度和模糊。',
+                  },
+                  h(Switch, {
+                    on: snapshot.glassGuard === 'on',
+                    label: '文字保护',
+                    onToggle: () => updateGlassNow({ glassGuard: snapshot.glassGuard === 'on' ? 'off' : 'on' }),
+                  }),
+                ),
+
+                /* 跟随图片明暗。 */
+                h(
+                  Row,
+                  {
+                    title: '跟随图片明暗',
+                    hint: '自动测量背景图（裁剪后）的平均明暗：偏暗就切到深色主题、偏亮就切回浅色，'
+                      + '让文字颜色始终和图片对得上。关掉就固定用你当前选的明暗。'
+                      + '只会切换内置的浅色/深色/跟随系统，不会动第三方主题。'
+                      + (glassToneLuma !== null
+                        ? '（测得亮度 ' + glassToneLuma.toFixed(2) + '）'
+                        : ''),
+                  },
+                  h(Switch, {
+                    on: snapshot.glassAutoTone === 'on',
+                    label: '跟随图片明暗',
+                    onToggle: () => updateGlassNow({ glassAutoTone: snapshot.glassAutoTone === 'on' ? 'off' : 'on' }),
+                  }),
+                ),
+              )
+              : null,
+
+          /* ---------------- 渐变 ---------------- */
+/* 背景亮度（2026-10-23）：双向调节地面底色，50 = 中性。
+             离开中性时氛围层自动淡出 —— 拉到两端就是纯白 / 纯黑。 */
+          snapshot.glassBackground === 'gradient'
+            ? h(
+              Row,
+              {
+                title: '背景亮度',
+                hint: '调地面底色的明暗：50 = 原样，往左压暗、往右提亮。'
+                  + '离开中性越远，上面的氛围光斑越淡 —— 拉到两端会变成纯色，不再有渐变。即时生效。',
+              },
+              h(Slider, {
+                label: '背景亮度',
+                min: 0,
+                max: 100,
+                value: parsePercent(snapshot.glassBrightness, 0, 100, 50),
+                suffix: '%',
+                disabled: snapshot.glass === 'off',
+                onChange: (next) => updateGlassNow({ glassBrightness: String(next) }),
+              }),
+            )
+            : null,
+
+          /* ---- 背景地面（2026-10-23 第五轮，预览工作台定稿）------------------
+           * 三种模式：光晕 / 分割 / 叠加。颜色全部自选。
+           * 收进折叠块：参数多，但稳态下不常动。 */
+          snapshot.glassBackground === 'gradient'
+            ? h(Fold, {
+                label: '地面',
+                summary: (snapshot.glassGroundMode === 'bands' ? '分割'
+                  : snapshot.glassGroundMode === 'blend' ? '叠加' : '光晕')
+                  + ' · ' + parsePercent(snapshot.glassGlowAmount, 0, 100, 38) + '%',
+              },
+              /* 模式 */
+              h(
+                Row,
+                {
+                  title: '地面模式',
+                  hint: '光晕 = 几团柔和彩色雾（无边界无方向）；'
+                    + '分割 = 按角度切开的色带（有明确方向）；叠加 = 两者都有。即时生效。',
+                },
+                h(Segmented, {
+                  label: '地面模式',
+                  value: snapshot.glassGroundMode || 'glow',
+                  options: OPTIONS.glassGroundMode,
+                  onChange: (value) => updateGlassNow({ glassGroundMode: value }),
+                }),
+              ),
+
+              /* ---- 光晕参数 ---- */
+              (snapshot.glassGroundMode || 'glow') !== 'bands'
+                ? h(
+                  Row,
+                  {
+                    title: '光晕浓度',
+                    hint: '所有光源的总强度。注意三列半透明会把光晕压淡约 2/3，'
+                      + '所以这个值要偏高才看得出效果。默认 38%。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '光晕浓度',
+                    min: 0,
+                    max: 100,
+                    value: parsePercent(snapshot.glassGlowAmount, 0, 100, 38),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({ glassGlowAmount: String(next) }),
+                  }),
+                )
+                : null,
+
+              (snapshot.glassGroundMode || 'glow') !== 'bands'
+                ? h(
+                  Row,
+                  {
+                    title: '光晕扩散',
+                    hint: '光团的大小。越大越铺开、重叠越多（更雾）；越小越集中在中心。默认 100%。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '光晕扩散',
+                    min: 40,
+                    max: 140,
+                    value: parsePercent(snapshot.glassGlowSpread, 40, 140, 100),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({ glassGlowSpread: String(next) }),
+                  }),
+                )
+                : null,
+
+              /* 光源列表：每个光源一行（颜色 + 强度 + X/Y） */
+              (snapshot.glassGroundMode || 'glow') !== 'bands'
+                ? h(
+                  Row,
+                  {
+                    title: '光源',
+                    hint: '每个光源独立调颜色、强度和位置（X/Y 是百分比坐标，0,0 = 左上角）。'
+                      + '最多 6 个。加/减光源会保留已有颜色。',
+                  },
+                  h('div', { className: 'dmt-lightList' },
+                    parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS).map((L, i) =>
+                      h('div', { className: 'dmt-lightRow', key: 'L' + i },
+                        /* 第一行：序号 + 色块 + 强度 */
+                        h('div', { className: 'dmt-lightTop' },
+                          h('span', { className: 'dmt-lightIdx' }, String(i + 1)),
+                          h('input', {
+                            type: 'color',
+                            className: 'dmt-colorInput',
+                            'aria-label': '光源 ' + (i + 1) + ' 颜色',
+                            value: L.color,
+                            onChange: (event) => {
+                              const next = parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS)
+                              next[i].color = String(event.target.value || '#5FB3B3')
+                              updateGlassNow({ glassLights: JSON.stringify(next) })
+                            },
+                          }),
+                          h(Slider, {
+                            label: '光源 ' + (i + 1) + ' 强度',
+                            min: 0,
+                            max: 100,
+                            value: parsePercent(L.strength, 0, 100, 100),
+                            suffix: '%',
+                            onChange: (next2) => {
+                              const next = parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS)
+                              next[i].strength = String(next2)
+                              updateGlassNow({ glassLights: JSON.stringify(next) })
+                            },
+                          }),
+                        ),
+                        /* 第二行：X / Y（compact，窄版） */
+                        h('div', { className: 'dmt-lightXY' },
+                          h('span', { className: 'dmt-lightXYLabel' }, 'X'),
+                          h(Slider, {
+                            label: '光源 ' + (i + 1) + ' X',
+                            min: 0,
+                            max: 100,
+                            compact: true,
+                            value: parsePercent(L.x, 0, 100, 50),
+                            suffix: '',
+                            onChange: (next2) => {
+                              const next = parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS)
+                              next[i].x = String(next2)
+                              updateGlassNow({ glassLights: JSON.stringify(next) })
+                            },
+                          }),
+                          h('span', { className: 'dmt-lightXYLabel' }, 'Y'),
+                          h(Slider, {
+                            label: '光源 ' + (i + 1) + ' Y',
+                            min: 0,
+                            max: 100,
+                            compact: true,
+                            value: parsePercent(L.y, 0, 100, 50),
+                            suffix: '',
+                            onChange: (next2) => {
+                              const next = parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS)
+                              next[i].y = String(next2)
+                              updateGlassNow({ glassLights: JSON.stringify(next) })
+                            },
+                          }),
+                        ),
+                      ),
+                    ),
+                    /* 加 / 减光源 */
+                    h('div', { className: 'dmt-lightActions' },
+                      h('button', {
+                        type: 'button',
+                        className: 'dmt-btn',
+                        onClick: () => {
+                          const cur = parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS)
+                          if (cur.length >= MAX_LIGHTS) return
+                          const PAL = ['#5FB3B3', '#C594C5', '#6699CC', '#99C794', '#F9AE58', '#EC5F67']
+                          const POS = [[16, 10], [84, 18], [52, 94], [8, 78], [92, 82], [50, 46]]
+                          const i = cur.length
+                          cur.push({
+                            color: PAL[i % PAL.length], strength: '80',
+                            x: String(POS[i][0]), y: String(POS[i][1]),
+                          })
+                          updateGlassNow({ glassLights: JSON.stringify(cur) })
+                        },
+                      }, '加光源'),
+                      h('button', {
+                        type: 'button',
+                        className: 'dmt-btn',
+                        onClick: () => {
+                          const cur = parseLightList(snapshot.glassLights, GLOW_DEFAULTS, MAX_LIGHTS)
+                          if (cur.length <= 1) return
+                          cur.pop()
+                          updateGlassNow({ glassLights: JSON.stringify(cur) })
+                        },
+                      }, '减光源'),
+                      h('button', {
+                        type: 'button',
+                        className: 'dmt-btn',
+                        onClick: () => updateGlassNow({ glassLights: '' }),
+                      }, '恢复默认'),
+                    ),
+                  ),
+                )
+                : null,
+
+              /* ---- 分割参数 ---- */
+              (snapshot.glassGroundMode || 'glow') !== 'glow'
+                ? h(
+                  Row,
+                  {
+                    title: '分割角度',
+                    hint: '色带的切割角度，0–360° 任意调。'
+                      + '0° = 从左到右（水平），90° = 从上到下（竖直），'
+                      + '165° / 135° 是两种斜切。拖动时色带实时跟着转。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '分割角度',
+                    min: 0,
+                    max: 360,
+                    value: parsePercent(snapshot.glassBandDir, 0, 360, 165),
+                    suffix: '°',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({ glassBandDir: String(next) }),
+                  }),
+                )
+                : null,
+
+              (snapshot.glassGroundMode || 'glow') !== 'glow'
+                ? h(
+                  Row,
+                  {
+                    title: '边缘柔和',
+                    hint: '0 = 硬边斜切（色带之间界线锐利）；越大过渡越平滑。默认 2%。即时生效。',
+                  },
+                  h(Slider, {
+                    label: '边缘柔和',
+                    min: 0,
+                    max: 100,
+                    value: parsePercent(snapshot.glassBandSoft, 0, 100, 2),
+                    suffix: '%',
+                    disabled: snapshot.glass === 'off',
+                    onChange: (next) => updateGlassNow({ glassBandSoft: String(next) }),
+                  }),
+                )
+                : null,
+
+              /* 色带列表：每条一个颜色 */
+              (snapshot.glassGroundMode || 'glow') !== 'glow'
+                ? h(
+                  Row,
+                  {
+                    title: '色带颜色',
+                    hint: '每条色带独立选色。最多 6 条。加/减色带会保留已有颜色。',
+                  },
+                  h('div', { className: 'dmt-lightList' },
+                    parseBandList(snapshot.glassBands).map((B, i) =>
+                      h('div', { className: 'dmt-lightRow dmt-bandRow', key: 'B' + i },
+                        h('span', { className: 'dmt-lightIdx' }, String(i + 1)),
+                        h('input', {
+                          type: 'color',
+                          className: 'dmt-colorInput',
+                          'aria-label': '色带 ' + (i + 1) + ' 颜色',
+                          value: B.color,
+                          onChange: (event) => {
+                            const next = parseBandList(snapshot.glassBands)
+                            next[i].color = String(event.target.value || '#4A555F')
+                            updateGlassNow({ glassBands: JSON.stringify(next) })
+                          },
+                        }),
+                        h('code', { className: 'dmt-lightHex' }, B.color),
+                      ),
+                    ),
+                    h('div', { className: 'dmt-lightActions' },
+                      h('button', {
+                        type: 'button',
+                        className: 'dmt-btn',
+                        onClick: () => {
+                          const cur = parseBandList(snapshot.glassBands)
+                          if (cur.length >= MAX_BANDS) return
+                          const n = cur.length + 1
+                          const t = (n - 1) / Math.max(1, n - 1)
+                          const lum = (0.42 - t) * 0.55
+                          const baseHex = (resolveTokens(state).__base) || '#343D46'
+                          cur.push({ color: lum >= 0 ? lightenHex('#343D46', lum) : '#2A3138' })
+                          updateGlassNow({ glassBands: JSON.stringify(cur) })
+                        },
+                      }, '加色带'),
+                      h('button', {
+                        type: 'button',
+                        className: 'dmt-btn',
+                        onClick: () => {
+                          const cur = parseBandList(snapshot.glassBands)
+                          if (cur.length <= 2) return
+                          cur.pop()
+                          updateGlassNow({ glassBands: JSON.stringify(cur) })
+                        },
+                      }, '减色带'),
+                      h('button', {
+                        type: 'button',
+                        className: 'dmt-btn',
+                        onClick: () => updateGlassNow({ glassBands: '' }),
+                      }, '恢复默认'),
+                    ),
+                  ),
+                )
+                : null,
+            )
+            : null,
+
+          /* ---------------- 等高线 ---------------- */
+/* 等高线漂移速度：只在「背景来源 = 等高线」时看得见。 */
+          snapshot.glassBackground === 'contour'
+            ? h(
+              Row,
+              {
+                title: '等高线速度',
+                hint: '地形的漂移档位。「静止」只画一帧、零开销；越快岛呼吸越明显，读长文时可能分心。',
+              },
+              h(Segmented, {
+                label: '等高线速度',
+                value: snapshot.contourSpeed,
+                options: OPTIONS.contourSpeed,
+                onChange: setField('contourSpeed'),
+              }),
+            )
+            : null,
+
+          /* ---- 等高线高级（2026-10-23）--------------------------------------
+           * 全部收进折叠块：这些是"调了能看出差别"的画质/观感旋钮，
+           * 但稳态下不常动，平铺会让设置页太长。摘要行显示当前画质组合。
+           * 内部机制（降级预算、渲染后端）刻意不暴露 —— 那些调了只会调坏。 */
+          snapshot.glassBackground === 'contour'
+            ? h(Fold, {
+                label: '等高线画质',
+                summary: '浓度 ' + parsePercent(snapshot.contourInk, 0, 100, 55) + '%'
+                  + ' · ' + (OPTIONS.contourDensity.find((o) => o.value === snapshot.contourDensity) || {}).label + '画质'
+                  + ' · ' + parsePercent(snapshot.contourFps, 1, 30, 8) + 'fps',
+              },
+              /* 换一张地形（重掷种子）。 */
+              h(
+                Row,
+                {
+                  title: '换一张地形',
+                  hint: '重新掷一次随机种子，生成一张全新的等高线地形。每次刷新页面本来也会换一张，这个按钮不用等刷新。',
+                },
+                h('button', {
+                  type: 'button',
+                  className: 'dmt-btn',
+                  onClick: () => { contourReroll() },
+                }, '换一张'),
+              ),
+
+              /* 线条浓度（不透明度）。 */
+              h(
+                Row,
+                {
+                  title: '线条浓度',
+                  hint: '等高线的透明度。太淡看不清地形，太浓会压住正文。默认 55%。即时生效。',
+                },
+                h(Slider, {
+                  label: '线条浓度',
+                  min: 0,
+                  max: 100,
+                  value: parsePercent(snapshot.contourInk, 0, 100, 55),
+                  suffix: '%',
+                  onChange: (next) => updateGlassNow({ contourInk: String(next) }),
+                }),
+              ),
+
+              /* 线条颜色：跟随强调色 / 独立取色。 */
+              h(
+                Row,
+                {
+                  title: '线条颜色',
+                  hint: '默认跟随「强调色」（青/橙/蓝三选一）。勾掉就用自己的颜色 —— 想用灰度线、或者让地形跟主题色脱钩时用。',
+                },
+                h('span', { className: 'dmt-slotPicker' },
+                  h('label', {
+                    className: 'dmt-slotSwatch',
+                    style: {
+                      background: /^#[0-9a-fA-F]{6}$/.test(snapshot.contourColor || '')
+                        ? snapshot.contourColor
+                        : resolveAccent(snapshot).dark,
+                    },
+                    title: '点击选择线条颜色',
+                  },
+                  h('input', {
+                    type: 'color',
+                    className: 'dmt-colorInput',
+                    'aria-label': '线条颜色',
+                    value: /^#[0-9a-fA-F]{6}$/.test(snapshot.contourColor || '')
+                      ? snapshot.contourColor
+                      : resolveAccent(snapshot).dark,
+                    onChange: (event) => updateGlassNow({ contourColor: String(event.target.value || '') }),
+                  })),
+                  h('button', {
+                    type: 'button',
+                    className: 'dmt-btn',
+                    title: '清除自定义颜色，回到跟随强调色',
+                    onClick: () => updateGlassNow({ contourColor: '' }),
+                  }, snapshot.contourColor ? '跟随强调色' : '已在跟随'),
+                ),
+              ),
+
+              /* 线条粗细。 */
+              h(
+                Row,
+                {
+                  title: '线条粗细',
+                  hint: '1px 最省；高分屏（125%/150% 缩放）上 1.5px 更清楚；2px 地形感更重。',
+                },
+                h(Segmented, {
+                  label: '线条粗细',
+                  value: snapshot.contourWidth,
+                  options: OPTIONS.contourWidth,
+                  onChange: setField('contourWidth'),
+                }),
+              ),
+
+              /* 地形密度（画质↔流畅度主旋钮）。 */
+              h(
+                Row,
+                {
+                  title: '地形密度',
+                  hint: '画质与流畅度的主旋钮。「细」线更细腻但更吃显卡；「粗」最省。切换会重建地形（一瞬间）。',
+                },
+                h(Segmented, {
+                  label: '地形密度',
+                  value: snapshot.contourDensity,
+                  options: OPTIONS.contourDensity,
+                  onChange: setField('contourDensity'),
+                }),
+              ),
+
+              /* 等高线密集程度（层数）。 */
+              h(
+                Row,
+                {
+                  title: '等高线密集程度',
+                  hint: '地形的层数。少 = 稀疏大气；多 = 细密像真地图。默认 20 层。',
+                },
+                h(Slider, {
+                  label: '等高线密集程度',
+                  min: 12,
+                  max: 30,
+                  value: parsePercent(snapshot.contourLevels, 12, 30, 20),
+                  suffix: ' 层',
+                  onChange: (next) => updateGlassNow({ contourLevels: String(next) }),
+                }),
+              ),
+
+              /* 动画帧率。 */
+              h(
+                Row,
+                {
+                  title: '动画帧率',
+                  hint: '「省电」4fps 几乎看不出帧；「流畅」15fps 更顺滑但耗电发热上升。速度选「静止」时本项无效。',
+                },
+                h(Segmented, {
+                  label: '动画帧率',
+                  value: snapshot.contourFps,
+                  options: OPTIONS.contourFps,
+                  onChange: setField('contourFps'),
+                }),
+              ),
+
+              /* 地形起伏幅度。 */
+              h(
+                Row,
+                {
+                  title: '地形起伏',
+                  hint: '山有多高。调低地形变平缓、线变疏；调高山更密、线更挤。默认 100%。即时生效。',
+                },
+                h(Slider, {
+                  label: '地形起伏',
+                  min: 40,
+                  max: 160,
+                  value: parsePercent(snapshot.contourRelief, 40, 160, 100),
+                  suffix: '%',
+                  onChange: (next) => updateGlassNow({ contourRelief: String(next) }),
+                }),
+              ),
+
+              /* 漂移幅度。 */
+              h(
+                Row,
+                {
+                  title: '漂移幅度',
+                  hint: '岛的呼吸感有多明显。0 = 完全不漂（但速度档仍在走）；100% 是出厂值。调大读长文时容易分心。',
+                },
+                h(Slider, {
+                  label: '漂移幅度',
+                  min: 0,
+                  max: 200,
+                  value: parsePercent(snapshot.contourDrift, 0, 200, 100),
+                  suffix: '%',
+                  onChange: (next) => updateGlassNow({ contourDrift: String(next) }),
+                }),
+              ),
+
+              /* 高程标注：只在静止档可用（见 hint 里说明原因）。 */
+              h(
+                Row,
+                {
+                  title: '高程标注',
+                  hint: '在线上标出该线的高程值，像真等高线地图。'
+                    + (parsePercent(snapshot.contourSpeed, 0, 4, 2) > 0
+                      ? '⚠️ 当前速度不是「静止」：标注会自动隐藏 —— 每帧重画几十个文字会让光栅开销涨 143%。把速度调成「静止」即可看到标注。'
+                      : '静止档只画一帧，标注不产生持续开销。'),
+                },
+                h(Switch, {
+                  on: snapshot.contourLabels === 'on',
+                  label: '高程标注',
+                  onToggle: toggle('contourLabels'),
+                }),
+              ),
+            )
+            : null,
+        ),
+
+        /* ---- 手绘造型 ------------------------------------------------------
+         * 灵感来自 dsh-maid-whale-UI 的纸面主题：不规则圆角 + 纸影 +
+         * 悬停微抬 + 侧栏发光分界线。纯 CSS 零资源，与玻璃界面互相独立。 */
+        h(GroupHead, { title: '手绘造型', sub: '纸面风格的圆角与投影，独立于玻璃界面' }),
+
+        h(
+          Row,
+          {
+            title: '手绘造型',
+            hint: '面板与控件的圆角四角各差一点（手绘感），卡片加纸片式双层投影，按钮悬停微抬，侧栏右缘换成渐隐发光线。与玻璃界面互相独立，默认关。',
+          },
+          h(Switch, { on: snapshot.shape === 'on', label: '手绘造型', onToggle: toggle('shape') }),
+        ),
+
+        /* ===== 颜色（2026-10-23 整合）=====================================
+         * 所有「改颜色」的设置集中在这一组：
+         *   强调色 · 过程行三色 · 正文 9 槽 · 完整调色板 18 槽
+         * 原来它们散落在「主题」「过程行」「自定义配色」三处，
+         * 想调一个颜色要在页面上下来回找。 */
+        h(GroupHead, {
+          title: '颜色',
+          sub: '强调色、过程行、正文与界面底色 —— 所有改颜色的地方都在这一组',
+        }),
+
+        /* ---- 代码与正文语法色 ---- */
+        /* ---- 语法色板 ---- */
         h(
           Row,
           { title: '代码高亮色板', hint: '覆盖 Shiki 的 --shiki-* 变量：关键字紫、字符串绿、数字橙' },
@@ -7787,95 +10388,7 @@ function makeColorizer(scheme) {
           h(Switch, { on: snapshot.prose !== 'off', label: '正文高亮', onToggle: toggle('prose') }),
         ),
 
-        /* 正文高亮亮度：三档。关掉正文高亮时这行没意义，但仍然可改（下次打开生效）。 */
-        h(
-          Row,
-          {
-            title: '正文高亮亮度',
-            hint: '在 Mariana 原色基础上朝白提亮，只作用于深色外观；浅色外观是深字浅底，提亮反而看不清，所以不动',
-          },
-          h(Segmented, {
-            label: '正文高亮亮度',
-            value: snapshot.proseBoost,
-            options: OPTIONS.proseBoost,
-            onChange: setField('proseBoost'),
-          }),
-        ),
-
-        /* 整理：预览 + 正文颜色 9 槽是"调一次就不动"的内容，收进折叠块；
-           摘要直接报状态，不展开也知道里面是什么。 */
-        h(
-          Fold,
-          {
-            label: '正文调色（预览 + 9 槽位）',
-            summary: proseCustomCount === 0
-              ? '全部跟随派生'
-              : '已手挑 ' + String(proseCustomCount) + ' 个',
-          },
-
-          /* 正文高亮预览：直接展示开关效果。草稿色只走容器内联变量（局部覆盖），
-             不碰全局令牌 —— 应用前这里先变，全局等「应用更改」。 */
-          h(
-            'div',
-            { className: 'dmt-prosePreview', 'data-prose': snapshot.prose === 'off' ? 'off' : 'on', style: previewVars },
-            h('div', { className: 'dmt-proseLabel' }, snapshot.prose === 'off' ? '正文高亮：关' : '正文高亮：开'),
-            h(
-              'div',
-              { className: 'dmt-proseBody' },
-              h('h4', null, '这是一个四级标题'),
-              h(
-                'p',
-                null,
-                '正文里有',
-                h('strong', null, '加粗文字'),
-                '、',
-                h('em', null, '斜体文字'),
-                '、行内代码 ',
-                h('code', null, 'const answer = 42'),
-                '，还有',
-                h('a', { href: '#', onClick: (event) => event.preventDefault() }, '一个链接'),
-                '。',
-              ),
-              h(
-                'ul',
-                null,
-                h('li', null, '列表项一'),
-                h('li', null, '列表项二'),
-              ),
-              h('blockquote', null, h('p', null, '这是引用块，左侧竖线用强调色。')),
-            ),
-          ),
-
-          /* 正文颜色：9 个槽位。取色器/输入框只写草稿（预览即时、全局不动），
-             页脚的「应用更改」才重建令牌并写盘。 */
-          h(
-            'div',
-            { className: 'dmt-custom' },
-            h(
-              'div',
-              { className: 'dmt-customGrid' },
-              PROSE_COLOR_SLOTS.map((slot) => {
-                const effective = proseEffective[slot.token].dark
-                const isCustom = Object.prototype.hasOwnProperty.call(prosePicked, slot.key)
-                return h(ColorSlot, {
-                  key: slot.key,
-                  label: slot.label,
-                  path: 'prose.' + slot.key,
-                  value: effective,
-                  isCustom,
-                  onPick: (hex) => setProseColor(slot.key, slot.token, hex),
-                  onReset: () => resetProseColor(slot.key, slot.token),
-                })
-              }),
-            ),
-          ),
-        ),
-
         /* ---- 过程行高亮 ---- */
-        h(GroupHead, {
-          title: '过程行',
-          sub: '给「写入 / 编辑 / 运行命令」等过程条目的图标和标签上色，摘要与展开内容不变',
-        }),
         h(
           Row,
           { title: '启用过程行高亮', hint: '关掉后过程条目全部回到宿主原色' },
@@ -7885,6 +10398,129 @@ function makeColorizer(scheme) {
             onToggle: toggle('rowHighlight'),
           }),
         ),
+        /* 分类按 kind 分组：汇总类用黄，工具行用绿 —— 色块直接显示各自的颜色。 */
+        ['汇总行', '工具行'].map((groupLabel) => {
+          const wantKind = groupLabel === '汇总行' ? ['summary', 'turn'] : ['tool']
+          const entries = ROW_VARIANTS.filter((entry) => wantKind.includes(entry.kind))
+          if (entries.length === 0) return null
+          return h(
+            'div',
+            { className: 'dmt-checkGroup', key: groupLabel },
+            h('div', { className: 'dmt-checkGroupTitle' }, groupLabel),
+            h(
+              'div',
+              { className: 'dmt-checkGrid' },
+              entries.map((entry) => {
+                const on = rowVariantList.includes(entry.variant)
+                const swatchColor = entry.kind === 'tool' ? snapshot.rowColor : snapshot.summaryColor
+                return h(
+                  'label',
+                  {
+                    key: entry.variant,
+                    className: 'dmt-check',
+                    'data-shared': entry.shared ? 'true' : undefined,
+                    title: entry.shared ? entry.sharedHint : undefined,
+                  },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: on,
+                    onChange: () => toggleVariant(entry.variant),
+                  }),
+                  h('span', {
+                    className: 'dmt-checkSwatch',
+                    style: {
+                      background: on ? swatchColor : 'transparent',
+                      borderColor: on ? swatchColor : 'var(--dsw-alias-border-l4)',
+                    },
+                  }),
+                  h('span', null, entry.label),
+                  entry.shared ? h('span', { className: 'dmt-checkTag' }, '共用') : null,
+                )
+              }),
+            ),
+          )
+        }),
+        /* 过程行预览已删除（2026-10-23）：勾选条目后回到对话就能看到真实效果，
+           这里复刻一套结构反而增加维护成本和视觉噪音。 */
+        rowVariantList.some((v) => v === 'others' || v === 'think')
+          ? h(
+              'div',
+              { className: 'dmt-warn' },
+              '⚠ ' + (rowVariantList.includes('others')
+                ? '「工具调用 / 命令」这个值和命令卡共用，勾选会连带给命令卡上色。'
+                : '') + (rowVariantList.includes('others') && rowVariantList.includes('think') ? ' ' : '') + (rowVariantList.includes('think')
+                  ? '「思考」来自 ui-chat 的推理行，不是工具行。'
+                  : ''),
+            )
+          : null,
+
+        /* ---- 强调色 ---- */
+        /* 自定义强调色（2026-10-23）：预设之外的任意色。
+           三种改法：点色块开系统取色盘 / 输入 hex / 随机。
+           留空 = 跟随上面的预设。 */
+        h(
+          Row,
+          {
+            title: '自定义强调色',
+            hint: '预设三色之外想要别的颜色时用。给了值就**优先于上面的预设**：'
+              + '浅色外观会自动压暗一档保证对比度，深色外观直接用原色。清空即回到预设。',
+          },
+          h('span', { className: 'dmt-slotPicker' },
+            h('label', {
+              className: 'dmt-slotSwatch',
+              style: {
+                background: /^#[0-9a-fA-F]{6}$/.test(snapshot.accentCustom || '')
+                  ? snapshot.accentCustom
+                  : resolveAccent(snapshot).dark,
+              },
+              title: '点击选择自定义强调色',
+            },
+            h('input', {
+              type: 'color',
+              className: 'dmt-colorInput',
+              'aria-label': '自定义强调色',
+              value: /^#[0-9a-fA-F]{6}$/.test(snapshot.accentCustom || '')
+                ? snapshot.accentCustom
+                : resolveAccent(snapshot).dark,
+              onChange: (event) => update({ accentCustom: String(event.target.value || '') }, true),
+            })),
+            h('input', {
+              type: 'text',
+              className: 'dmt-pathInput',
+              style: { flex: 'none', width: '100px' },
+              placeholder: '#5FB3B3',
+              value: snapshot.accentCustom || '',
+              'aria-label': '自定义强调色 hex',
+              spellcheck: false,
+              onChange: (event) => {
+                const next = String(event.target.value || '').trim()
+                /* 只接受完整 hex 或空串，半截输入不写盘（避免一路红）。 */
+                if (next === '' || /^#[0-9a-fA-F]{6}$/.test(next)) update({ accentCustom: next }, true)
+              },
+            }),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '随机取一个强调色',
+              onClick: () => {
+                /* 色相随机、饱和度/明度落在「够亮但不刺眼」的区间。 */
+                const hue = Math.floor(Math.random() * 360)
+                const sat = 45 + Math.floor(Math.random() * 25)
+                const light = 55 + Math.floor(Math.random() * 15)
+                const hex = hslToHex(hue, sat, light)
+                update({ accentCustom: hex }, true)
+              },
+            }, '随机'),
+            h('button', {
+              type: 'button',
+              className: 'dmt-btn',
+              title: '清除自定义色，回到预设强调色',
+              onClick: () => update({ accentCustom: '' }, true),
+            }, snapshot.accentCustom ? '恢复预设' : '已在用预设'),
+          ),
+        ),
+
+        /* ---- 过程行颜色 ---- */
         h(
           Row,
           { title: '工具行颜色', hint: '单条工具调用（写入 / 编辑 / 运行命令…）的图标与标签。改动先进预览，点「应用更改」才生效' },
@@ -7941,588 +10577,47 @@ function makeColorizer(scheme) {
               : null,
           ),
         ),
-        /* 卡片预览：结构复刻宿主 ChangedFiles（头部横带走 --changes-fill）。
-           容器挂 previewVars，草稿的卡片色只盖这棵子树。 */
-        h(
-          'div',
-          { className: 'dmt-cardPreview', style: previewVars },
-          h(
-            'div',
-            { className: 'dmt-cardDemo' },
-            h(
-              'div',
-              { className: 'dmt-cardDemoHead' },
-              h('span', { className: 'dmt-cardDemoTile' }, '</>'),
-              h(
-                'span',
-                { className: 'dmt-cardDemoTitles' },
-                h('span', { className: 'dmt-cardDemoTitle' }, '已编辑 3 个文件'),
-                h(
-                  'span',
-                  { className: 'dmt-cardDemoStat' },
-                  h('span', { className: 'dmt-cardDemoAdded' }, '+206'),
-                  h('span', { className: 'dmt-cardDemoDeleted' }, '-14'),
-                ),
-              ),
-            ),
-            h(
-              'div',
-              { className: 'dmt-cardDemoRow' },
-              h('span', { className: 'dmt-cardDemoPath' }, '~/.dsh/plugins/dsh-colorlab/client.js'),
-              h('span', { className: 'dmt-cardDemoCounts' }, h('span', { className: 'dmt-cardDemoAdded' }, '+61 '), h('span', { className: 'dmt-cardDemoDeleted' }, '-12')),
-            ),
-          ),
-          /* 交付文件卡片：宿主 Deliverables 组件，没有横带，整张卡片底色就是 --deliverable-fill。 */
-          h('div', { className: 'dmt-cardDemoLabel' }, '交付文件'),
-          h(
-            'div',
-            { className: 'dmt-deliverDemo' },
-            h('span', { className: 'dmt-deliverDemoIcon' }, '📄'),
-            h(
-              'span',
-              { className: 'dmt-deliverDemoBody' },
-              h('span', { className: 'dmt-deliverDemoName' }, 'report.md'),
-              h('span', { className: 'dmt-deliverDemoDesc' }, 'Markdown · 12 KB'),
-            ),
-          ),
-        ),
-        /* 分类按 kind 分组：汇总类用黄，工具行用绿 —— 色块直接显示各自的颜色。 */
-        ['汇总行', '工具行'].map((groupLabel) => {
-          const wantKind = groupLabel === '汇总行' ? ['summary', 'turn'] : ['tool']
-          const entries = ROW_VARIANTS.filter((entry) => wantKind.includes(entry.kind))
-          if (entries.length === 0) return null
-          return h(
-            'div',
-            { className: 'dmt-checkGroup', key: groupLabel },
-            h('div', { className: 'dmt-checkGroupTitle' }, groupLabel),
-            h(
-              'div',
-              { className: 'dmt-checkGrid' },
-              entries.map((entry) => {
-                const on = rowVariantList.includes(entry.variant)
-                const swatchColor = entry.kind === 'tool' ? snapshot.rowColor : snapshot.summaryColor
-                return h(
-                  'label',
-                  {
-                    key: entry.variant,
-                    className: 'dmt-check',
-                    'data-shared': entry.shared ? 'true' : undefined,
-                    title: entry.shared ? entry.sharedHint : undefined,
-                  },
-                  h('input', {
-                    type: 'checkbox',
-                    checked: on,
-                    onChange: () => toggleVariant(entry.variant),
-                  }),
-                  h('span', {
-                    className: 'dmt-checkSwatch',
-                    style: {
-                      background: on ? swatchColor : 'transparent',
-                      borderColor: on ? swatchColor : 'var(--dsw-alias-border-l4)',
-                    },
-                  }),
-                  h('span', null, entry.label),
-                  entry.shared ? h('span', { className: 'dmt-checkTag' }, '共用') : null,
-                )
-              }),
-            ),
-          )
-        }),
-        /* 预览：两类分别复刻宿主的真实结构，所以**同一张样式表**会命中它们。
-           - 汇总类：`button[data-process-activity]` / `button[data-turn-process]`，
-             整行设色、图标 color:inherit。
-           - 工具行：`[data-variant]` + `data-disclosure-header` + `_leading`/`_title`
-             类名；摘要不带这两个类，所以不变色。 */
-        h(
-          'div',
-          { className: 'dmt-rowPreview', style: previewVars },
-          rowVariantList.length === 0 && snapshot.rowHighlight !== 'off'
-            ? h('div', { className: 'dmt-empty' }, '没勾选任何条目 —— 现在不会给任何过程行上色。')
-            : null,
-          ROW_VARIANTS.filter((entry) => rowVariantList.includes(entry.variant)).map((entry) => {
-            if (entry.kind === 'summary') {
-              return h(
-                'button',
-                {
-                  key: entry.variant,
-                  type: 'button',
-                  className: 'dmt-rowButton',
-                  'data-process-activity': 'commands',
-                },
-                h('span', { className: 'dmt-rowIcon' }, '›'),
-                h('span', null, entry.previewLabel || entry.label),
-              )
-            }
-            if (entry.kind === 'turn') {
-              return h(
-                'button',
-                {
-                  key: entry.variant,
-                  type: 'button',
-                  className: 'dmt-rowButton',
-                  'data-turn-process': 'turn-1',
-                  'data-turn-process-messages': 3,
-                },
-                h('span', { className: 'dmt-rowLabel' }, entry.previewLabel || '已完成，用时 1 分 20 秒'),
-              )
-            }
-            return h(
-              'div',
-              { key: entry.variant, 'data-variant': entry.variant, className: 'dmt-rowItem' },
-              h('div', { 'data-disclosure-header': true, className: 'dmt-rowHeader' },
-                h('div', { className: 'dmt-row' },
-                  h('span', { className: 'dmt-rowIcon _leading' }, '✎'),
-                  h('span', { className: 'dmt-rowTitle _title' }, entry.label),
-                  h('span', { className: 'dmt-rowSep' }, '·'),
-                  h('span', { className: 'dmt-rowSummary' }, summaryFor(entry.variant)),
-                ),
-              ),
-            )
-          }),
-        ),
-        rowVariantList.some((v) => v === 'others' || v === 'think')
-          ? h(
-              'div',
-              { className: 'dmt-warn' },
-              '⚠ ' + (rowVariantList.includes('others')
-                ? '「工具调用 / 命令」这个值和命令卡共用，勾选会连带给命令卡上色。'
-                : '') + (rowVariantList.includes('others') && rowVariantList.includes('think') ? ' ' : '') + (rowVariantList.includes('think')
-                  ? '「思考」来自 ui-chat 的推理行，不是工具行。'
-                  : ''),
-            )
-          : null,
-
-        /* ---- 玻璃界面（原「透明与壁纸」，2026-10-22 页面整理）----------- *
-         * 玻璃的原理：把一张背景铺进页面最底层，它就成了「画布内像素」，
-         * 上面的 backdrop-filter 才有东西可糊。只靠 CSS 糊不到桌面壁纸 ——
-         * 那张图在 Chromium 画布之外，永远采不到。
-         * 整理决策：核心五档常显（开关/来源/浓度/浮层/模糊），其余
-         *（压暗、饱和度、白雾、自选壁纸）收进「高级」；壁纸状态不再占
-         * 整行，改成来源行下面的一句动态副标题。 */
-        h(
-          GroupHead,
-          {
-            title: '玻璃界面',
-            sub: snapshot.glass === 'off'
-              ? '关闭状态 —— 打开后可调背景与浓度'
-              : status.glass === 'contour'
-                ? '等高线背景 · ' + (status.contour === 'worker'
-                  ? '独立线程渲染'
-                  : status.contour === 'main'
-                    ? '主线程渲染（worker 未起，已按低预算自动降档，滚动时暂停）'
-                    : '准备中…')
-                : status.glass === 'wallpaper'
-                  ? '壁纸已加载'
-                  : status.glass === 'gradient'
-                    ? (snapshot.glassBackground === 'gradient' ? '渐变背景' : '壁纸读取中／失败，暂用渐变')
-                    : '正在读取壁纸…',
-          },
-        ),
-
-        /* 玻璃界面：总开关。关掉即恢复完全不透明，且移除背景层。 */
-        h(
-          Row,
-          {
-            title: '玻璃界面',
-            hint: '让面板、浮层与输入框变成半透明玻璃，透出背后的壁纸。关闭后恢复完全不透明。',
-          },
-          h(Switch, { on: snapshot.glass !== 'off', label: '玻璃界面', onToggle: toggle('glass') }),
-        ),
-
-        /* 背景来源：桌面壁纸 / 渐变 / 等高线。 */
-        h(
-          Row,
-          {
-            title: '背景来源',
-            hint: '「桌面壁纸」读取 Windows 当前壁纸；「渐变」用配色生成光斑；「等高线」程序生成地形线（移植自 dsh-theme-endfield）。取不到壁纸时自动用渐变。',
-          },
-          h(Segmented, {
-            label: '背景来源',
-            value: snapshot.glassBackground,
-            options: OPTIONS.glassBackground,
-            onChange: setField('glassBackground'),
-          }),
-        ),
-
-        /* 表面浓度：三列的 alpha。只在玻璃开启时可调。
-           🔧 玻璃滑块走「即时应用 + 防抖写盘」，不进草稿 —— 它们的效果
-           就在整个界面上，草稿反而"拖了看不到"（用户报）。 */
-        h(
-          Row,
-          {
-            title: '表面浓度',
-            hint: '三列的底色浓度。100% = 原生 Mariana；越低壁纸越明显，但主题色会被冲淡。建议 60–85。即时生效。',
-          },
-          h(Slider, {
-            label: '表面浓度',
-            min: 0,
-            max: 100,
-            value: parsePercent(snapshot.glassTint, 0, 100, 65),
-            suffix: '%',
-            disabled: snapshot.glass === 'off',
-            onChange: (next) => updateGlassNow({ glassTint: String(next) }),
-          }),
-        ),
-
-        /* 浮层浓度：菜单/提示/输入框等。
-           🔧 语义 = 浮层合成目标在「比底板 +10%」之上再加的量（最多 +30%）。 */
-        h(
-          Row,
-          {
-            title: '浮层浓度',
-            hint: '卡片、菜单、气泡、输入框比底板「实」多少。0 = 只实一档（10%），40 = 实三档（40%）。太低浮层会和底板分不开。即时生效。',
-          },
-          h(Slider, {
-            label: '浮层浓度',
-            min: 0,
-            max: 40,
-            value: parsePercent(snapshot.glassFog, 0, 40, 16),
-            suffix: '%',
-            disabled: snapshot.glass === 'off',
-            onChange: (next) => updateGlassNow({ glassFog: String(next) }),
-          }),
-        ),
-
-        /* 模糊半径。 */
-        h(
-          Row,
-          {
-            title: '模糊半径',
-            hint: '玻璃背后的模糊半径。0 = 不模糊。即时生效。',
-          },
-          h(Slider, {
-            label: '模糊半径',
-            min: 0,
-            max: 40,
-            value: parsePercent(snapshot.glassBlur, 0, 40, 16),
-            suffix: 'px',
-            disabled: snapshot.glass === 'off',
-            onChange: (next) => updateGlassNow({ glassBlur: String(next) }),
-          }),
-        ),
-
-        /* 「高级」折叠（2026-10-22 页面整理）：压暗/饱和度/白雾/自选壁纸
-         * 都是稳态下不常动的档 —— 收起来，摘要行显示当前取值。 */
-        h(
-          Fold,
-          {
-            label: '高级',
-            summary: '压暗 ' + (snapshot.glassVeil === 'auto' ? '自动'
-              : snapshot.glassVeil === '0' ? '关'
-                : ({ '20': '轻', '35': '中', '50': '强' })[snapshot.glassVeil] || snapshot.glassVeil)
-              + ' · 饱和 ' + parsePercent(snapshot.glassSat, 0, 200, 120) + '%'
-              + ' · 白雾 ' + parsePercent(snapshot.glassHaze, 0, 100, 8) + '%',
-          },
-
-          /* 背景压暗。 */
-          h(
-            Row,
-            {
-              title: '背景压暗',
-              hint: '把壁纸压暗一档，保证亮壁纸下文字不发灰。「自动」跟随表面浓度（浓度高→压得轻）；固定档不随浓度变；「关」原样透出。',
-            },
-            h(Segmented, {
-              label: '背景压暗',
-              value: snapshot.glassVeil,
-              options: OPTIONS.glassVeil,
-              onChange: setField('glassVeil'),
-            }),
-          ),
-
-          /* 背景饱和度：和模糊一样做在底图上，全窗一次生效。 */
-          h(
-            Row,
-            {
-              title: '背景饱和度',
-              hint: '透过玻璃看到的色彩浓度：0 = 完全灰阶，100 = 原样，200 = 翻倍。等高线模式不作用（线色由强调色直出）。即时生效。',
-            },
-            h(Slider, {
-              label: '背景饱和度',
-              min: 0,
-              max: 200,
-              value: parsePercent(snapshot.glassSat, 0, 200, 120),
-              suffix: '%',
-              disabled: snapshot.glass === 'off',
-              onChange: (next) => updateGlassNow({ glassSat: String(next) }),
-            }),
-          ),
-
-          /* 白雾浓度：磨砂的"厚度感"来自这层薄白，不是来自模糊。 */
-          h(
-            Row,
-            {
-              title: '白雾浓度',
-              hint: '表面那层极淡的白，负责"厚度感"。0% 只剩模糊、缺少材质感；超过 30% 会把背后的模糊盖平。',
-            },
-            h(Slider, {
-              label: '白雾浓度',
-              min: 0,
-              max: 100,
-              value: parsePercent(snapshot.glassHaze, 0, 100, 8),
-              suffix: '%',
-              disabled: snapshot.glass === 'off',
-              onChange: (next) => updateGlassNow({ glassHaze: String(next) }),
-            }),
-          ),
-
-          /* 自选壁纸路径：只在「桌面壁纸」来源下出现（其余模式它是死行）。
-             用文本输入而不是文件选择器 —— 浏览器沙箱拿不到真实绝对路径
-             （input[type=file] 只给文件名），而 Host 侧需要绝对路径去读文件。 */
-          snapshot.glassBackground !== 'contour'
-            ? h(
-              Row,
-              {
-                title: '自选壁纸',
-                hint: '填本机图片的完整路径（如 D:\\pics\\bg.jpg），留空则跟随系统桌面壁纸。支持 jpg / png / webp。点「应用更改」生效。',
-              },
-              h('input', {
-                type: 'text',
-                className: 'dmt-pathInput',
-                style: { flex: 'none', width: '260px' },
-                placeholder: '跟随系统壁纸',
-                value: snapshot.glassWallpaperPath,
-                'aria-label': '自选壁纸路径',
-                spellcheck: false,
-                onChange: (event) => updateDraft({ glassWallpaperPath: event.target.value }),
-              }),
-            )
-            : null,
-        ),
-
-        /* 等高线漂移速度：只在「背景来源 = 等高线」时看得见。 */
-        snapshot.glassBackground === 'contour'
-          ? h(
-            Row,
-            {
-              title: '等高线速度',
-              hint: '地形的漂移档位。「静止」只画一帧、零开销；越快岛呼吸越明显，读长文时可能分心。',
-            },
-            h(Segmented, {
-              label: '等高线速度',
-              value: snapshot.contourSpeed,
-              options: OPTIONS.contourSpeed,
-              onChange: setField('contourSpeed'),
-            }),
-          )
-          : null,
-
-        /* ---- 等高线高级（2026-10-23）--------------------------------------
-         * 全部收进折叠块：这些是"调了能看出差别"的画质/观感旋钮，
-         * 但稳态下不常动，平铺会让设置页太长。摘要行显示当前画质组合。
-         * 内部机制（降级预算、渲染后端）刻意不暴露 —— 那些调了只会调坏。 */
-        snapshot.glassBackground === 'contour'
-          ? h(
-            Fold,
-            {
-              label: '等高线高级',
-              summary: '浓度 ' + parsePercent(snapshot.contourInk, 0, 100, 55) + '%'
-                + ' · ' + (OPTIONS.contourDensity.find((o) => o.value === snapshot.contourDensity) || {}).label + '画质'
-                + ' · ' + parsePercent(snapshot.contourFps, 1, 30, 8) + 'fps',
-            },
-
-            /* 换一张地形（重掷种子）。 */
-            h(
-              Row,
-              {
-                title: '换一张地形',
-                hint: '重新掷一次随机种子，生成一张全新的等高线地形。每次刷新页面本来也会换一张，这个按钮不用等刷新。',
-              },
-              h('button', {
-                type: 'button',
-                className: 'dmt-btn',
-                onClick: () => { contourReroll() },
-              }, '换一张'),
-            ),
-
-            /* 线条浓度（不透明度）。 */
-            h(
-              Row,
-              {
-                title: '线条浓度',
-                hint: '等高线的透明度。太淡看不清地形，太浓会压住正文。默认 55%。即时生效。',
-              },
-              h(Slider, {
-                label: '线条浓度',
-                min: 0,
-                max: 100,
-                value: parsePercent(snapshot.contourInk, 0, 100, 55),
-                suffix: '%',
-                onChange: (next) => updateGlassNow({ contourInk: String(next) }),
-              }),
-            ),
-
-            /* 线条颜色：跟随强调色 / 独立取色。 */
-            h(
-              Row,
-              {
-                title: '线条颜色',
-                hint: '默认跟随「强调色」（青/橙/蓝三选一）。勾掉就用自己的颜色 —— 想用灰度线、或者让地形跟主题色脱钩时用。',
-              },
-              h('span', { className: 'dmt-slotPicker' },
-                h('label', {
-                  className: 'dmt-slotSwatch',
-                  style: {
-                    background: /^#[0-9a-fA-F]{6}$/.test(snapshot.contourColor || '')
-                      ? snapshot.contourColor
-                      : ((ACCENTS[snapshot.accent] || ACCENTS.teal).dark),
-                  },
-                  title: '点击选择线条颜色',
-                },
-                h('input', {
-                  type: 'color',
-                  className: 'dmt-colorInput',
-                  'aria-label': '线条颜色',
-                  value: /^#[0-9a-fA-F]{6}$/.test(snapshot.contourColor || '')
-                    ? snapshot.contourColor
-                    : ((ACCENTS[snapshot.accent] || ACCENTS.teal).dark),
-                  onChange: (event) => updateGlassNow({ contourColor: String(event.target.value || '') }),
-                })),
-                h('button', {
-                  type: 'button',
-                  className: 'dmt-btn',
-                  title: '清除自定义颜色，回到跟随强调色',
-                  onClick: () => updateGlassNow({ contourColor: '' }),
-                }, snapshot.contourColor ? '跟随强调色' : '已在跟随'),
-              ),
-            ),
-
-            /* 线条粗细。 */
-            h(
-              Row,
-              {
-                title: '线条粗细',
-                hint: '1px 最省；高分屏（125%/150% 缩放）上 1.5px 更清楚；2px 地形感更重。',
-              },
-              h(Segmented, {
-                label: '线条粗细',
-                value: snapshot.contourWidth,
-                options: OPTIONS.contourWidth,
-                onChange: setField('contourWidth'),
-              }),
-            ),
-
-            /* 地形密度（画质↔流畅度主旋钮）。 */
-            h(
-              Row,
-              {
-                title: '地形密度',
-                hint: '画质与流畅度的主旋钮。「细」线更细腻但更吃显卡；「粗」最省。切换会重建地形（一瞬间）。',
-              },
-              h(Segmented, {
-                label: '地形密度',
-                value: snapshot.contourDensity,
-                options: OPTIONS.contourDensity,
-                onChange: setField('contourDensity'),
-              }),
-            ),
-
-            /* 等高线密集程度（层数）。 */
-            h(
-              Row,
-              {
-                title: '等高线密集程度',
-                hint: '地形的层数。少 = 稀疏大气；多 = 细密像真地图。默认 20 层。',
-              },
-              h(Slider, {
-                label: '等高线密集程度',
-                min: 12,
-                max: 30,
-                value: parsePercent(snapshot.contourLevels, 12, 30, 20),
-                suffix: ' 层',
-                onChange: (next) => updateGlassNow({ contourLevels: String(next) }),
-              }),
-            ),
-
-            /* 动画帧率。 */
-            h(
-              Row,
-              {
-                title: '动画帧率',
-                hint: '「省电」4fps 几乎看不出帧；「流畅」15fps 更顺滑但耗电发热上升。速度选「静止」时本项无效。',
-              },
-              h(Segmented, {
-                label: '动画帧率',
-                value: snapshot.contourFps,
-                options: OPTIONS.contourFps,
-                onChange: setField('contourFps'),
-              }),
-            ),
-
-            /* 地形起伏幅度。 */
-            h(
-              Row,
-              {
-                title: '地形起伏',
-                hint: '山有多高。调低地形变平缓、线变疏；调高山更密、线更挤。默认 100%。即时生效。',
-              },
-              h(Slider, {
-                label: '地形起伏',
-                min: 40,
-                max: 160,
-                value: parsePercent(snapshot.contourRelief, 40, 160, 100),
-                suffix: '%',
-                onChange: (next) => updateGlassNow({ contourRelief: String(next) }),
-              }),
-            ),
-
-            /* 漂移幅度。 */
-            h(
-              Row,
-              {
-                title: '漂移幅度',
-                hint: '岛的呼吸感有多明显。0 = 完全不漂（但速度档仍在走）；100% 是出厂值。调大读长文时容易分心。',
-              },
-              h(Slider, {
-                label: '漂移幅度',
-                min: 0,
-                max: 200,
-                value: parsePercent(snapshot.contourDrift, 0, 200, 100),
-                suffix: '%',
-                onChange: (next) => updateGlassNow({ contourDrift: String(next) }),
-              }),
-            ),
-
-            /* 高程标注：只在静止档可用（见 hint 里说明原因）。 */
-            h(
-              Row,
-              {
-                title: '高程标注',
-                hint: '在线上标出该线的高程值，像真等高线地图。'
-                  + (parsePercent(snapshot.contourSpeed, 0, 4, 2) > 0
-                    ? '⚠️ 当前速度不是「静止」：标注会自动隐藏 —— 每帧重画几十个文字会让光栅开销涨 143%。把速度调成「静止」即可看到标注。'
-                    : '静止档只画一帧，标注不产生持续开销。'),
-              },
-              h(Switch, {
-                on: snapshot.contourLabels === 'on',
-                label: '高程标注',
-                onToggle: toggle('contourLabels'),
-              }),
-            ),
-          )
-          : null,
-
-        /* ---- 手绘造型 ------------------------------------------------------
-         * 灵感来自 dsh-maid-whale-UI 的纸面主题：不规则圆角 + 纸影 +
-         * 悬停微抬 + 侧栏发光分界线。纯 CSS 零资源，与玻璃界面互相独立。 */
-        h(GroupHead, { title: '手绘造型', sub: '纸面风格的圆角与投影，独立于玻璃界面' }),
-
-        h(
-          Row,
-          {
-            title: '手绘造型',
-            hint: '面板与控件的圆角四角各差一点（手绘感），卡片加纸片式双层投影，按钮悬停微抬，侧栏右缘换成渐隐发光线。与玻璃界面互相独立，默认关。',
-          },
-          h(Switch, { on: snapshot.shape === 'on', label: '手绘造型', onToggle: toggle('shape') }),
-        ),
-
-        /* ---- 自定义配色 ---- */
-        h(GroupHead, {
-          title: '自定义配色',
-          sub: '逐槽覆盖 Mariana 默认值（只影响深色外观）；改回默认自动清除覆盖',
-        }),
         contrastWarning !== ''
           ? h('div', { className: 'dmt-warn' }, '⚠ ' + contrastWarning)
           : null,
+        /* 整理：正文颜色 9 槽是"调一次就不动"的内容，收进折叠块；
+           摘要直接报状态，不展开也知道里面是什么。
+           （预览块与亮度档已删除：预览在真实界面里就能看到，亮度档
+            只对深色生效、浅色不动，属于隐性行为，不值得占一行。） */
+        h(
+          Fold,
+          {
+            label: '正文调色（9 槽位）',
+            summary: proseCustomCount === 0
+              ? '全部跟随派生'
+              : '已手挑 ' + String(proseCustomCount) + ' 个',
+          },
+
+          /* 正文颜色：9 个槽位。取色器/输入框只写草稿（预览即时、全局不动），
+             页脚的「应用更改」才重建令牌并写盘。 */
+          h(
+            'div',
+            { className: 'dmt-custom' },
+            h(
+              'div',
+              { className: 'dmt-customGrid' },
+              PROSE_COLOR_SLOTS.map((slot) => {
+                const effective = proseEffective[slot.token].dark
+                const isCustom = Object.prototype.hasOwnProperty.call(prosePicked, slot.key)
+                return h(ColorSlot, {
+                  key: slot.key,
+                  label: slot.label,
+                  path: 'prose.' + slot.key,
+                  value: effective,
+                  isCustom,
+                  onPick: (hex) => setProseColor(slot.key, slot.token, hex),
+                  onReset: () => resetProseColor(slot.key, slot.token),
+                })
+              }),
+            ),
+          ),
+        ),
+
         h(
           Fold,
           {
@@ -9094,13 +11189,31 @@ function makeColorizer(scheme) {
         glassDeltaAlpha,
         glassComposite,
         glassSurfaceColor,
-        GLASS_TIER,
+        GLASS_TIER_DEFAULTS,
+        glassTier,
+        buildGround,
+        GLOW_DEFAULTS,
+        BAND_DEFAULTS,
+        parseLightList,
+        parseBandList,
+        MAX_LIGHTS,
+        MAX_BANDS,
+        wallpaperFitStyle,
+        wallpaperUrl,
+        pathOfSig,
+        urlOfSig,
+        normalizeGlassCrop,
+        glassCropNow,
+        parseCropSafe,
+        serializeGlassCrop,
         getWallpaperDiag: () => wallpaperDiag,
         hexToRgba,
         parsePercent,
         CARD_TARGETS,
         buildCardSheet,
         detectCardTargets,
+        detectFloatTargets,
+        FLOAT_TARGETS,
         mergeCardTargets,
         cardTargetsComplete,
         MARKDOWN_SHEET_ID,
@@ -9124,6 +11237,9 @@ function makeColorizer(scheme) {
         TEX_GRAMMAR,
         TEX_COLORS,
         lightenHex,
+        resolveAccent,
+        deriveAccentFromHex,
+        hslToHex,
         resolveTokens,
         resolveProseTokens,
         buildProseSheet,

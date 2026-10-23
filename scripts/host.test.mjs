@@ -105,7 +105,7 @@ async function main() {
   check(typeof mod.apply === 'function', 'apply 已导出')
   check(mod.SETTINGS_ENTRY === 'mariana-theme', 'SETTINGS_ENTRY = mariana-theme', mod.SETTINGS_ENTRY)
   check(mod.BOOT_BACKGROUND === '#343D46', 'BOOT_BACKGROUND = #343D46', mod.BOOT_BACKGROUND)
-  check(mod.FIELD_DEFAULTS && Object.keys(mod.FIELD_DEFAULTS).length === 35, 'FIELD_DEFAULTS 有 35 个字段', String(Object.keys(mod.FIELD_DEFAULTS || {}).length))
+  check(mod.FIELD_DEFAULTS && Object.keys(mod.FIELD_DEFAULTS).length === 60, 'FIELD_DEFAULTS 有 60 个字段', String(Object.keys(mod.FIELD_DEFAULTS || {}).length))
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.shape === 'off', 'FIELD_DEFAULTS.shape = off（手绘造型默认关）', mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.shape)
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.prose === 'on', 'FIELD_DEFAULTS.prose = on（默认开正文高亮）')
   check(mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseBoost === 'soft', 'FIELD_DEFAULTS.proseBoost = soft（默认提亮一档）', mod.FIELD_DEFAULTS && mod.FIELD_DEFAULTS.proseBoost)
@@ -221,6 +221,79 @@ async function main() {
         check(volatileFields.length === 15, '15 个字段全部 volatile（可落盘）', String(volatileFields.length))
       }
     }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * 🔧 2026-10-23：URL 壁纸（glassWallpaperUrl）
+   * ---------------------------------------------------------------- */
+  console.log('')
+  console.log('URL 壁纸')
+  {
+    check(typeof mod.normalizeWallpaperUrl === 'function', 'normalizeWallpaperUrl 已导出')
+    check(typeof mod.fetchWallpaperUrl === 'function', 'fetchWallpaperUrl 已导出')
+
+    /* 1. 只接受 http / https —— 安全边界第一道。 */
+    const n = mod.normalizeWallpaperUrl
+    check(n('https://example.com/a.jpg') === 'https://example.com/a.jpg', 'https 通过')
+    check(n('http://example.com/a.jpg') === 'http://example.com/a.jpg', 'http 通过')
+    check(n('  https://example.com/a.jpg  ') === 'https://example.com/a.jpg', '去首尾空白')
+    for (const bad of [
+      'file:///C:/Windows/System32/config/SAM',
+      'data:image/png;base64,AAAA',
+      'javascript:alert(1)',
+      'ftp://example.com/a.jpg',
+      'chrome://settings',
+      '//example.com/a.jpg',
+      'not a url',
+      '',
+      null,
+      undefined,
+      123,
+      {},
+    ]) {
+      check(n(bad) === '', '拒绝非法来源：' + JSON.stringify(bad), JSON.stringify(n(bad)))
+    }
+
+    /* 2. 上限常量。 */
+    check(mod.WALLPAPER_URL_MAX_BYTES === 24 * 1024 * 1024, '大小上限 24 MiB', String(mod.WALLPAPER_URL_MAX_BYTES))
+    check(mod.WALLPAPER_URL_TIMEOUT === 8000, '超时 8 秒', String(mod.WALLPAPER_URL_TIMEOUT))
+
+    /* 3. 源码层面的安全约束（行为测不到的部分）。 */
+    const hostSrc = readFileSync(join(root, 'index.js'), 'utf8')
+    const i = hostSrc.indexOf('async function fetchWallpaperUrl')
+    const fn = hostSrc.slice(i, i + 2800)
+    check(/AbortController/.test(fn) && /controller\.abort\(\)/.test(fn), '有超时中止（AbortController）')
+    check(/redirect:\s*'follow'/.test(fn), '跟随重定向')
+    check(/normalizeWallpaperUrl\(response\.url\)/.test(fn), '重定向后的最终 URL 也要校验')
+    check(/content-length/.test(fn) && /WALLPAPER_URL_MAX_BYTES/.test(fn), '按 content-length 预检大小')
+    check(/buffer\.length > WALLPAPER_URL_MAX_BYTES/.test(fn), '再按实际字节兜底')
+    check(/detectImageMime\(buffer\)/.test(fn) && /application\/octet-stream/.test(fn),
+      '魔数嗅探：不是图片就拒绝')
+    check(/user-agent/.test(fn), '带 User-Agent')
+
+    /* 4. 缓存。 */
+    check(/WALLPAPER_URL_TTL/.test(hostSrc) && /wallpaperUrlCache/.test(hostSrc), '有 URL 缓存')
+
+    /* 5. 回落链。 */
+    const handler = hostSrc.slice(hostSrc.indexOf('handler: async (request, response)'),
+      hostSrc.indexOf('handler: async (request, response)') + 3200)
+    check(/wantedUrl !== ''/.test(handler) && /fetchWallpaperUrl\(wantedUrl\)/.test(handler), 'URL 分支优先')
+    /* ⚠️ 不能只检查注释里有没有「拉取失败」—— 变异测试证明那样恒真。
+     * 必须检查**实际控制流**：从 `fetchWallpaperUrl` 调用到
+     * `readWallpaper` 之间**不许出现 404 / return**，
+     * 否则 URL 失败就不会回落到本地路径。
+     *
+     * 注意区间起点要取 `if (wantedUrl`（含整个 URL 分支），
+     * 终点取 `readWallpaper` —— 变异可能把 404 放在 if 块**外面**，
+     * 只取 if 块内部会漏掉。 */
+    const urlToLocal = handler.slice(handler.indexOf("if (wantedUrl !== '')"),
+      handler.indexOf('const found = readWallpaper'))
+    check(urlToLocal !== '' && !/writeHead\(404\)/.test(urlToLocal),
+      'URL 拉取失败不直接 404（要继续回落本地路径）',
+      '区间长 ' + urlToLocal.length + '，含 404: ' + /writeHead\(404\)/.test(urlToLocal))
+    check(/readWallpaper\(queryPath/.test(handler) && handler.indexOf('readWallpaper') > handler.indexOf('fetchWallpaperUrl'),
+      'URL 分支在 readWallpaper 之前，失败自然落下去')
+    check(/readWallpaper\(queryPath/.test(handler), '本地路径逻辑保留')
   }
 
   const failed = results.filter((result) => !result.ok)

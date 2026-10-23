@@ -179,6 +179,101 @@ function readWallpaper(customPath) {
   return null
 }
 
+/* ══ URL 壁纸（2026-10-23，参照 dsh-dream-skin 的「图片链接」档）═══════════
+ *
+ * 为什么必须由 Host 代拉、而不是页面直接 <img src="https://…">：
+ *
+ *   1. **CSP / 跨域**：页面跑在 dsh-app:// 协议下，外站图片既可能被 CSP 拦，
+ *      也可能因为没有 CORS 头而无法被 canvas 读取（我们还要做裁剪/亮度采样）；
+ *   2. **统一大小与超时**：外部图片可能几十 MB，或服务器不响应 ——
+ *      让 Host 拿住这两个上限，页面永远只看到「一张已经校验过的图」；
+ *   3. **失败语义一致**：和本地路径一样返回 404，页面自动退回渐变。
+ *
+ * 安全边界（照抄参照插件的取舍）：
+ *   · 只允许 http / https —— file:// / data: / 其他协议一律拒绝；
+ *   · 大小上限 24 MiB（流式累加，超了立刻中止，不把内存吃满）；
+ *   · 8 秒超时；
+ *   · 最多 3 次重定向（follow），最终 URL 仍必须是 http(s)；
+ *   · 只接受魔数嗅探得出的图片类型，防止把 HTML/JS 当图片喂给页面。
+ */
+
+/** URL 壁纸大小上限（24 MiB）。 */
+const WALLPAPER_URL_MAX_BYTES = 24 << 20
+/** URL 壁纸拉取超时（毫秒）。 */
+const WALLPAPER_URL_TIMEOUT = 8000
+/** URL 壁纸缓存（同一 URL 在 TTL 内不重复拉）。 */
+const WALLPAPER_URL_TTL = 60 * 1000
+let wallpaperUrlCache = { url: '', at: 0, bytes: null, mime: 'image/jpeg' }
+
+/**
+ * 校验并规范化一个壁纸 URL。
+ *
+ * @param {unknown} raw - 用户填的值。
+ * @returns {string} 合法的 http(s) URL；非法时返回空串。
+ */
+function normalizeWallpaperUrl(raw) {
+  if (typeof raw !== 'string') return ''
+  const value = raw.trim()
+  if (value === '') return ''
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return parsed.href
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 拉取远程图片。
+ *
+ * @param {string} url - 已校验的 http(s) URL。
+ * @returns {Promise<{bytes: Buffer, mime: string}|null>} 失败返回 null（不抛）。
+ */
+async function fetchWallpaperUrl(url) {
+  /* 缓存命中：同一 URL 在 TTL 内直接用，避免每次 applyNow 都出网。 */
+  const now = Date.now()
+  if (wallpaperUrlCache.url === url && wallpaperUrlCache.bytes !== null
+    && now - wallpaperUrlCache.at < WALLPAPER_URL_TTL) {
+    return wallpaperUrlCache
+  }
+  const controller = typeof AbortController === 'function' ? new AbortController() : null
+  const timer = controller !== null
+    ? setTimeout(() => { try { controller.abort() } catch { /* 已中止 */ } }, WALLPAPER_URL_TIMEOUT)
+    : null
+  try {
+    const response = await fetch(url, {
+      signal: controller !== null ? controller.signal : undefined,
+      redirect: 'follow',
+      headers: {
+        /* 部分图床（必应、Unsplash）对没有 UA 的请求直接 403。 */
+        'user-agent': 'dsh-colorlab/1.0 (+https://github.com/ruegg114514/dsh-colorlab)',
+        accept: 'image/*,*/*;q=0.8',
+      },
+    })
+    if (!response.ok) return null
+    /* 最终 URL 仍必须是 http(s)（防重定向到 file:// 之类）。 */
+    if (typeof response.url === 'string' && normalizeWallpaperUrl(response.url) === '') return null
+    const declared = Number(response.headers.get('content-length') || '0')
+    if (Number.isFinite(declared) && declared > WALLPAPER_URL_MAX_BYTES) return null
+    const buffer = Buffer.from(await response.arrayBuffer())
+    /* 大小兜底：有些服务器不给 content-length。 */
+    if (buffer.length === 0 || buffer.length > WALLPAPER_URL_MAX_BYTES) return null
+    const mime = detectImageMime(buffer)
+    /* 不是图片就拒绝 —— 别把 HTML 错误页当壁纸喂给页面。 */
+    if (mime === 'application/octet-stream') return null
+    wallpaperUrlCache = { url, at: now, bytes: buffer, mime }
+    return wallpaperUrlCache
+  } catch {
+    /* 超时 / DNS / TLS / 网络不可达：静默失败，页面退回渐变。 */
+    return null
+  } finally {
+    if (timer !== null) {
+      try { clearTimeout(timer) } catch { /* 无 timer */ }
+    }
+  }
+}
+
 /**
  * 注册壁纸路由。
  *
@@ -193,28 +288,56 @@ function registerWallpaperRoute(ctx, getCustomPath) {
       const dispose = hostCtx.webServer.register({
         kind: 'exact',
         path: WALLPAPER_ROUTE,
-        handler: (request, response) => {
+        handler: async (request, response) => {
           if (request.method !== 'GET' && request.method !== 'HEAD') {
             response.writeHead(405, { allow: 'GET, HEAD' })
             response.end()
             return
           }
-          /* 🔧 路径优先从 query 取。
+          /* 🔧 来源优先从 query 取。
            *
-           * 页面每次请求都带上当前的 glassWallpaperPath（见 client.js 的
-           * wallpaperUrl）。这比读 Host 的 config 可靠 —— config 是 apply()
-           * 时的快照，设置改动后不会更新，会导致「要提交第二次才显示上一次的图」。
+           * 页面每次请求都带上当前的 glassWallpaperPath / glassWallpaperUrl
+           * （见 client.js 的 wallpaperUrl）。这比读 Host 的 config 可靠 ——
+           * config 是 apply() 时的快照，设置改动后不会更新，会导致
+           * 「要提交第二次才显示上一次的图」。
            *
            * query 里没有时才回落到 config（兼容旧请求 / 直接访问路由）。 */
           let queryPath = ''
+          let queryUrl = ''
           try {
             const requestUrl = new URL(request.url, 'http://localhost')
-            const raw = requestUrl.searchParams.get('path')
-            if (typeof raw === 'string' && raw !== '') queryPath = raw
+            const rawPath = requestUrl.searchParams.get('path')
+            if (typeof rawPath === 'string' && rawPath !== '') queryPath = rawPath
+            const rawUrl = requestUrl.searchParams.get('url')
+            if (typeof rawUrl === 'string' && rawUrl !== '') queryUrl = rawUrl
           } catch {
             /* URL 解析失败就回落到 config */
           }
           const configured = typeof getCustomPath === 'function' ? getCustomPath() : ''
+
+          /* ---- URL 壁纸优先（2026-10-23）----
+           * 用户同时填了本地路径和 URL 时，URL 优先：它更明确是「我就要这张」。
+           * 本地路径为空、URL 非法或拉取失败时，自动回落到下面的本地路径逻辑。 */
+          const wantedUrl = normalizeWallpaperUrl(queryUrl !== '' ? queryUrl : configured)
+          if (wantedUrl !== '') {
+            const remote = await fetchWallpaperUrl(wantedUrl)
+            if (remote !== null) {
+              response.writeHead(200, {
+                'content-type': remote.mime,
+                'content-length': String(remote.bytes.length),
+                /* Host 侧已有 60s 缓存，浏览器再挡一层也无妨。 */
+                'cache-control': 'no-cache',
+              })
+              if (request.method === 'HEAD') {
+                response.end()
+                return
+              }
+              response.end(remote.bytes)
+              return
+            }
+            /* 拉取失败：继续走本地路径（用户可能两个都填了）。 */
+          }
+
           const found = readWallpaper(queryPath !== '' ? queryPath : configured)
           if (found === null) {
             response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -306,14 +429,80 @@ const FIELD_DEFAULTS = {
   glassTint: '65',
   /* 浮层（菜单/提示/输入框/气泡）雾面浓度百分比 0–40。 */
   glassFog: '16',
-  /* 玻璃背后的模糊半径 0–40 px。 */
+  /* 玻璃背后的模糊半径 0–80 px。
+     🔧 2026-10-23：区间从 0–40 放宽到 0–80 —— 40px 在 4K / 高 DPI 屏上不够糊。 */
   glassBlur: '16',
+  /* ---- 分层浓度（2026-10-23）：三档「比三列实多少」的百分点增量 ----
+     原来写死在 client.js 的 GLASS_TIER 常量里，用户调不了。 */
+  /* 浮层增量 0–40（百分点）：卡片/气泡/输入卡/菜单。 */
+  glassFloat: '10',
+  /* 代码块增量 0–40（百分点）：代码要逐字读，默认比浮层更实。 */
+  glassCode: '14',
+  /* 悬停增量 0–20（百分点）：hover 反馈；active 自动取 1.8 倍。 */
+  glassHover: '5',
+  /* ---- 按 UI 区域分的独立档（2026-10-23 第二轮）----
+     取值 -1 = 不覆盖（跟随默认档），所以老 profile 行为完全不变。 */
+  /* 信息面板浓度 0–100（-1 = 跟随浮层档）：弹层/菜单/Modal/统计面板。 */
+  glassPanelOpacity: '-1',
+  /* 文件预览/改动卡片浓度 0–100（-1 = 跟随浮层档）。 */
+  glassPreviewOpacity: '-1',
+  /* 浮层模糊 0–80 px（-1 = 跟随 glassBlur + 10）。 */
+  glassOverlayBlur: '-1',
+  /* 输入卡浓度 0–100（-1 = 跟随浮层档）。
+     注意：在我们架构里它管**浓度**不是模糊（输入卡做了硬裁，背后无文字可糊）。 */
+  glassComposerBlur: '-1',
+  /* 背景亮度 0–100（50 = 中性，<50 压暗、>50 提亮）。离开中性时氛围层自动淡出。 */
+  glassBrightness: '50',
+  /* ---- 背景地面模式（2026-10-23 第五轮）----
+     "glow" 光晕 | "bands" 分割 | "blend" 叠加。 */
+  glassGroundMode: 'glow',
+  /* 光晕光源 JSON：[{color,strength,x,y}]，最多 6 个。 */
+  glassLights: '',
+  /* 光晕整体浓度 0–70。 */
+  glassGlowAmount: '38',
+  /* 光晕扩散范围 40–140（%）。 */
+  glassGlowSpread: '100',
+  /* 分割方向 0 | 90 | 135 | 165。 */
+  glassBandDir: '165',
+  /* 分割色带 JSON：[{color}]，最多 6 条。 */
+  glassBands: '',
+  /* 分割边缘柔和 0–100（0 = 硬边）。 */
+  glassBandSoft: '2',
+  /* 自定义强调色 #RRGGBB（空串 = 用 accent 预设）。给了就优先于预设。 */
+  accentCustom: '',
+  /* 侧栏浓度 0–100（-1 = 跟随表面浓度 glassTint）。 */
+  glassSidebarOpacity: '-1',
+  /* ---- 「改实心」两个开关（2026-10-23 第三轮）----
+     这两处不是浓度问题而是层级问题：浮层没有 role 压不到，
+     diff 变量本身就带 12% alpha。默认 off 保持玻璃观感。 */
+  /* 浮层改实心 "on" | "off"：历史消息 / 悬停预览这类无 role 的 fixed 浮层。 */
+  glassSolidFloats: 'off',
+  /* diff 区域改实心 "on" | "off"：只改行底色，不动卡片与代码块。 */
+  glassSolidDiff: 'off',
   /* 白雾浓度 0–100。磨砂的「厚度感」来自这层薄白，不是来自模糊。
      上游实测：0% 边缘能量 0.23、8% → 0.61（平衡点）、28% → 1.03（会盖平模糊）。 */
   glassHaze: '8',
   /* 自选壁纸的绝对路径；空串 = 跟随系统桌面壁纸。
      指向本机图片文件时优先使用它，Host 会校验存在性与大小。 */
   glassWallpaperPath: '',
+  /* 壁纸图片链接（http/https）；空串 = 不用 URL。
+     给了就**优先于本地路径**：Host 代拉（24 MiB 上限 / 8s 超时 /
+     只接受图片魔数），失败自动回落到本地路径。 */
+  glassWallpaperUrl: '',
+  /* 背景图摆放方式："cover" 填充 | "contain" 适应 | "stretch" 拉伸 |
+     "tile" 平铺 | "center" 居中。与 Windows 个性化里的同名选项一致。 */
+  glassFit: 'cover',
+  /* 背景图裁剪区域：JSON 字符串 {"x","y","w","h"}，**单位是占原图的比例**
+     而不是像素（换分辨率/换窗口都不用重算）。空串 = 整图。 */
+  glassCrop: '',
+  /* 文字保护 "on" | "off"：有壁纸时给文字加与明暗同向的光晕，
+     并把次要文字加深一档。**不加任何底色**，不覆盖用户调好的透明度。 */
+  glassGuard: 'off',
+  /* 跟随图片明暗 "on" | "off"：按壁纸（裁剪后）的平均亮度自动切 light/dark。 */
+  glassAutoTone: 'off',
+  /* 自动明暗切换前的用户偏好（""=没切过，内部状态）。必须落盘：
+     否则重启后用户删掉壁纸，主题会永远停在我们切的那个。 */
+  glassBaseTheme: '',
   /* 背景压暗："auto" | "0" | "20" | "35" | "50"（固定百分比）。 */
   glassVeil: 'auto',
   /* 背景饱和度 0–200%（100 = 原样）。 */
@@ -547,11 +736,36 @@ function buildConfig() {
       glassTint: str(FIELD_DEFAULTS.glassTint),
       glassFog: str(FIELD_DEFAULTS.glassFog),
       glassBlur: str(FIELD_DEFAULTS.glassBlur),
+      glassFloat: str(FIELD_DEFAULTS.glassFloat),
+      glassCode: str(FIELD_DEFAULTS.glassCode),
+      glassHover: str(FIELD_DEFAULTS.glassHover),
+      glassPanelOpacity: str(FIELD_DEFAULTS.glassPanelOpacity),
+      glassPreviewOpacity: str(FIELD_DEFAULTS.glassPreviewOpacity),
+      glassOverlayBlur: str(FIELD_DEFAULTS.glassOverlayBlur),
+      glassComposerBlur: str(FIELD_DEFAULTS.glassComposerBlur),
+      glassBrightness: str(FIELD_DEFAULTS.glassBrightness),
+      glassGroundMode: str(FIELD_DEFAULTS.glassGroundMode),
+      glassLights: str(FIELD_DEFAULTS.glassLights),
+      glassGlowAmount: str(FIELD_DEFAULTS.glassGlowAmount),
+      glassGlowSpread: str(FIELD_DEFAULTS.glassGlowSpread),
+      glassBandDir: str(FIELD_DEFAULTS.glassBandDir),
+      glassBands: str(FIELD_DEFAULTS.glassBands),
+      glassBandSoft: str(FIELD_DEFAULTS.glassBandSoft),
+      accentCustom: str(FIELD_DEFAULTS.accentCustom),
+      glassSidebarOpacity: str(FIELD_DEFAULTS.glassSidebarOpacity),
+      glassSolidFloats: str(FIELD_DEFAULTS.glassSolidFloats),
+      glassSolidDiff: str(FIELD_DEFAULTS.glassSolidDiff),
       glassHaze: str(FIELD_DEFAULTS.glassHaze),
       glassWallpaperPath: str(FIELD_DEFAULTS.glassWallpaperPath),
-    glassVeil: str(FIELD_DEFAULTS.glassVeil),
-    glassSat: str(FIELD_DEFAULTS.glassSat),
-    contourSpeed: str(FIELD_DEFAULTS.contourSpeed),
+      glassWallpaperUrl: str(FIELD_DEFAULTS.glassWallpaperUrl),
+      glassFit: str(FIELD_DEFAULTS.glassFit),
+      glassCrop: str(FIELD_DEFAULTS.glassCrop),
+      glassGuard: str(FIELD_DEFAULTS.glassGuard),
+      glassAutoTone: str(FIELD_DEFAULTS.glassAutoTone),
+      glassBaseTheme: str(FIELD_DEFAULTS.glassBaseTheme),
+      glassVeil: str(FIELD_DEFAULTS.glassVeil),
+      glassSat: str(FIELD_DEFAULTS.glassSat),
+      contourSpeed: str(FIELD_DEFAULTS.contourSpeed),
       contourInk: str(FIELD_DEFAULTS.contourInk),
       contourWidth: str(FIELD_DEFAULTS.contourWidth),
       contourFps: str(FIELD_DEFAULTS.contourFps),
@@ -585,6 +799,8 @@ const Config = buildConfig()
 const DISABLED_ATTR = 'data-dsh-colorlab-off'
 
 export { Config, SETTINGS_ENTRY, FIELD_DEFAULTS, BOOT_BACKGROUND, DISABLED_ATTR }
+/* URL 壁纸的纯函数导出给测试用（不参与运行时 API）。 */
+export { normalizeWallpaperUrl, fetchWallpaperUrl, WALLPAPER_URL_MAX_BYTES, WALLPAPER_URL_TIMEOUT }
 
 /**
  * 首屏样式：只在外观解析为深色时命中，压过宿主 ui-theme 的默认 `body` 画布色。

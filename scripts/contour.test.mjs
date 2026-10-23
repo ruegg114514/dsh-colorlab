@@ -244,13 +244,76 @@ console.log('  E2. 成本降级')
     eSeed.setSeed(0x999999); eSeed.build(640, 480); eSeed.extract(0)
     check(JSON.stringify(eSeed.paths) !== before, 'setSeed 换种子 → 换一张地形')
 
-    /* 7. 接线检查：worker 消息带 look/seed，主线程走 setLook。 */
-    check(/look: contourLookNow\(\)/.test(src), 'worker 消息带 look（观感档位能进 worker）')
+    /* 7. 接线检查：worker 消息带 look/seed，主线程走 setLook。
+     *
+     *  ⚠️ 这里**不能**用 `/look: contourLookNow\(\)/.test(src)` 这种全源码搜索 ——
+     *  只要文件里**任意位置**有这串字符就算过，而 init / rebuild 消息本来就有，
+     *  于是 frame / recolor 漏了 look 时断言照样全绿。上一版就是这么把真 bug
+     *  放过去的（worker 后端下 5 个滑块全失效）。现在按**消息类型**逐条切开验。 */
+    const msgSites = [...src.matchAll(/op:\s*'(frame|recolor|rebuild|init)'/g)]
+      .map((m) => {
+        /* 从 op 起点向后截一段，截到下一个 op 或 400 字符为止。 */
+        const start = m.index
+        const rest = src.slice(start)
+        const nextOp = rest.slice(1).search(/op:\s*'(frame|recolor|rebuild|init)'/)
+        const seg = nextOp < 0 ? rest.slice(0, 400) : rest.slice(0, Math.min(nextOp + 1, 400))
+        return { op: m[1], seg }
+      })
+    const opsSeen = [...new Set(msgSites.map((s) => s.op))].sort().join(',')
+    check(opsSeen === 'frame,init,rebuild,recolor',
+      '四种 worker 消息都能在源码里找到', opsSeen)
+
+    /* 真正要守的那条：**frame / recolor 也必须带 look**。
+     * 不带 = 拖动密集程度/起伏/漂移/粗细时 worker 用旧档位，界面没反应。 */
+    for (const op of ['frame', 'recolor']) {
+      const sites = msgSites.filter((s) => s.op === op)
+      check(sites.length > 0, op + ' 消息存在', String(sites.length) + ' 处')
+      check(sites.every((s) => /look/.test(s.seg)),
+        op + ' 消息带 look（否则 worker 用旧档位，滑块拖动无反应）',
+        sites.map((s) => (/look/.test(s.seg) ? 'look✓' : 'look✗')).join(','))
+    }
+    /* init / rebuild 也必须有（首次握手与重建时档位要到位）。 */
+    for (const op of ['init', 'rebuild']) {
+      const sites = msgSites.filter((s) => s.op === op)
+      check(sites.every((s) => /look/.test(s.seg)), op + ' 消息带 look')
+    }
+    /* 「换一张地形」的 rebuild 必须带 seed，否则 worker 不会换地形。 */
+    check(msgSites.filter((s) => s.op === 'rebuild').some((s) => /seed/.test(s.seg)),
+      'rebuild 消息带 seed（「换一张地形」在 worker 后端下也生效）')
+
     check(/contourEngine\.setLook\(contourLookNow\(\)\)/.test(src),
       '主线程每帧推 look 进引擎')
     check(/engine\.setLook\(m\.look\)/.test(src), 'worker 侧消费 look')
     check(/function contourReroll/.test(src) && /contourSeed = contourNewSeed\(\)/.test(src),
       '「换一张地形」重掷种子并重建')
+
+    /* 两条后端必须共用同一个重建入口 —— 上一版的 bug 正是 contourApplyLook
+     * 只走主线程的 contourScheduleBuild（worker 下 contourEngine 恒为 null）。
+     * ⚠️ 断言前先剥掉注释：解释性注释里会提到 `contourScheduleBuild(0)`
+     * 这个字符串本身（"这里原来只调 contourScheduleBuild(0)…"），
+     * 直接搜源码会把注释当成代码，得到假红。 */
+    const stripComments = (text) => text
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+    const applyLook = stripComments(src.slice(src.indexOf('function contourApplyLook'),
+      src.indexOf('function contourApplyLook') + 1600))
+    check(/contourRequestRebuild\(/.test(applyLook),
+      '改密度走 contourRequestRebuild（按后端分流，worker 下会发 rebuild）')
+    check(!/contourScheduleBuild\(/.test(applyLook),
+      'contourApplyLook 里不再直接调 contourScheduleBuild（那是主线程专属）')
+    const reroll = stripComments(src.slice(src.indexOf('function contourReroll'),
+      src.indexOf('function contourReroll') + 900))
+    check(/contourRequestRebuild\(0, contourSeed\)/.test(reroll),
+      '「换一张地形」复用同一条重建入口（带 seed）')
+    /* contourRequestRebuild 本体必须真的两条路都走。 */
+    const reqRebuild = stripComments(src.slice(src.indexOf('function contourRequestRebuild'),
+      src.indexOf('function contourRequestRebuild') + 1600))
+    check(/contourWorker !== null/.test(reqRebuild) && /op: 'rebuild'/.test(reqRebuild),
+      'contourRequestRebuild：worker 活着时发 rebuild 消息')
+    check(/contourScheduleBuild\(/.test(reqRebuild),
+      'contourRequestRebuild：主线程路径走阶梯重建')
+    check(/setSeed\(seed\)/.test(reqRebuild) && /msg\.seed = seed/.test(reqRebuild),
+      'contourRequestRebuild：两条后端都能换种子')
   }
 
   /* 🔧 2026-10-23（用户报"分布相关设置要重新加载才生效"）：
@@ -258,18 +321,36 @@ console.log('  E2. 成本降级')
    * 改了密度/层数/起伏/漂移既不重建也不重画，只能刷新页面。 */
   {
     check(/function contourLookSig\(\)/.test(src), '有独立的观感签名函数')
-    /* 签名里必须真的含这几个档位（否则改了不触发重画）。 */
-    const sigFn = src.slice(src.indexOf('function contourLookSig'), src.indexOf('function contourLookSig') + 600)
-    for (const key of ['relief', 'drift', 'levelsWanted', 'maxCells', 'lineWidth']) {
+    /* 签名里必须真的含这些档位（否则改了不触发重画）。
+     * 🔧 labels / labelBg 是补上的：它们由 contourLookNow() 产出、被引擎
+     * drawTo 消费，但上一版漏进了签名 → 切「高程标注」时 sig 不变、
+     * contourApplySwitches 直接 return，开关点了完全没反应。 */
+    const sigFn = src.slice(src.indexOf('function contourLookSig'), src.indexOf('function contourLookSig') + 900)
+    for (const key of ['relief', 'drift', 'levelsWanted', 'maxCells', 'lineWidth', 'labels', 'labelBg']) {
       check(sigFn.includes('l.' + key), '观感签名包含 ' + key + '（改了会重画/重建）')
     }
+    /* 签名里出现的字段必须都是 contourLookNow() 真产出的 —— 防止拼错字段名
+     * 导致签名恒为 "undefined"，那样所有档位变更都触发不了。 */
+    const nowFn = src.slice(src.indexOf('function contourLookNow'), src.indexOf('function contourLookNow') + 700)
+    const produced = new Set([...nowFn.matchAll(/^\s+([A-Za-z]+):/gm)].map((m) => m[1]))
+    const used = [...sigFn.matchAll(/l\.([A-Za-z]+)/g)].map((m) => m[1])
+    check(used.length > 0 && used.every((k) => produced.has(k)),
+      '签名只读 contourLookNow() 真产出的字段（拼错会恒 undefined）',
+      '用 ' + used.join(',') + ' / 有 ' + [...produced].join(','))
     check(/const lookSig = contourLookSig\(\)/.test(src)
       && /'\|' \+ colorSig \+ '\|' \+ lookSig/.test(src),
       'contourApplySwitches 的签名里带上了观感档位')
     check(/function contourApplyLook\(\)/.test(src), '有观感变更处理函数')
     check(/const needsRebuild = prevMax !== String\(l\.maxCells\)/.test(src),
       '只有密度（网格上限）变了才重建，其余只重画（省掉几十毫秒 build）')
-    check(/contourLookRebuildTimer = setTimeout[\s\S]{0,300}CONTOUR_LOOK_DEBOUNCE/.test(src),
+    /* maxCells 必须仍在第 4 段（split('|')[3]）—— 往签名后面追加项时
+     * 不能把它的位置挤走，否则"要不要重建"的判断会错位。 */
+    const sigReturn = sigFn.slice(sigFn.indexOf('return l.'), sigFn.indexOf('return l.') + 400)
+    const parts = sigReturn.replace(/\s|\n/g, '').split("+'|'+")
+    check(parts.length > 3 && parts[3].includes('maxCells'),
+      'maxCells 仍在签名第 4 段（contourApplyLook 靠 [3] 判断重建）',
+      parts.slice(0, 5).join(' | '))
+    check(/contourLookRebuildTimer = setTimeout[\s\S]{0,900}CONTOUR_LOOK_DEBOUNCE/.test(src),
       '重建走防抖（拖滑块连续触发只建最后一次）')
     check(/contourLastField = -1\s*\n\s*contourRefresh\(true\)/.test(src),
       '纯观感变更：重置节流并立即重画一帧')
@@ -353,7 +434,9 @@ console.log('  H. 接线')
 {
   check(src.includes("value: 'contour'"), 'OPTIONS.glassBackground 有第三选项')
   check(/state\.glassBackground === 'contour'/.test(src), 'syncGlassSheet 识别 contour 模式')
-  check(/const blur = contourActive \? 0 : Math\.max/.test(src), 'contour 模式壁纸层不加 blur')
+  /* 2026-10-23：渐变模式也加入「不糊」条件，所以断言放宽到「contourActive 参与判定」。 */
+  check(/const blur = \(contourActive \|\| gradientMode\) \? 0 : Math\.max/.test(src),
+    'contour 模式壁纸层不加 blur（渐变模式同理）')
   check(/if \(contourActive\) \{[\s\S]{0,200}style\.background = solid/.test(src),
     'contour 模式背景层铺实色 base（线画在它上面）')
   check(/syncContourLayer\(false\)[\s\S]{0,80}syncWallpaperLayer\(false\)/.test(src),
