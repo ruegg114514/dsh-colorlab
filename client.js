@@ -2654,7 +2654,17 @@ window.__ModuleLoader__.load({
      *   动画    = 相位只按名义步进 + duty-cycle 让位（防抽搐 / 防卡主线程）
      * ====================================================================== */
 
-    const CONTOUR_FPS = 24
+    /* 🔧 真机"worker 通了但整机帧率低得可怕"：worker 只挪走 JS 计算，
+     * 每帧整幅画布的重光栅化在**共享**的光栅/GPU 线程上 —— 和页面滚动
+     * 抢同一个渲染后端，所以干什么都卡。根治三刀（合计约 24 倍光栅降幅）：
+     *   ① 24fps → 8fps：漂移相位步进 1/150，运动极慢，8fps 肉眼无差；
+     *   ② Chaikin 3 遍 → 2 遍：顶点 ×8 → ×4，配后面的 Catmull-Rom
+     *      切线，圆角差异肉眼难辨；
+     *   ③ 画布存储 DPR 封顶 1：1px 细线在 HiDPI 下 1x 已够顺眼，
+     *      省掉 2x 屏的 4 倍像素量。
+     * 24fps 曾是上游出厂值，但上游默认主题没有我们这种全窗半透明合成层，
+     * raster 竞争模型不同 —— 这里以真机为准。 */
+    const CONTOUR_FPS = 8
     const CONTOUR_PHASE_STEP = 1 / 150
     const CONTOUR_SPEED = 2 /* 上游默认档（1x/2x/4x 里的 2） */
     const CONTOUR_DUTY = 0.5
@@ -3165,7 +3175,10 @@ window.__ModuleLoader__.load({
         const closed = (source[0] - source[source.length - 2]) ** 2
           + (source[1] - source[source.length - 1]) ** 2 < 4
         let points = closed ? source.slice(0, source.length - 2) : source.slice()
-        const passes = count <= CONTOUR_SMOOTH_FULL ? 3 : (count <= CONTOUR_SMOOTH_LIMIT ? 2 : 1)
+        /* 🔧 真机整机卡：3 遍 Chaikin = 顶点 ×8 → 每帧 4.5 万次 bezier 的
+         * 光栅化。2 遍（×4）配后面的 Catmull-Rom 切线，圆角差异肉眼难辨，
+         * 光栅成本减半 —— 与 12fps 合计约 4 倍降幅。 */
+        const passes = count <= CONTOUR_SMOOTH_FULL ? 2 : 1
         for (let pass = 0; pass < passes; pass++) {
           const n = points.length / 2
           const limit = closed ? n : n - 1
@@ -3498,13 +3511,13 @@ window.__ModuleLoader__.load({
       return contourWorkerStepOverride
     }
 
-    /** 主线程当前该画的尺寸/dpr（worker 与 fallback 共用一份口径）。 */
+    /** 主线程当前该画的尺寸/dpr（worker 与 fallback 共用一份口径）。
+     *  🔧 DPR 封顶 1：等高线是 1px 细线 + 8fps 慢漂，2x 存储的 4 倍像素
+     *  全是浪费（真机整机卡三刀之一）。 */
     function contourViewportSize() {
       const w = Math.max(1, typeof window !== 'undefined' ? window.innerWidth : 1280)
       const h = Math.max(1, typeof window !== 'undefined' ? window.innerHeight : 800)
-      const ratio = (typeof window !== 'undefined' && typeof window.devicePixelRatio === 'number'
-        && window.devicePixelRatio > 0) ? window.devicePixelRatio : 1
-      return { w, h, dpr: Math.min(2, ratio) }
+      return { w, h, dpr: 1 }
     }
 
     function contourFlushPending() {
