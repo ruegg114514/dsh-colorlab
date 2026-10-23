@@ -3648,6 +3648,22 @@ window.__ModuleLoader__.load({
 
     function contourOnScroll() {
       if (!contourActive) return
+      /* 🔧 让路只对**主线程路径**有意义（用户报"一滚动等高线就冻住"）：
+       * worker 活着时动画帧只是主线程上的一条 postMessage（微秒级），
+       * 渲染在独立线程 —— 暂停它省不了任何东西，只会让背景看起来死了。
+       * 若此前在主线程路径下已暂停，现在后端切到 worker 也要立即恢复。 */
+      if (contourWorker !== null) {
+        if (contourScrollPaused) {
+          contourScrollPaused = false
+          if (contourScrollTimer !== null) {
+            try { clearTimeout(contourScrollTimer) } catch { /* 无 timer */ }
+            contourScrollTimer = null
+          }
+          contourSig = ''
+          contourApplySwitches()
+        }
+        return
+      }
       if (!contourScrollPaused) {
         contourScrollPaused = true
         contourStopLoop() /* 立刻让路：这一帧之后不再有动画帧 */

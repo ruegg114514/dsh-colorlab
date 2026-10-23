@@ -236,8 +236,10 @@ console.log('  H. 接线')
    * （上游 scroll-pause 的真实用途 —— 初版误判为"fixed 层不需要"砍掉了）。 */
   check(/document\.addEventListener\('scroll', onScroll, \{ capture: true, passive: true \}\)/.test(src),
     '滚动暂停：捕获+passive 监听覆盖页面内所有滚动容器')
-  check(/contourOnScroll[\s\S]{0,400}contourStopLoop\(\)/.test(src),
-    '滚动一开始就停循环（不是降频 —— 降频仍会插进滚动的关键帧）')
+  check(/contourOnScroll[\s\S]{0,900}contourStopLoop\(\)/.test(src),
+    '主线程路径：滚动一开始就停循环（不是降频 —— 降频仍会插进滚动的关键帧）')
+  check(/function contourOnScroll\(\) \{[\s\S]{0,600}if \(contourWorker !== null\) \{[\s\S]{0,400}return/.test(src),
+    'worker 路径：滚动**不**暂停动画（用户报"一滚动等高线就冻住"的修复）')
   check(/}, 140\)/.test(src) && /contourScrollTimer = setTimeout/.test(src),
     '滚动停止 140ms 后 debounce 恢复')
   check(/contourOverBudget = 0\s*\n\s*contourLastField = -1/.test(src),
