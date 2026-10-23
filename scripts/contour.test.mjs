@@ -349,6 +349,10 @@ console.log('  I. Worker 后端')
   fakeSelf2.onmessage({ data: { op: 'frame', phase: 0, color: '#5FB3B38c' } })
   check(out2.some((m) => m.op === 'error'), '未 init 就 frame → error 回报（主线程据此降级）',
     out2.map((m) => m.op).join(','))
+  check(/worker\.postMessage\(\{[\s\S]{0,400}\}, \[offscreen\]\)/.test(src),
+    'init 消息带 transfer 列表（OffscreenCanvas 不 transfer 会 DataCloneError —— 真机"worker 被拦截"的真凶）')
+  check(!/canvas: contourCanvas\.transferControlToOffscreen\(\)/.test(src),
+    '不许回到"transfer 结果只放消息体"的旧写法')
 }
 
 console.log('')

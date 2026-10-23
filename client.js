@@ -3592,15 +3592,20 @@ window.__ModuleLoader__.load({
         contourFailWorker()
       }
       try {
+        /* 🔧 真机"worker 被拦截"的真相：不是 CSP —— 主页面根本没有 CSP。
+         * 是我漏了 transfer 列表：OffscreenCanvas 必须作为 postMessage 的
+         * 第二个参数显式 transfer，否则结构化克隆直接 DataCloneError。
+         * （上游同款接线是 postMessage({canvas}, [canvas])。） */
+        const offscreen = contourCanvas.transferControlToOffscreen()
         worker.postMessage({
           op: 'init',
-          canvas: contourCanvas.transferControlToOffscreen(),
+          canvas: offscreen,
           seed: contourSeed,
           w: size.w, h: size.h, dpr: size.dpr,
           step: 0, /* 0 = 起步档 */
           phase: contourPhase,
           color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
-        })
+        }, [offscreen])
         contourLastSize = size
         return true
       } catch (error) {
@@ -3990,7 +3995,8 @@ window.__ModuleLoader__.load({
           /* worker 已接管画布：主线程不需要引擎实例。后端显示由 ready 回执写入。 */
         } else {
           contourEngine = createContourEngine(contourSeed)
-          /* 🔧 worker 起不来（CSP 拦 blob: worker 是预期内的一种）：
+          /* 🔧 worker 起不来（真机查明的头号原因是 init 漏了 transfer
+           * 列表 → DataCloneError，不是 CSP —— 主页面没有 CSP）。
            * 记成 main —— 副标题会显示，用户能看到"到底在跑哪条路"。 */
           diag.contour = 'main'
           publish()
@@ -7486,7 +7492,7 @@ function makeColorizer(scheme) {
                 ? '等高线背景 · ' + (status.contour === 'worker'
                   ? '独立线程渲染'
                   : status.contour === 'main'
-                    ? '主线程渲染（worker 被拦截，已按低预算自动降档）'
+                    ? '主线程渲染（worker 未起，已按低预算自动降档，滚动时暂停）'
                     : '准备中…')
                 : status.glass === 'wallpaper'
                   ? '壁纸已加载'
