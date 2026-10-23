@@ -84,6 +84,22 @@ dsh plugin remove ruegg114514/dsh-colorlab
 Or just turn **Enable** off in the plugin's settings panel: the theme reverts to
 the host default immediately, no restart needed, and your saved colours are kept.
 
+## Versions
+
+Releases are tagged and documented on the
+[releases page](https://github.com/ruegg114514/dsh-colorlab/releases); the
+per-version detail lives in [CHANGELOG.md](CHANGELOG.md).
+
+The command above always installs the tip of `main`. To pin a specific release:
+
+```sh
+dsh plugin add ruegg114514/dsh-colorlab#v1.1.0
+```
+
+Version numbers follow [SemVer](https://semver.org/). While the plugin is
+pre-2.0, a minor bump may still change how a setting looks — the CHANGELOG says
+so explicitly under **Changed** when it does.
+
 ---
 
 ## What it changes
@@ -506,6 +522,20 @@ dsh plugin remove ruegg114514/dsh-colorlab
 
 或者直接在设置页把「启用」关掉：立即回退到宿主默认配色，无需重启，
 已保存的颜色不会丢。
+
+## 版本
+
+每个版本都在 [releases 页面](https://github.com/ruegg114514/dsh-colorlab/releases)
+打标签并写更新说明；逐版本细节见 [CHANGELOG.md](CHANGELOG.md)。
+
+上面那条命令永远装 `main` 的最新提交。想固定到某个版本：
+
+```sh
+dsh plugin add ruegg114514/dsh-colorlab#v1.1.0
+```
+
+版本号遵循 [SemVer](https://semver.org/)。2.0 之前，次要版本仍可能改变某个
+设置项的样子 —— 真改了的话，CHANGELOG 的 **Changed** 一节会写明。
 
 ## 它改了什么
 
