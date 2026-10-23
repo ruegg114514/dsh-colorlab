@@ -191,6 +191,90 @@ console.log('  E2. 成本降级')
   check(/Math\.min\(40, Math\.max\(floor/.test(src),
     '地板/封顶钳制（覆盖值不许击穿起步网格）')
 
+  /* 🔧 2026-10-23：新增 8 个可调项（设置页「等高线高级」折叠块）。
+   * 这一组锁的是「设置真的能传到引擎」—— 光有 UI 不接线是最容易漏的。 */
+  {
+    /* 1. 地形密度：三档必须真的改变网格步长。 */
+    const eFine = createContourEngine(0x1234), eCoarse = createContourEngine(0x1234)
+    eFine.setLook({ maxCells: 40000 })
+    eCoarse.setLook({ maxCells: 14000 })
+    eFine.build(1920, 1080)
+    eCoarse.build(1920, 1080)
+    check(eFine.geometry.step < eCoarse.geometry.step,
+      '地形密度：细档的 step 比粗档小（密度真的影响网格）',
+      'fine=' + eFine.geometry.step + ' coarse=' + eCoarse.geometry.step)
+
+    /* 2. 层数：12 层和 30 层必须产生不同数量的路径。 */
+    const eFew = createContourEngine(0x5678), eMany = createContourEngine(0x5678)
+    eFew.setLook({ levelsWanted: 12 }); eFew.build(1280, 800); eFew.extract(0)
+    eMany.setLook({ levelsWanted: 30 }); eMany.build(1280, 800); eMany.extract(0)
+    check(eMany.paths.length > eFew.paths.length,
+      '密集程度：30 层的路径比 12 层多',
+      'few=' + eFew.paths.length + ' many=' + eMany.paths.length)
+
+    /* 3. 起伏幅度：改振幅必须真的改变几何。 */
+    const eFlat = createContourEngine(0x9ABC), eHilly = createContourEngine(0x9ABC)
+    eFlat.setLook({ relief: 0.4 }); eFlat.build(1024, 768); eFlat.extract(0)
+    eHilly.setLook({ relief: 1.6 }); eHilly.build(1024, 768); eHilly.extract(0)
+    check(JSON.stringify(eFlat.paths) !== JSON.stringify(eHilly.paths),
+      '地形起伏：不同幅度产生不同地形几何')
+
+    /* 4. 漂移幅度 0 时地形完全静止（相位推进也不再改几何）。 */
+    const eStill = createContourEngine(0xDEF0)
+    eStill.setLook({ drift: 0 })
+    eStill.build(800, 600); eStill.extract(0)
+    const a0 = JSON.stringify(eStill.paths)
+    eStill.extract(1.7)
+    check(JSON.stringify(eStill.paths) === a0,
+      '漂移幅度 0：相位推进后地形几何完全不变')
+
+    /* 5. 线条粗细 / 浓度 / 自定义色 走 drawTo 与 contourStrokeColor。 */
+    const dctx = { clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, bezierCurveTo() {},
+      closePath() {}, stroke() {}, setTransform() {}, strokeStyle: '', lineWidth: -1, lineJoin: '',
+      canvas: { width: 800, height: 600 } }
+    const eW = createContourEngine(0x1111)
+    eW.setLook({ lineWidth: 2 })
+    eW.build(800, 600); eW.extract(0); eW.draw(dctx, '#5FB3B38c')
+    check(dctx.lineWidth === 2, '线条粗细：档位真的写进 ctx.lineWidth', String(dctx.lineWidth))
+
+    /* 6. setSeed 必须换地形（「换一张地形」按钮的底层）。 */
+    const eSeed = createContourEngine(0x2222)
+    eSeed.build(640, 480); eSeed.extract(0)
+    const before = JSON.stringify(eSeed.paths)
+    eSeed.setSeed(0x999999); eSeed.build(640, 480); eSeed.extract(0)
+    check(JSON.stringify(eSeed.paths) !== before, 'setSeed 换种子 → 换一张地形')
+
+    /* 7. 接线检查：worker 消息带 look/seed，主线程走 setLook。 */
+    check(/look: contourLookNow\(\)/.test(src), 'worker 消息带 look（观感档位能进 worker）')
+    check(/contourEngine\.setLook\(contourLookNow\(\)\)/.test(src),
+      '主线程每帧推 look 进引擎')
+    check(/engine\.setLook\(m\.look\)/.test(src), 'worker 侧消费 look')
+    check(/function contourReroll/.test(src) && /contourSeed = contourNewSeed\(\)/.test(src),
+      '「换一张地形」重掷种子并重建')
+  }
+
+  /* 🔧 2026-10-23（用户报"分布相关设置要重新加载才生效"）：
+   * 观感签名必须把分布档位算进去，否则 contourApplySwitches 直接 return，
+   * 改了密度/层数/起伏/漂移既不重建也不重画，只能刷新页面。 */
+  {
+    check(/function contourLookSig\(\)/.test(src), '有独立的观感签名函数')
+    /* 签名里必须真的含这几个档位（否则改了不触发重画）。 */
+    const sigFn = src.slice(src.indexOf('function contourLookSig'), src.indexOf('function contourLookSig') + 600)
+    for (const key of ['relief', 'drift', 'levelsWanted', 'maxCells', 'lineWidth']) {
+      check(sigFn.includes('l.' + key), '观感签名包含 ' + key + '（改了会重画/重建）')
+    }
+    check(/const lookSig = contourLookSig\(\)/.test(src)
+      && /'\|' \+ colorSig \+ '\|' \+ lookSig/.test(src),
+      'contourApplySwitches 的签名里带上了观感档位')
+    check(/function contourApplyLook\(\)/.test(src), '有观感变更处理函数')
+    check(/const needsRebuild = prevMax !== String\(l\.maxCells\)/.test(src),
+      '只有密度（网格上限）变了才重建，其余只重画（省掉几十毫秒 build）')
+    check(/contourLookRebuildTimer = setTimeout[\s\S]{0,300}CONTOUR_LOOK_DEBOUNCE/.test(src),
+      '重建走防抖（拖滑块连续触发只建最后一次）')
+    check(/contourLastField = -1\s*\n\s*contourRefresh\(true\)/.test(src),
+      '纯观感变更：重置节流并立即重画一帧')
+  }
+
   /* 🔧 2026-10-23：Chaikin 遍数按「是否动画」分开（动画 1 / 静止 2）。 */
   {
     const es = createContourEngine(0xBEEF)
@@ -403,7 +487,7 @@ console.log('  I. Worker 后端')
   fakeSelf2.onmessage({ data: { op: 'frame', phase: 0, color: '#5FB3B38c' } })
   check(out2.some((m) => m.op === 'error'), '未 init 就 frame → error 回报（主线程据此降级）',
     out2.map((m) => m.op).join(','))
-  check(/worker\.postMessage\(\{[\s\S]{0,400}\}, \[offscreen\]\)/.test(src),
+  check(/worker\.postMessage\(\{[\s\S]{0,900}\}, \[offscreen\]\)/.test(src),
     'init 消息带 transfer 列表（OffscreenCanvas 不 transfer 会 DataCloneError —— 真机"worker 被拦截"的真凶）')
   check(!/canvas: contourCanvas\.transferControlToOffscreen\(\)/.test(src),
     '不许回到"transfer 结果只放消息体"的旧写法')

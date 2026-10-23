@@ -320,6 +320,25 @@ const FIELD_DEFAULTS = {
   glassSat: '120',
   /* 等高线漂移速度："0" 静止 | "1" | "2" | "4"。 */
   contourSpeed: '2',
+  /* ---- 等高线高级（2026-10-23）：观感/画质旋钮，全部收在设置页折叠块里。 ---- */
+  /* 线条浓度（不透明度）0–100，默认 55。 */
+  contourInk: '55',
+  /* 线条粗细 px："1" | "1.5" | "2"。 */
+  contourWidth: '1',
+  /* 动画帧率："4" 省电 | "8" 标准 | "15" 流畅。 */
+  contourFps: '8',
+  /* 地形密度（画质↔流畅度）："fine" 细 | "normal" 中 | "coarse" 粗。 */
+  contourDensity: 'normal',
+  /* 等高线层数 12–30，默认 20。 */
+  contourLevels: '20',
+  /* 地形起伏幅度 40–160（%），默认 100。 */
+  contourRelief: '100',
+  /* 漂移幅度 0–200（%），默认 100。 */
+  contourDrift: '100',
+  /* 线条颜色：空串 = 跟随强调色；否则 #RRGGBB。 */
+  contourColor: '',
+  /* 高程标注 "on" | "off"（只在「速度 = 静止」时生效，动画档有 fillText 成本）。 */
+  contourLabels: 'off',
   /* "on" | "off" —— 手绘造型（不规则圆角 + 纸影 + 悬停微抬 + 分界线）。
      灵感与数值来自 dsh-maid-whale-UI 的纸面主题（只抄机制不抄美术），
      与玻璃界面独立，默认关。 */
@@ -533,6 +552,15 @@ function buildConfig() {
     glassVeil: str(FIELD_DEFAULTS.glassVeil),
     glassSat: str(FIELD_DEFAULTS.glassSat),
     contourSpeed: str(FIELD_DEFAULTS.contourSpeed),
+      contourInk: str(FIELD_DEFAULTS.contourInk),
+      contourWidth: str(FIELD_DEFAULTS.contourWidth),
+      contourFps: str(FIELD_DEFAULTS.contourFps),
+      contourDensity: str(FIELD_DEFAULTS.contourDensity),
+      contourLevels: str(FIELD_DEFAULTS.contourLevels),
+      contourRelief: str(FIELD_DEFAULTS.contourRelief),
+      contourDrift: str(FIELD_DEFAULTS.contourDrift),
+      contourColor: str(FIELD_DEFAULTS.contourColor),
+      contourLabels: str(FIELD_DEFAULTS.contourLabels),
       shape: str(FIELD_DEFAULTS.shape),
     })
     /* 成功：清掉上一次失败留下的诊断（文件在 = 现在仍有问题，语义保持单一）。 */

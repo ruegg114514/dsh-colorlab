@@ -204,6 +204,32 @@ window.__ModuleLoader__.load({
       glassSat: '120',
       /* 等高线漂移速度："0" 静止 | "1" | "2" | "4"（上游 CONTOUR_SPEED_OPTIONS）。 */
       contourSpeed: '2',
+      /* ---- 等高线高级（2026-10-23 新增，全部收在设置页「等高线高级」折叠块里）----
+       * 设计原则：这里每一个都是「调了能看出差别」的画质/观感旋钮，
+       * 而不是内部机制（降级预算、后端选择之类不暴露，那些调了只会调坏）。
+       * 全部走即时应用（updateGlassNow），拖动立刻看得到。 */
+      /* 线条浓度（不透明度）0–100。默认 55 = 原来的深色档 0x8c。 */
+      contourInk: '55',
+      /* 线条粗细 px："1" | "1.5" | "2"。高分屏上 1px 偏细。 */
+      contourWidth: '1',
+      /* 动画帧率："4" 省电 | "8" 标准 | "15" 流畅。静止档不受它影响。 */
+      contourFps: '8',
+      /* 地形密度（画质↔流畅度主旋钮）："fine" 细 | "normal" 中 | "coarse" 粗。
+       * 直接决定网格单元上限（CONTOUR_MAX_CELLS 的三档）。 */
+      contourDensity: 'normal',
+      /* 等高线密集程度（层数）12–30，默认 20。 */
+      contourLevels: '20',
+      /* 地形起伏幅度 40–160（%，100 = 出厂）。调大 = 山更高、线更密；
+       * 太小会退化成一圈圈同心环，太大会变成乱麻 —— 区间是实测过的。 */
+      contourRelief: '100',
+      /* 漂移幅度 0–200（%，100 = 出厂）。岛的呼吸感。0 = 地形完全不漂（但相位仍走）。 */
+      contourDrift: '100',
+      /* 线条颜色：空串 = 跟随强调色（原行为）；否则是 #RRGGBB 的独立取色。 */
+      contourColor: '',
+      /* 高程标注："on" | "off"。**只在「等高线速度 = 静止」时生效** ——
+       * 实测动画档每帧 fillText 80+ 次让光栅从 5.7ms 涨到 14.0ms（+143%），
+       * 静止档只画一帧，标注是纯赚。 */
+      contourLabels: 'off',
       /* "on" | "off" —— 手绘造型（不规则圆角 + 纸影 + 悬停微抬 + 分界线）。
          灵感与数值来自 dsh-maid-whale-UI 的纸面主题（只抄机制不抄美术），
          与玻璃界面独立，默认关。 */
@@ -600,6 +626,24 @@ window.__ModuleLoader__.load({
         Object.freeze({ value: '1', label: '慢', hint: '1x 漂移' }),
         Object.freeze({ value: '2', label: '标准', hint: '2x（默认）' }),
         Object.freeze({ value: '4', label: '快', hint: '4x —— 岛呼吸明显，读代码时会分心' }),
+      ]),
+      /* 线条粗细。 */
+      contourWidth: Object.freeze([
+        Object.freeze({ value: '1', label: '1px', hint: '默认；1px 细线，最省光栅' }),
+        Object.freeze({ value: '1.5', label: '1.5px', hint: '高分屏（125%/150% 缩放）上更清楚' }),
+        Object.freeze({ value: '2', label: '2px', hint: '4K 屏或想要更"重"的地形感' }),
+      ]),
+      /* 动画帧率。 */
+      contourFps: Object.freeze([
+        Object.freeze({ value: '4', label: '省电', hint: '4fps —— 漂移极慢，几乎看不出帧，最省电' }),
+        Object.freeze({ value: '8', label: '标准', hint: '8fps（默认）—— 与"缓慢漂移"匹配，肉眼无顿挫' }),
+        Object.freeze({ value: '15', label: '流畅', hint: '15fps —— 更顺滑，代价是耗电和发热上升' }),
+      ]),
+      /* 地形密度（画质↔流畅度）。 */
+      contourDensity: Object.freeze([
+        Object.freeze({ value: 'fine', label: '细', hint: '线更细腻、地形细节多；光栅成本最高，弱显卡可能掉帧' }),
+        Object.freeze({ value: 'normal', label: '中', hint: '默认；1080p 走 10px 网格，单帧约 16ms' }),
+        Object.freeze({ value: 'coarse', label: '粗', hint: '最省；线更疏、细节少，适合高分屏或省电优先' }),
       ]),
     })
 
@@ -2685,6 +2729,7 @@ window.__ModuleLoader__.load({
      * raster 竞争模型不同 —— 这里以真机为准。
      * 第二轮（2026-10-23）把**单帧量**也砍了：1080p/step 6→10、动画态 1 遍平滑，
      * 实测 34.7ms → 16.7ms/帧。详见 docs/DESIGN.md「第二轮性能手术」。 */
+    /* 出厂帧率。实际帧率走 contourFps()（设置页「动画帧率」可调 4/8/15）。 */
     const CONTOUR_FPS = 8
     const CONTOUR_PHASE_STEP = 1 / 150
     const CONTOUR_DUTY = 0.5
@@ -2707,6 +2752,14 @@ window.__ModuleLoader__.load({
      * 实测「2 遍 vs 直接画折线」差 3.3 倍成本，这一刀最直接。 */
     const CONTOUR_SMOOTH_ANIM = 1
     const CONTOUR_SMOOTH_STATIC = 2
+    /* ---- 用户可调档位 → 内部常数的映射（2026-10-23 设置项接线）----
+     * 放在这里而不是散在调用点：所有"设置值 → 引擎常数"的换算集中一处，
+     * 改档位只动这张表，引擎本身保持纯函数。 */
+    const CONTOUR_DENSITY_CELLS = Object.freeze({
+      fine: 40000,   /* 更细：1080p 约 step 8，单帧光栅量约为「中」的 1.5 倍 */
+      normal: 24000, /* 默认：1080p → step 10（实测单帧 ~16ms） */
+      coarse: 14000, /* 更粗：1080p → step 12，光栅量约为「中」的 0.6 倍 */
+    })
     const CONTOUR_MIN_LEN = 40 /* 可见笔画短于此 = 碎屑 */
     const CONTOUR_MIN_RING_BOX = 21 /* 一个中位线距内闭合小环 = 圆点碎屑 */
     const CONTOUR_KEEP_LEN = CONTOUR_MIN_LEN * 1.35 /* 平滑会缩路径，留余量 */
@@ -2726,8 +2779,10 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 每次页面加载一个种子（同一次加载里所有重建共用 → resize 复现同地形）。 */
-    const contourSeed = (() => {
+    /** 每次页面加载一个种子（同一次加载里所有重建共用 → resize 复现同地形）。
+     *  🔧 2026-10-23：「换一张地形」按钮会改写这个种子 —— 所以它从 const 变成 let，
+     *  并且引擎每次 build 都读当前值（见 createContourEngine 的 seed 用法）。 */
+    function contourNewSeed() {
       let s = 0
       try {
         if (typeof crypto !== 'undefined' && crypto !== null
@@ -2739,24 +2794,84 @@ window.__ModuleLoader__.load({
       } catch { /* 沙箱没有 crypto */ }
       if (s === 0) s = ((Date.now() ^ Math.floor(Math.random() * 0xFFFFFFFF)) >>> 0)
       return (s >>> 0) || 0x5eed4242
-    })()
+    }
+    let contourSeed = contourNewSeed()
 
-    /** 视口自适应密度（上游：窄窗降电平/降岛数，防"缠成一团"）。 */
-    function contourStepFor(w, h) {
+    /** 视口自适应密度（上游：窄窗降电平/降岛数，防"缠成一团"）。
+     *  🔧 2026-10-23：格数上限改成可调（设置页「地形密度」细/中/粗）。
+     *  ⚠️ 这个函数会被序列化进 worker，**不能读 state** —— 上限由调用方传进来。 */
+    function contourStepFor(w, h, maxCells) {
+      const cap = (typeof maxCells === 'number' && maxCells > 0) ? maxCells : CONTOUR_MAX_CELLS
       let step = CONTOUR_STEP
       const cells = (s) => (Math.ceil(w / s) + 1) * (Math.ceil(h / s) + 1)
-      while (step < 40 && cells(step) > CONTOUR_MAX_CELLS) step += 1
+      while (step < 40 && cells(step) > cap) step += 1
       return step
     }
     function contourDensityT(w, h) {
       return Math.max(0, Math.min(1,
         (Math.min(w, h) - 320) / (CONTOUR_DENSITY_ANCHOR - 320)))
     }
-    function contourLevelsFor(w, h) {
-      return Math.max(6, Math.round(10 + contourDensityT(w, h) * (CONTOUR_LEVELS - 10)))
+    /** 层数：视口自适应之后，再乘用户档位（12–30，默认 20）。
+     *  ⚠️ 同样会被序列化进 worker → 档位由调用方传参，不读 state。 */
+    function contourLevelsFor(w, h, levelsWanted) {
+      const base = Math.max(6, Math.round(10 + contourDensityT(w, h) * (CONTOUR_LEVELS - 10)))
+      const raw = Number(levelsWanted !== undefined ? levelsWanted : 20)
+      const want = Number.isFinite(raw) ? Math.max(12, Math.min(30, Math.round(raw))) : 20
+      /* 按 20 为基准等比缩放：用户把 20 调到 30 → 实际层数 ×1.5。 */
+      return Math.max(6, Math.round(base * (want / 20)))
     }
     function contourBumpsFor(w, h) {
       return Math.max(6, Math.round(10 + contourDensityT(w, h) * (22 - 10)))
+    }
+    /** 地形起伏幅度倍率（0.4–1.6，默认 1）。作用在高斯岛的振幅上。 */
+    function contourReliefValue() {
+      const raw = Number(state && state.contourRelief !== undefined ? state.contourRelief : 100)
+      const pct = Number.isFinite(raw) ? Math.max(40, Math.min(160, raw)) : 100
+      return pct / 100
+    }
+    /** 漂移幅度倍率（0–2，默认 1）。作用在岛的呼吸位移上。 */
+    function contourDriftValue() {
+      const raw = Number(state && state.contourDrift !== undefined ? state.contourDrift : 100)
+      const pct = Number.isFinite(raw) ? Math.max(0, Math.min(200, raw)) : 100
+      return pct / 100
+    }
+    /** 当前「地形密度」档 → 格数上限（运行时用；引擎内部走参数）。 */
+    function contourMaxCells() {
+      const key = state && typeof state.contourDensity === 'string' ? state.contourDensity : 'normal'
+      return CONTOUR_DENSITY_CELLS[key] || CONTOUR_MAX_CELLS
+    }
+    /** 当前「密集程度」档（12–30，默认 20）。 */
+    function contourLevelsValue() {
+      const raw = Number(state && state.contourLevels !== undefined ? state.contourLevels : 20)
+      return Number.isFinite(raw) ? Math.max(12, Math.min(30, Math.round(raw))) : 20
+    }
+    /** 是否画高程标注。
+     *  ⚠️ 只在**静止档**（contourSpeed = 0）生效 —— 实测动画档每帧
+     *  fillText 80+ 次会让光栅从 5.7ms 涨到 14.0ms（+143%）。
+     *  静止档只画一帧，标注是纯赚；动画档一律不画（回退到纯线条）。 */
+    function contourLabelsOn() {
+      if (!state || state.contourLabels !== 'on') return false
+      /* 速度 > 0 = 有动画帧循环 → 关掉标注保帧率。 */
+      if (contourSpeedValue() > 0) return false
+      return true
+    }
+    /** 标注遮罩色：用当前配色的实色 base，才能真的"打断"线。 */
+    function contourLabelBg() {
+      const { dark, isDark } = wallpaperSurfaces || {}
+      return (dark && dark.base) || (isDark ? '#343D46' : '#FFFFFF')
+    }
+    /** 打包「用户档位」给引擎（主线程与 worker 共用一份形状）。
+     *  ⚠️ 引擎不读 state —— 所有观感档位都从这里显式推进去。 */
+    function contourLookNow() {
+      return {
+        relief: contourReliefValue(),
+        drift: contourDriftValue(),
+        levelsWanted: contourLevelsValue(),
+        maxCells: contourMaxCells(),
+        lineWidth: contourLineWidth(),
+        labels: contourLabelsOn(),
+        labelBg: contourLabelBg(),
+      }
     }
 
     /**
@@ -2764,22 +2879,39 @@ window.__ModuleLoader__.load({
      * 测试可以独立实例化拿 paths 断言不变量。
      */
     function createContourEngine(seedValue) {
-      const seed = (seedValue >>> 0) || 1
+      let seed = (seedValue >>> 0) || 1
       let f = null /* 场 + 全部 scratch */
       let geom = null /* { w, h, cols, rows, step } */
       let out = [] /* 本帧路径（Float64 平坦数组 [x0,y0,x1,y1,…] 的数组） */
+      let levelOf = [] /* 与 out 平行的电平数组（高程标注用） */
       /* Chaikin 遍数：动画态 1、静止态 2（见 CONTOUR_SMOOTH_ANIM 注释）。
        * 由运行时按「要不要动」切换，引擎本身不判断动画。 */
       let smoothPasses = CONTOUR_SMOOTH_ANIM
+      /* ⚠️ 引擎会被 String(fn) 序列化进 worker —— 里面**绝不能读 state**。
+       * 所有用户档位都由 setLook() 从主线程推入（worker 里也是发消息推）。 */
+      let look = {
+        relief: 1,      /* 起伏幅度倍率 */
+        drift: 1,       /* 漂移幅度倍率 */
+        levelsWanted: 20, /* 层数档位 */
+        maxCells: CONTOUR_MAX_CELLS, /* 格数上限（密度档） */
+        lineWidth: 1,   /* 线条粗细 px */
+        labels: false,  /* 是否画高程标注（默认关：有 fillText 成本） */
+        labelBg: 'rgba(35,41,46,1)', /* 标注遮罩色（由主线程按配色推入） */
+      }
 
       /* ---- 场求值：底纹正弦 + 有界散布高斯 + 5 遍可分离平滑 + EMA 连续化 ---- */
       const evaluate = (phase) => {
         if (f === null) return
         const { cols, rows, step, K, bx, by, ba, bs, dx, dy, F, W2 } = f
         f.boundsReady = false
+        /* 用户档位（每次求值读一次，避免在 K 循环里反复取）。 */
+        const relief = look.relief
+        const drift = look.drift
         const BASE = 0.62
         for (let i = 0; i < 3; i++) {
-          const fx = W2[i * 3], fy = W2[i * 3 + 1], ph = W2[i * 3 + 2] + phase * 0.11
+          /* 🔧 2026-10-23：底纹相位也要吃漂移幅度 —— 否则用户把「漂移幅度」
+           * 拉到 0 时，岛不动了但底纹正弦还在走，地形依然在变（本项就名不副实）。 */
+          const fx = W2[i * 3], fy = W2[i * 3 + 1], ph = W2[i * 3 + 2] + phase * 0.11 * drift
           const amp = BASE / 3
           for (let j = 0; j < rows; j++) {
             const yb = fy * (j * step) + ph
@@ -2795,10 +2927,12 @@ window.__ModuleLoader__.load({
         }
         for (let k = 0; k < K; k++) {
           const s = bs[k]
-          const amp = s * 0.55
+          /* 🔧 2026-10-23：漂移幅度（用户档位）乘在呼吸位移上，起伏幅度乘在
+           * 高斯振幅上。两者都只影响"画出来什么样"，不影响网格/成本。 */
+          const amp = s * 0.55 * drift
           const cx = bx[k] + Math.sin(phase * dx[k] + k * 1.7) * amp
           const cy = by[k] + Math.cos(phase * dy[k] + k * 2.3) * amp
-          const a = ba[k]
+          const a = ba[k] * relief
           const inv = 1 / (2 * s * s)
           const rad = 2.6 * s /* 高斯过 2.6σ 数值上已死 → 只写自己盒内的格 */
           let i0 = Math.max(0, Math.floor((cx - rad) / step))
@@ -2957,7 +3091,7 @@ window.__ModuleLoader__.load({
         const { cols, rows, F } = f
         const GX = 8, GY = 5
         const span = CONTOUR_SPAN
-        const levelStep = (span * 2) / contourLevelsFor(w, h)
+        const levelStep = (span * 2) / contourLevelsFor(w, h, look.levelsWanted)
         let worst = Infinity
         let ok = true
         let ink = Infinity
@@ -3223,10 +3357,17 @@ window.__ModuleLoader__.load({
         }
         f.boundsReady = true
         out = []
-        const levels = contourLevelsFor(geom.w, geom.h)
+        /* 🔧 2026-10-23：记录每条路径属于哪个电平 —— 高程标注需要它。
+         * 与 out 同下标平行数组（数字，零对象分配）；关掉标注时也照常填，
+         * 成本只是一次 push。 */
+        levelOf = []
+        const levels = contourLevelsFor(geom.w, geom.h, look.levelsWanted)
         const stepL = (CONTOUR_SPAN * 2) / levels
         for (let n = 0; n <= levels; n++) {
-          extractLevel(-CONTOUR_SPAN + n * stepL, out)
+          const L = -CONTOUR_SPAN + n * stepL
+          const before = out.length
+          extractLevel(L, out)
+          for (let k = before; k < out.length; k++) levelOf.push(L)
         }
       }
 
@@ -3276,7 +3417,9 @@ window.__ModuleLoader__.load({
         if (scale !== 1 && typeof ctx.setTransform === 'function') ctx.setTransform(scale, 0, 0, scale, 0, 0)
         ctx.clearRect(0, 0, w, h)
         ctx.strokeStyle = color
-        ctx.lineWidth = 1
+        /* 粗细走用户档位（1 / 1.5 / 2px）。注意：加粗会让 1px 细线的
+         * "地图感"变重，但光栅成本几乎不变（同一批贝塞尔，只是更粗）。 */
+        ctx.lineWidth = look.lineWidth
         ctx.lineJoin = 'round'
         const drawSmoothPath = (source) => {
           const count = source.length / 2
@@ -3354,6 +3497,111 @@ window.__ModuleLoader__.load({
           if (!isRing(out[i])) drawSmoothPath(smoothPath(out[i]))
         }
         ctx.stroke()
+        /* ---- 高程标注（可选，默认关）--------------------------------------
+         * 真等高线地图会在线上打断一小段、写上该线的高程值。
+         * 这里做的是简化版「带遮罩的注记」：
+         *   · 每条线只在**足够长**的路径上取 1 个标注点（避免碎线上糊一片）；
+         *   · 标注点取路径中点，并沿切线方向写；
+         *   · 先用背景色（实心 base）画一小段遮罩把线打断，再写字 ——
+         *     这样数字压在线上面也读得清，且看起来像"线在这里断开了"。
+         * 成本实测（1080p / 21 电平）：约 86 条路径 → 每帧 1 次 fillText 循环，
+         * 只在静止档或低帧率下可接受，动画档默认关闭（见 contourLabelsOn）。 */
+        if (look.labels) drawLabels(ctx, color)
+      }
+
+      /** 画高程标注。`color` 是线的颜色（用它写字，保证与线同色系）。
+       *
+       *  ⚠️ 成本实测（1080p / 21 电平 / 86 条路径，真实 Chromium）：
+       *    关标注 draw 2.7ms + 光栅 6.1ms
+       *    开标注 draw 6.5ms + 光栅 6.3ms（76 次 fillText）
+       *  fillText 是重操作（字体查找 + 字形光栅）。所以：
+       *    · 标注**只在静止档**（contourSpeed = 0）可用 —— 那时只画一帧，
+       *      成本一次性，之后再无 fillText；动画档一律不画。
+       *    · 每条线最多 1 个标注，且只在足够长的线上（短线标了也挤）。
+       *  这样动画档零成本，静止档的观感收益是纯赚的。 */
+      const drawLabels = (ctx, color) => {
+        if (geom === null || levelOf.length === 0) return
+        const { w, h } = geom
+        const span = CONTOUR_SPAN
+        /* 字号跟着画布走：小窗别写大字。 */
+        const fontSize = Math.max(9, Math.min(14, Math.round(Math.min(w, h) / 90)))
+        ctx.save()
+        ctx.font = '500 ' + fontSize + 'px ui-monospace, SFMono-Regular, Menlo, monospace'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        /* 线太短不标：标了也挤不下，还会在碎线上糊成一片。 */
+        const minLen = 160
+        /* 🔧 每个电平只标**一次**（真等高线地图的做法：同一条等高线标一个值）。
+         * 原来按路径标 → 同一电平的不同曲线各标一遍，既重复又贵（76 次
+         * fillText）。现在按电平去重，最多 21 次。 */
+        const doneLevel = new Set()
+        for (let i = 0; i < out.length; i++) {
+          const p = out[i]
+          const n = p.length / 2
+          if (n < 10) continue
+          const L = levelOf[i] !== undefined ? levelOf[i] : 0
+          const key = L.toFixed(4)
+          if (doneLevel.has(key)) continue
+          /* 路径总长（用来判断够不够标）。 */
+          let len = 0
+          for (let k = 2; k < p.length; k += 2) {
+            const dx = p[k] - p[k - 2], dy = p[k + 1] - p[k - 1]
+            len += Math.sqrt(dx * dx + dy * dy)
+          }
+          if (len < minLen) continue
+          /* 🔧 标注点选取：沿路径走 50% 处优先，但**避开画布边缘**
+           * （之前直接取中点，长线穿过屏幕时中点常常贴在边角被裁掉）。
+           * 做法：从 50% 开始，左右各试几个位置，取第一个离边 ≥40px 的。
+           * 每个电平只标一次，所以这点试探成本可忽略。 */
+          const margin = 40
+          let mid = -1
+          const tryFracs = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74]
+          for (let fi = 0; fi < tryFracs.length && mid < 0; fi++) {
+            const target = len * tryFracs[fi]
+            let acc2 = 0
+            for (let k = 2; k < p.length; k += 2) {
+              const dx = p[k] - p[k - 2], dy = p[k + 1] - p[k - 1]
+              const seg = Math.sqrt(dx * dx + dy * dy)
+              if (acc2 + seg >= target) {
+                const cx2 = p[k], cy2 = p[k + 1]
+                if (cx2 >= margin && cx2 <= w - margin && cy2 >= margin && cy2 <= h - margin) {
+                  mid = k
+                }
+                break
+              }
+              acc2 += seg
+            }
+          }
+          if (mid < 0) continue
+          const x = p[mid], y = p[mid + 1]
+          doneLevel.add(key)
+          const px = p[mid - 2], py = p[mid - 1]
+          let ang = Math.atan2(y - py, x - px)
+          /* 文字永远不倒着写：限制在 ±90° 内。 */
+          if (ang > Math.PI / 2) ang -= Math.PI
+          else if (ang < -Math.PI / 2) ang += Math.PI
+          /* 高程值：把 [-span, +span] 映射成一个像"海拔"的整数（米）。
+           * 场是无量纲的，这里只借用它的相对大小，映射到 100–900 区间。 */
+          const elev = Math.round(((L + span) / (span * 2)) * 800 + 100)
+          const text = String(elev)
+          ctx.save()
+          ctx.translate(x, y)
+          ctx.rotate(ang)
+          /* 🔧 遮罩要把线**彻底**打断：按文字的实测宽度 + 余量铺一块底色。
+           * 之前只用 fillRect 盖住字形框，1px 线从字缝里斜穿过去仍然可见 ——
+           * 看起来像"数字被线划了一道"。现在上下各多留 1px，宽度多 6px。 */
+          /* 🔧 遮罩只铺在**文字正下方**、且高度贴着字号 —— 之前用
+           * fontSize*1.7 的高度铺一块实心矩形，把周围别的线也切断了一大片，
+           * 看起来像"图上贴了张白条"。现在高度压到 1.15 倍字号（刚够
+           * 盖住笔画与上下 1px），宽度按实测字宽 + 4px。 */
+          const tw = ctx.measureText(text).width
+          ctx.fillStyle = look.labelBg || 'rgba(35,41,46,1)'
+          ctx.fillRect(-tw / 2 - 2, -fontSize * 0.58, tw + 4, fontSize * 1.16)
+          ctx.fillStyle = color
+          ctx.fillText(text, 0, 0)
+          ctx.restore()
+        }
+        ctx.restore()
       }
 
       return {
@@ -3361,7 +3609,7 @@ window.__ModuleLoader__.load({
          * stepOverride：成本自适应降级用的粗化网格（见 contourTune）；
          * 永不低于 contourStepFor 的格数上限地板，永不超过 40。 */
         build(w, h, stepOverride) {
-          const floor = contourStepFor(w, h)
+          const floor = contourStepFor(w, h, look.maxCells)
           const step = Math.min(40, Math.max(floor,
             typeof stepOverride === 'number' ? stepOverride : floor))
           /* 🔧 2026-10-23：候选**不再每轮重新分配**（见 ensureField 注释）。
@@ -3401,6 +3649,26 @@ window.__ModuleLoader__.load({
           smoothPasses = n
           return smoothPasses
         },
+        /** 换种子（「换一张地形」按钮）—— 下一次 build 生效。 */
+        setSeed(v) {
+          seed = (v >>> 0) || 1
+          return seed
+        },
+        get seed() { return seed },
+        /** 推入用户档位（起伏/漂移/层数/密度）。worker 侧同样走这条。 */
+        setLook(next) {
+          if (next && typeof next === 'object') {
+            if (Number.isFinite(next.relief)) look.relief = Math.max(0.2, Math.min(2, next.relief))
+            if (Number.isFinite(next.drift)) look.drift = Math.max(0, Math.min(2, next.drift))
+            if (Number.isFinite(next.levelsWanted)) look.levelsWanted = Math.max(12, Math.min(30, next.levelsWanted))
+            if (Number.isFinite(next.maxCells) && next.maxCells > 0) look.maxCells = next.maxCells
+            if (Number.isFinite(next.lineWidth)) look.lineWidth = Math.max(0.5, Math.min(4, next.lineWidth))
+            if (typeof next.labels === 'boolean') look.labels = next.labels
+            if (typeof next.labelBg === 'string' && next.labelBg) look.labelBg = next.labelBg
+          }
+          return look
+        },
+        get look() { return look },
         get smooth() { return smoothPasses },
         get paths() { return out },
         get geometry() { return geom },
@@ -3591,6 +3859,8 @@ window.__ModuleLoader__.load({
         '        engine = createContourEngine(m.seed)',
         '      }',
         '      if (engine && typeof m.smooth === "number") engine.setSmooth(m.smooth)',
+        '      if (engine && m.look) engine.setLook(m.look)',
+        '      if (engine && typeof m.seed === "number" && m.op === "rebuild") engine.setSeed(m.seed)',
         '      canvas.width = Math.max(1, Math.round(m.w * m.dpr))',
         '      canvas.height = Math.max(1, Math.round(m.h * m.dpr))',
         '      engine.build(m.w, m.h, m.step)',
@@ -3599,12 +3869,14 @@ window.__ModuleLoader__.load({
         '      self.postMessage({op:"ready", step: engine.geometry ? engine.geometry.step : 0})',
         '    } else if (m.op === "frame") {',
         '      if (typeof m.smooth === "number") engine.setSmooth(m.smooth)',
+        '      if (m.look) engine.setLook(m.look)',
         '      const t0 = performance.now()',
         '      engine.extract(m.phase)',
         '      engine.draw(ctx, m.color)',
         '      self.postMessage({op:"done", cost: performance.now() - t0})',
         '    } else if (m.op === "recolor") {',
         '      if (engine && typeof m.smooth === "number") engine.setSmooth(m.smooth)',
+        '      if (engine && m.look) engine.setLook(m.look)',
         '      if (engine && ctx) engine.draw(ctx, m.color)',
         '      self.postMessage({op:"done", cost: 0})',
         '    }',
@@ -3649,6 +3921,7 @@ window.__ModuleLoader__.load({
         op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr, step: next,
         phase: contourPhase, color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
         smooth: contourSmoothPasses(),
+        look: contourLookNow(),
       })
     }
     let contourWorkerStepOverride = 0
@@ -3760,6 +4033,9 @@ window.__ModuleLoader__.load({
           op: 'init',
           canvas: offscreen,
           seed: contourSeed,
+          relief: contourReliefValue(),
+          drift: contourDriftValue(),
+          look: contourLookNow(),
           w: size.w, h: size.h, dpr: size.dpr,
           step: 0, /* 0 = 起步档 */
           phase: contourPhase,
@@ -3868,10 +4144,34 @@ window.__ModuleLoader__.load({
      * 与上游对齐；tint 越高线越隐，正是"主题色为主"的语义。
      */
     function contourStrokeColor(accentHex, isDark) {
-      const hex = typeof accentHex === 'string' && /^#[0-9a-fA-F]{6}$/.test(accentHex.trim())
-        ? accentHex.trim()
-        : '#5FB3B3'
-      return hex + (isDark ? '8c' : 'b3')
+      /* 🔧 2026-10-23：新增「独立取色」—— 用户在设置页挑的色优先于强调色；
+       * 空串 = 跟随强调色（原行为）。不透明度也从写死改成可调（contourInk）。 */
+      const custom = state && typeof state.contourColor === 'string' ? state.contourColor.trim() : ''
+      const customOk = /^#[0-9a-fA-F]{6}$/.test(custom)
+      const hex = customOk
+        ? custom
+        : (typeof accentHex === 'string' && /^#[0-9a-fA-F]{6}$/.test(accentHex.trim())
+          ? accentHex.trim()
+          : '#5FB3B3')
+      const rawInk = Number(state && state.contourInk !== undefined ? state.contourInk : 55)
+      const pct = Number.isFinite(rawInk) ? Math.max(0, Math.min(100, rawInk)) : 55
+      /* 浅色外观下同样的百分比会显得更淡（底更亮），沿用原来的 70/55 比例抬一档。 */
+      const scale = isDark ? 1 : (70 / 55)
+      const a = Math.max(0, Math.min(100, Math.round(pct * scale)))
+      const alpha = Math.round(a * 255 / 100).toString(16).padStart(2, '0')
+      return hex + alpha
+    }
+
+    /** 线条粗细（px）：1 / 1.5 / 2。 */
+    function contourLineWidth() {
+      const raw = Number(state && state.contourWidth !== undefined ? state.contourWidth : 1)
+      return Number.isFinite(raw) ? Math.max(0.5, Math.min(4, raw)) : 1
+    }
+
+    /** 动画帧率（4 / 8 / 15）：只影响动画档，静止档仍是零 rAF。 */
+    function contourFps() {
+      const raw = Number(state && state.contourFps !== undefined ? state.contourFps : 8)
+      return Number.isFinite(raw) ? Math.max(1, Math.min(30, raw)) : 8
     }
 
     /** 当前漂移速度倍率（"0"=静止；非法值回落 2）。 */
@@ -3930,6 +4230,7 @@ window.__ModuleLoader__.load({
           phase: contourPhase,
           color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
           smooth: contourSmoothPasses(),
+          look: contourLookNow(),
         })
         contourWorkerOverBudget = 0
         return
@@ -3961,6 +4262,43 @@ window.__ModuleLoader__.load({
     const CONTOUR_RESIZE_DEBOUNCE = 120 /* 拖动窗口期间的连续 RO 合并成一次重建 */
     const CONTOUR_REFINE_GAP = 70
 
+    /**
+     * 「换一张地形」：重掷种子 + 重建。两条后端都支持。
+     * 种子写在模块级 contourSeed 上（resize 复现同地形的前提不变），
+     * 引擎实例各自 setSeed；worker 走一条 rebuild 消息带上新种子。
+     */
+    function contourReroll() {
+      if (!contourActive) return false
+      contourSeed = contourNewSeed()
+      contourPhase = 0
+      contourLastField = -1
+      contourSig = ''
+      /* 换地形 = 重新测画质：清掉学到的降档值与成本对账。 */
+      contourStepNow = 0
+      contourOverBudget = 0
+      contourWorkerStepOverride = 0
+      contourWorkerOverBudget = 0
+      if (contourWorker !== null) {
+        const size = contourLastSize
+        if (size === null) return false
+        contourWorkerBusy = true
+        contourWorkerMsg({
+          op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr,
+          step: 0, /* 0 = 起步档重测 */
+          seed: contourSeed,
+          phase: contourPhase,
+          color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
+          smooth: contourSmoothPasses(),
+          look: contourLookNow(),
+        })
+        return true
+      }
+      if (contourEngine === null || contourLastSize === null) return false
+      contourEngine.setSeed(contourSeed)
+      contourScheduleBuild(0)
+      return true
+    }
+
     function contourScheduleBuild(delayMs) {
       contourLadderGen += 1
       const gen = contourLadderGen
@@ -3982,7 +4320,7 @@ window.__ModuleLoader__.load({
          * 想让画质回到出厂档：重新选一次背景来源（destroyContourLayer 会清）。 */
         contourOverBudget = 0
         contourLastField = -1
-        const floor = contourStepFor(w, h)
+        const floor = contourStepFor(w, h, contourMaxCells())
         const target = Math.max(floor, contourStepNow > 0 ? contourStepNow : floor)
         const coarse = Math.max(target, Math.min(40, Math.ceil(Math.max(w, h) / 96) * 2))
         /* 已经降过档（target 本身就够粗）就别再爬一遍阶梯，直接一次到位。 */
@@ -4053,6 +4391,7 @@ window.__ModuleLoader__.load({
       const geometry = contourEngine.geometry
       if (geometry === null) return
       contourEngine.setSmooth(smooth)
+      contourEngine.setLook(contourLookNow())
       if (forceGeometry) contourEngine.extract(contourPhase)
       contourEngine.draw(ctx, color)
     }
@@ -4074,7 +4413,7 @@ window.__ModuleLoader__.load({
       if (contourWorker !== null) {
         const nowW = (typeof performance !== 'undefined' && typeof performance.now === 'function')
           ? performance.now() : Date.now()
-        const intervalW = Math.max(1000 / CONTOUR_FPS, contourLastCost > 0 ? contourLastCost / CONTOUR_DUTY : 0)
+        const intervalW = Math.max(1000 / contourFps(), contourLastCost > 0 ? contourLastCost / CONTOUR_DUTY : 0)
         if (contourLastField < 0 || nowW - contourLastField >= intervalW) {
           contourLastField = nowW
           contourPhase += CONTOUR_PHASE_STEP * contourSpeedValue()
@@ -4086,7 +4425,7 @@ window.__ModuleLoader__.load({
       }
       const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
         ? performance.now() : Date.now()
-      const interval = Math.max(1000 / CONTOUR_FPS, contourLastCost > 0 ? contourLastCost / CONTOUR_DUTY : 0)
+      const interval = Math.max(1000 / contourFps(), contourLastCost > 0 ? contourLastCost / CONTOUR_DUTY : 0)
       if (contourLastField < 0 || now - contourLastField >= interval) {
         /* 相位只按名义步进推进（绝不按挂钟补帧）—— 那是"抽搐"的来源；
          * 机器忙时表现为慢放，不是跳变。 */
@@ -4119,12 +4458,65 @@ window.__ModuleLoader__.load({
       contourRaf = null
     }
 
-    /** 动画开关（reduced-motion / 页面隐藏）与配色签名的对账。 */
+    /** 「观感签名」：把用户可调的分布/笔触档位全部压成一个串。
+     *  🔧 2026-10-23（用户报"分布相关设置要重新加载才生效"）：原来的
+     *  `sig` 只含「是否动画 + 描边色」，所以改密度/层数/起伏/漂移**签名不变**
+     *  → contourApplySwitches 直接 return，既不重建也不重画，只能等刷新页面。
+     *  现在这些档位全进签名，一变就走重画/重建。 */
+    function contourLookSig() {
+      const l = contourLookNow()
+      return l.relief + '|' + l.drift + '|' + l.levelsWanted + '|' + l.maxCells + '|' + l.lineWidth
+    }
+
+    /** 上一次生效的观感签名（用来判断"网格上限变了才需要重建"）。 */
+    let contourLookSigApplied = ''
+    let contourLookRebuildTimer = null
+    const CONTOUR_LOOK_DEBOUNCE = 160
+
+    /** 观感档位变了：能只重画的就重画，非重建不可的（密度/网格）才重建。
+     *
+     *  分两类（省掉不必要的几十毫秒 build）：
+     *   · levels / relief / drift / lineWidth → 只影响求值与描边 → 重画一帧；
+     *   · maxCells（地形密度）→ 决定网格 step → 必须 build。
+     *  重建走防抖：拖滑块时连续触发只建最后一次。 */
+    function contourApplyLook() {
+      const l = contourLookNow()
+      const sig = l.relief + '|' + l.drift + '|' + l.levelsWanted + '|' + l.maxCells + '|' + l.lineWidth
+      if (sig === contourLookSigApplied) return
+      const prevMax = contourLookSigApplied.split('|')[3]
+      contourLookSigApplied = sig
+      const needsRebuild = prevMax !== String(l.maxCells) || contourLastSize === null
+      if (needsRebuild) {
+        if (contourLookRebuildTimer !== null) {
+          try { clearTimeout(contourLookRebuildTimer) } catch { /* 无 timer */ }
+        }
+        contourLookRebuildTimer = setTimeout(() => {
+          contourLookRebuildTimer = null
+          if (!contourActive) return
+          /* 换网格 = 重新测画质：清掉学到的降档值。 */
+          contourStepNow = 0
+          contourOverBudget = 0
+          contourLastField = -1
+          contourScheduleBuild(0)
+        }, CONTOUR_LOOK_DEBOUNCE)
+        if (contourLookRebuildTimer && typeof contourLookRebuildTimer.unref === 'function') contourLookRebuildTimer.unref()
+        return
+      }
+      /* 只需重画：extract 会按新层数/起伏/漂移重算，draw 会用新粗细。 */
+      contourLastField = -1
+      contourRefresh(true)
+    }
+
+    /** 动画开关（reduced-motion / 页面隐藏）与配色、观感签名的对账。 */
     function contourApplySwitches() {
       const colorSig = contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light')
-      const sig = (contourWantsAnim() ? 'a' : '-') + '|' + colorSig
+      const lookSig = contourLookSig()
+      const sig = (contourWantsAnim() ? 'a' : '-') + '|' + colorSig + '|' + lookSig
       if (sig === contourSig) return
       contourSig = sig
+      /* 观感档位（密度/层数/起伏/漂移/粗细）变了 → 先走分类处理：
+       * 能重画的直接重画，要重建的防抖重建。 */
+      contourApplyLook()
       /* 动画刚关 / 配色刚变：补画一帧完整静态图（不留半更新帧）。
        * 主线程路径看引擎就绪；worker 路径看 ready 握手完成。 */
       const layerPainted = contourWorker !== null
@@ -7911,6 +8303,201 @@ function makeColorizer(scheme) {
               options: OPTIONS.contourSpeed,
               onChange: setField('contourSpeed'),
             }),
+          )
+          : null,
+
+        /* ---- 等高线高级（2026-10-23）--------------------------------------
+         * 全部收进折叠块：这些是"调了能看出差别"的画质/观感旋钮，
+         * 但稳态下不常动，平铺会让设置页太长。摘要行显示当前画质组合。
+         * 内部机制（降级预算、渲染后端）刻意不暴露 —— 那些调了只会调坏。 */
+        snapshot.glassBackground === 'contour'
+          ? h(
+            Fold,
+            {
+              label: '等高线高级',
+              summary: '浓度 ' + parsePercent(snapshot.contourInk, 0, 100, 55) + '%'
+                + ' · ' + (OPTIONS.contourDensity.find((o) => o.value === snapshot.contourDensity) || {}).label + '画质'
+                + ' · ' + parsePercent(snapshot.contourFps, 1, 30, 8) + 'fps',
+            },
+
+            /* 换一张地形（重掷种子）。 */
+            h(
+              Row,
+              {
+                title: '换一张地形',
+                hint: '重新掷一次随机种子，生成一张全新的等高线地形。每次刷新页面本来也会换一张，这个按钮不用等刷新。',
+              },
+              h('button', {
+                type: 'button',
+                className: 'dmt-btn',
+                onClick: () => { contourReroll() },
+              }, '换一张'),
+            ),
+
+            /* 线条浓度（不透明度）。 */
+            h(
+              Row,
+              {
+                title: '线条浓度',
+                hint: '等高线的透明度。太淡看不清地形，太浓会压住正文。默认 55%。即时生效。',
+              },
+              h(Slider, {
+                label: '线条浓度',
+                min: 0,
+                max: 100,
+                value: parsePercent(snapshot.contourInk, 0, 100, 55),
+                suffix: '%',
+                onChange: (next) => updateGlassNow({ contourInk: String(next) }),
+              }),
+            ),
+
+            /* 线条颜色：跟随强调色 / 独立取色。 */
+            h(
+              Row,
+              {
+                title: '线条颜色',
+                hint: '默认跟随「强调色」（青/橙/蓝三选一）。勾掉就用自己的颜色 —— 想用灰度线、或者让地形跟主题色脱钩时用。',
+              },
+              h('span', { className: 'dmt-slotPicker' },
+                h('label', {
+                  className: 'dmt-slotSwatch',
+                  style: {
+                    background: /^#[0-9a-fA-F]{6}$/.test(snapshot.contourColor || '')
+                      ? snapshot.contourColor
+                      : ((ACCENTS[snapshot.accent] || ACCENTS.teal).dark),
+                  },
+                  title: '点击选择线条颜色',
+                },
+                h('input', {
+                  type: 'color',
+                  className: 'dmt-colorInput',
+                  'aria-label': '线条颜色',
+                  value: /^#[0-9a-fA-F]{6}$/.test(snapshot.contourColor || '')
+                    ? snapshot.contourColor
+                    : ((ACCENTS[snapshot.accent] || ACCENTS.teal).dark),
+                  onChange: (event) => updateGlassNow({ contourColor: String(event.target.value || '') }),
+                })),
+                h('button', {
+                  type: 'button',
+                  className: 'dmt-btn',
+                  title: '清除自定义颜色，回到跟随强调色',
+                  onClick: () => updateGlassNow({ contourColor: '' }),
+                }, snapshot.contourColor ? '跟随强调色' : '已在跟随'),
+              ),
+            ),
+
+            /* 线条粗细。 */
+            h(
+              Row,
+              {
+                title: '线条粗细',
+                hint: '1px 最省；高分屏（125%/150% 缩放）上 1.5px 更清楚；2px 地形感更重。',
+              },
+              h(Segmented, {
+                label: '线条粗细',
+                value: snapshot.contourWidth,
+                options: OPTIONS.contourWidth,
+                onChange: setField('contourWidth'),
+              }),
+            ),
+
+            /* 地形密度（画质↔流畅度主旋钮）。 */
+            h(
+              Row,
+              {
+                title: '地形密度',
+                hint: '画质与流畅度的主旋钮。「细」线更细腻但更吃显卡；「粗」最省。切换会重建地形（一瞬间）。',
+              },
+              h(Segmented, {
+                label: '地形密度',
+                value: snapshot.contourDensity,
+                options: OPTIONS.contourDensity,
+                onChange: setField('contourDensity'),
+              }),
+            ),
+
+            /* 等高线密集程度（层数）。 */
+            h(
+              Row,
+              {
+                title: '等高线密集程度',
+                hint: '地形的层数。少 = 稀疏大气；多 = 细密像真地图。默认 20 层。',
+              },
+              h(Slider, {
+                label: '等高线密集程度',
+                min: 12,
+                max: 30,
+                value: parsePercent(snapshot.contourLevels, 12, 30, 20),
+                suffix: ' 层',
+                onChange: (next) => updateGlassNow({ contourLevels: String(next) }),
+              }),
+            ),
+
+            /* 动画帧率。 */
+            h(
+              Row,
+              {
+                title: '动画帧率',
+                hint: '「省电」4fps 几乎看不出帧；「流畅」15fps 更顺滑但耗电发热上升。速度选「静止」时本项无效。',
+              },
+              h(Segmented, {
+                label: '动画帧率',
+                value: snapshot.contourFps,
+                options: OPTIONS.contourFps,
+                onChange: setField('contourFps'),
+              }),
+            ),
+
+            /* 地形起伏幅度。 */
+            h(
+              Row,
+              {
+                title: '地形起伏',
+                hint: '山有多高。调低地形变平缓、线变疏；调高山更密、线更挤。默认 100%。即时生效。',
+              },
+              h(Slider, {
+                label: '地形起伏',
+                min: 40,
+                max: 160,
+                value: parsePercent(snapshot.contourRelief, 40, 160, 100),
+                suffix: '%',
+                onChange: (next) => updateGlassNow({ contourRelief: String(next) }),
+              }),
+            ),
+
+            /* 漂移幅度。 */
+            h(
+              Row,
+              {
+                title: '漂移幅度',
+                hint: '岛的呼吸感有多明显。0 = 完全不漂（但速度档仍在走）；100% 是出厂值。调大读长文时容易分心。',
+              },
+              h(Slider, {
+                label: '漂移幅度',
+                min: 0,
+                max: 200,
+                value: parsePercent(snapshot.contourDrift, 0, 200, 100),
+                suffix: '%',
+                onChange: (next) => updateGlassNow({ contourDrift: String(next) }),
+              }),
+            ),
+
+            /* 高程标注：只在静止档可用（见 hint 里说明原因）。 */
+            h(
+              Row,
+              {
+                title: '高程标注',
+                hint: '在线上标出该线的高程值，像真等高线地图。'
+                  + (parsePercent(snapshot.contourSpeed, 0, 4, 2) > 0
+                    ? '⚠️ 当前速度不是「静止」：标注会自动隐藏 —— 每帧重画几十个文字会让光栅开销涨 143%。把速度调成「静止」即可看到标注。'
+                    : '静止档只画一帧，标注不产生持续开销。'),
+              },
+              h(Switch, {
+                on: snapshot.contourLabels === 'on',
+                label: '高程标注',
+                onToggle: toggle('contourLabels'),
+              }),
+            ),
           )
           : null,
 
