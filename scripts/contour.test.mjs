@@ -149,7 +149,10 @@ console.log('  B. 覆盖率 / C. 去屑 / D. 环闭合')
 /* E. 视口自适应 */
 console.log('  E. 视口自适应')
 {
-  check(contourStepFor(1280, 800) === 6, '桌面 step=6')
+  /* 🔧 2026-10-23：CONTOUR_MAX_CELLS 60000 → 24000（1080p 的 6 万格上限
+   * 从来没生效过，等于最常见的分辨率永远拿到最贵档）。 */
+  check(contourStepFor(1280, 800) === 7, '桌面 1280×800 → step 7（24000 格上限生效）', String(contourStepFor(1280, 800)))
+  check(contourStepFor(1920, 1080) === 10, '1080p → step 10（这才是成本封顶的真正目的）', String(contourStepFor(1920, 1080)))
   check(contourStepFor(4000, 2400) > 6, '超大窗 step 加粗（成本封顶）', String(contourStepFor(4000, 2400)))
   check(contourLevelsFor(1280, 800) === 20, '桌面 20 电平')
   check(contourLevelsFor(360, 700) < contourLevelsFor(1280, 800), '窄窗电平更少')
@@ -165,7 +168,8 @@ console.log('  E2. 成本降级')
   e.build(1920, 1080, 12)
   check(e.geometry.step === 12, 'step 覆盖生效（降级路径可用）', String(e.geometry.step))
   e.build(1920, 1080, 2)
-  check(e.geometry.step === 6, '覆盖值低于起步时钳回地板（画质下限）', String(e.geometry.step))
+  check(e.geometry.step === contourStepFor(1920, 1080),
+    '覆盖值低于起步时钳回地板（画质下限）', String(e.geometry.step))
   e.build(1920, 1080, 999)
   check(e.geometry.step === 40, '封顶 40（再粗就不是地形了）', String(e.geometry.step))
   /* 降级后地形仍然通过覆盖率验证（粗网格不是把验证器关掉） */
@@ -176,9 +180,51 @@ console.log('  E2. 成本降级')
   check(/contourTune\(cost\)/.test(src) && /geometry\.step \+ 2/.test(src),
     '动画循环量 extract+draw 全成本，超预算 step+2 重建')
   check(/CONTOUR_BUDGET_FRAMES/.test(src), '连续 N 帧超预算才降（防偶发抖动误伤）')
-  check(/contourStepNow = 0/.test(src), 'resize 重置降级状态，回起步画质重测')
+  /* 🔧 2026-10-23：降档值必须**跨重建保留**。旧写法在 contourScheduleBuild 里
+   * contourStepNow = 0，于是降完立刻被 resize/阶梯拉回最贵档。
+   * 注意这条是负向锁（正向匹配 `contourStepNow = 0` 会命中 `let contourStepNow = 0`
+   * 声明行，变成什么都不锁的空断言）。 */
+  check(!/function contourScheduleBuild[\s\S]{0,900}contourStepNow = 0/.test(src),
+    '重建/resize 不再清零降档档位（学到的档位跨 resize 保留）')
+  check(/contourStepNow > 0 \? contourStepNow : floor/.test(src),
+    '阶梯终点 = max(出厂地板, 学到的降档值)（降级成果不被 resize 抹掉）')
   check(/Math\.min\(40, Math\.max\(floor/.test(src),
     '地板/封顶钳制（覆盖值不许击穿起步网格）')
+
+  /* 🔧 2026-10-23：Chaikin 遍数按「是否动画」分开（动画 1 / 静止 2）。 */
+  {
+    const es = createContourEngine(0xBEEF)
+    check(es.smooth === 1, '引擎默认动画态 Chaikin 1 遍（省光栅）', String(es.smooth))
+    check(es.setSmooth(2) === 2 && es.smooth === 2, '静止态可切回 2 遍（保画质）')
+    es.setSmooth(999)
+    check(es.smooth === 3, 'setSmooth 钳制到 0..3', String(es.smooth))
+  }
+
+  /* 🔧 2026-10-23：候选 scratch 跨 attempt 复用 —— 必须仍然逐字节确定，
+   * 且两个引擎不能串味（否则"同种子确定性"这条从此测不出回归）。 */
+  {
+    const ed = createContourEngine(0xDEADBEE)
+    ed.build(1024, 768)
+    ed.extract(0)
+    const once = JSON.stringify(ed.paths.map((p) => Array.from(p)))
+    ed.build(1024, 768)
+    ed.extract(0)
+    check(JSON.stringify(ed.paths.map((p) => Array.from(p))) === once,
+      '同一引擎重复 build → 逐字节相同（scratch 复用无残留状态）')
+    check(ed.paths.length > 20, 'scratch 复用后地形仍有完整路径', String(ed.paths.length) + ' 条')
+    const ea = createContourEngine(0x1111), eb = createContourEngine(0x2222)
+    ea.build(640, 480); eb.build(640, 480)
+    ea.extract(0); eb.extract(0)
+    check(JSON.stringify(ea.paths.map((p) => Array.from(p)))
+      !== JSON.stringify(eb.paths.map((p) => Array.from(p))),
+      '两个引擎互不串味（scratch 是每引擎闭包，不是模块级共享）')
+  }
+  check(/const ensureField = /.test(src) && /f\.F\.fill\(0\)/.test(src),
+    '候选复用 scratch：每轮只重写参数 + 清场，不再每轮分配数 MB')
+  check(/appliedSalt !== bestSalt/.test(src),
+    'best 布局在循环后重放（scratch 只有一个，不能持有候选引用）')
+  check(/if \(contourReducedKnown\) return contourReducedValue/.test(src),
+    'reduced-motion 查询结果被缓存（不再每帧 matchMedia）')
 }
 
 /* F. 描边色 */
@@ -243,8 +289,12 @@ console.log('  H. 接线')
     'worker 路径：滚动完全不干预（动画照常漂移）')
   check(/}, 140\)/.test(src) && /contourScrollTimer = setTimeout/.test(src),
     '停滚 140ms 后恢复（此刻没有手势在抢主线程）')
-  check(/destroyContourLayer[\s\S]{0,900}contourScrollTimer = null/.test(src),
+  check(/destroyContourLayer[\s\S]{0,1800}contourScrollTimer = null/.test(src),
     '销毁时清挂起的恢复计时器')
+  /* 🔧 2026-10-23：滚动恢复不再清零超预算计数 —— 否则"边读边滚"的用户
+   * 永远凑不满连续 3 帧，永远停在最贵档（这是"开着等高线一直卡"的根因之一）。 */
+  check(!/function contourOnScroll[\s\S]{0,1200}contourOverBudget = 0/.test(src),
+    '滚动恢复不清零超预算计数（否则降级永不收敛）')
   check(/contourPhase \+= CONTOUR_PHASE_STEP \* contourSpeedValue\(\)/.test(src),
     '相位只按名义步进（防抽搐），速度是用户档位（静止/1/2/4）')
   check(/if \(contourSpeedValue\(\) <= 0\) return false/.test(src),
@@ -259,8 +309,12 @@ console.log('  H. 接线')
     '主线程动画预算 = 8ms（半张 60Hz 帧），不是旧的 20.8ms')
   check(/if \(costMs <= CONTOUR_MAIN_BUDGET\)/.test(src),
     'contourTune 用主线程预算判超')
-  check(/contourTuneTimer = setTimeout\(\(\) => \{[\s\S]{0,240}contourEngine\.build/.test(src),
-    '降级重建推迟到宏任务（不在 rAF 回调里跑 32 轮验证器）')
+  /* 🔧 2026-10-23：setTimeout(fn, 0) 只是把长任务挪到下一个立即执行的宏任务，
+   * 从来不是"空闲"。改用 requestIdleCallback（带 typeof 守卫 + setTimeout 兜底）。 */
+  check(/requestIdleCallback/.test(src) && /typeof requestIdleCallback === 'function'/.test(src),
+    '降级重建推迟到空闲回调（带 typeof 守卫，旧 Chromium / Node 测试环境兜底）')
+  check(/contourScheduleIdle\([\s\S]{0,200}contourEngine\.build/.test(src),
+    '空闲重建里才跑 32 轮验证器（不在 rAF 回调里）')
   check(/diag\.contour = 'worker'/.test(src) && /diag\.contour = 'main'/.test(src),
     '后端可见：worker 握手/main 回落都记进 diag（副标题显示，不再盲猜）')
   check(/status\.contour === 'worker'/.test(src) && /主线程渲染/.test(src),
@@ -271,7 +325,7 @@ console.log('  H. 接线')
     '首建延迟让开启动风暴（首屏渲染/字体/壁纸 fetch）')
   check(/CONTOUR_RESIZE_DEBOUNCE = 120/.test(src),
     'resize 防抖（拖动窗口不再每次 RO 回调都重建）')
-  check(/contourLadderStage[\s\S]{0,400}contourEngine\.build\(w, h, step\)/.test(src)
+  check(/contourLadderStage[\s\S]{0,700}contourEngine\.build\(w, h, [\w$.()\s]+\)/.test(src)
     && /contourRefresh\(true\)/.test(src),
     '阶梯每档独立任务：建一档画一档，任务之间主线程可呼吸')
   check(/gen !== contourLadderGen/.test(src),

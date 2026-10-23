@@ -1791,6 +1791,19 @@ window.__ModuleLoader__.load({
       const codeSurface = surf.code || surf.layer2 || surf.base || '#2E363F'
       const alpha = parsePercent(s.glassTint, 0, 100, 65) / 100
       const blur = parsePercent(s.glassBlur, 0, 40, 16)
+      /* 🔧 2026-10-23（真机"一开等高线就卡"的元凶之一）：**背景层的 filter
+       * 关掉了，但这两处 backdrop-filter 没关**。
+       *
+       * 壁纸/渐变模式下底图是**静止的**，Chromium 可以把模糊结果缓存住，
+       * 滚动时也不重算 → 几乎免费。等高线模式下底图是每 125ms 换一次像素
+       * 的全窗 canvas → 命中的每一处 backdrop-filter 都被迫**重算 8 次/秒**：
+       *   · `_frame::before`（顶部 40px 全宽拖动条，16px 高斯）
+       *   · dialog/menu/listbox（`blur + 10` = 默认 26px 高斯）
+       * 而它们背后只是「一层实色 + 1px 细线」，糊它**视觉收益为零**。
+       * 所以等高线模式直接把这两组 backdrop-filter 全部置 none —— 纯收益。
+       * 注意：这不是把壁纸层的 filter 关掉（那条在 applyWallpaperFilter 里
+       * 早就是 contour 分支了），是另外两处漏网的。 */
+      const contourNoBlur = contourActive === true
       const g = 'html[' + GLASS_ATTR + '] '
       const lines = ['/* dsh-colorlab —— 玻璃界面 */']
 
@@ -1864,8 +1877,10 @@ window.__ModuleLoader__.load({
         + 'background:linear-gradient(to right,' + stripSide + ' 0,'
         + stripSide + ' calc(' + seam + ' - 1px),'
         + stripMain + ' calc(' + seam + ' + 1px),' + stripMain + ' 100%) !important;'
-        + 'backdrop-filter:blur(' + blur + 'px) saturate(120%) !important;'
-        + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(120%) !important}')
+        + (contourNoBlur
+          ? 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important}'
+          : 'backdrop-filter:blur(' + blur + 'px) saturate(120%) !important;'
+            + '-webkit-backdrop-filter:blur(' + blur + 'px) saturate(120%) !important}'))
 
       /* ③ 三列：**带 alpha 的主题色**，这是 Mariana 保住的地方。
        *
@@ -1986,8 +2001,13 @@ window.__ModuleLoader__.load({
         + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
 
       const frosted = Math.min(40, blur + 10)
-      const frostedFilter = 'backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
-        + '-webkit-backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
+      /* 🔧 等高线模式同 `_frame::before`：这两处的底图是活的（8fps 换像素），
+       * 26px 高斯重算 8 次/秒纯属浪费 —— 而且设置页本身就是 role="dialog"，
+       * 用户正是在那个面板里把背景切成等高线的，卡顿最直观的时刻就在这里。 */
+      const frostedFilter = contourNoBlur
+        ? 'backdrop-filter:none !important;-webkit-backdrop-filter:none !important;'
+        : 'backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
+          + '-webkit-backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
 
       /* 对话框 / 菜单 / 列表：半透明 + 强模糊。
        * 🔧 差值 + 预补偿：它们浮在内容区之上（内容区合成 ≈ α），
@@ -2650,31 +2670,43 @@ window.__ModuleLoader__.load({
      *   joins   = 边 id 缝合折线（零分配邻接）
      *   去屑    = 可见长度 / 闭合小环阈值 + 切点发须坍缩（deneedle）
      *   平滑    = Chaikin 角切割 ×(1..3) + 约束 Catmull-Rom 三次样条
-     *   布局    = 分层抖动格 + 覆盖率验证器（accept-or-reroll，32 次上限）
+     *   布局    = 分层抖动格 + 覆盖率验证器（accept-or-reroll，出厂档 32 次 / 降级档 10 次）
      *   动画    = 相位只按名义步进 + duty-cycle 让位（防抽搐 / 防卡主线程）
      * ====================================================================== */
 
     /* 🔧 真机"worker 通了但整机帧率低得可怕"：worker 只挪走 JS 计算，
      * 每帧整幅画布的重光栅化在**共享**的光栅/GPU 线程上 —— 和页面滚动
-     * 抢同一个渲染后端，所以干什么都卡。根治三刀（合计约 24 倍光栅降幅）：
+     * 抢同一个渲染后端，所以干什么都卡。第一轮根治三刀：
      *   ① 24fps → 8fps：漂移相位步进 1/150，运动极慢，8fps 肉眼无差；
-     *   ② Chaikin 3 遍 → 2 遍：顶点 ×8 → ×4，配后面的 Catmull-Rom
-     *      切线，圆角差异肉眼难辨；
+     *   ② Chaikin 3 遍 → 2 遍（第二轮再降到动画态 1 遍，见 CONTOUR_SMOOTH_ANIM）；
      *   ③ 画布存储 DPR 封顶 1：1px 细线在 HiDPI 下 1x 已够顺眼，
      *      省掉 2x 屏的 4 倍像素量。
      * 24fps 曾是上游出厂值，但上游默认主题没有我们这种全窗半透明合成层，
-     * raster 竞争模型不同 —— 这里以真机为准。 */
+     * raster 竞争模型不同 —— 这里以真机为准。
+     * 第二轮（2026-10-23）把**单帧量**也砍了：1080p/step 6→10、动画态 1 遍平滑，
+     * 实测 34.7ms → 16.7ms/帧。详见 docs/DESIGN.md「第二轮性能手术」。 */
     const CONTOUR_FPS = 8
     const CONTOUR_PHASE_STEP = 1 / 150
-    const CONTOUR_SPEED = 2 /* 上游默认档（1x/2x/4x 里的 2） */
     const CONTOUR_DUTY = 0.5
     const CONTOUR_STEP = 6 /* 平衡采样密度：1px 线条的细节点 */
     const CONTOUR_LEVELS = 20
     const CONTOUR_SPAN = 1.45 /* 电平铺在 [-SPAN, +SPAN] */
-    const CONTOUR_MAX_CELLS = 60000 /* 网格单元上限：超了加粗 step，成本封顶 */
+    /* 🔧 2026-10-23：60000 → 24000。
+     *
+     * 旧的 6 万格上限**在 1080p 上拦不住任何东西** —— 1920×1080 @ step 6
+     * 正好是 58101 格，卡在上限之下，于是最常见的分辨率永远拿到最贵的
+     * 那一档，这个"成本封顶"形同虚设。
+     * 实测 1080p/step 6：extract 15ms + draw JS 8.4ms + 光栅 11.3ms ≈ 35ms；
+     * 降到 24000 格后 1080p 落在 step 10（21037 格），贝塞尔段数从 60483
+     * 掉到 35877，单帧光栅量降到约 40%。 */
+    const CONTOUR_MAX_CELLS = 24000
     const CONTOUR_MIN_BUMPSAMPLES = 4 /* 半径地板（格数）：低于会走样成乱线 */
-    const CONTOUR_SMOOTH_FULL = 8000 /* ≤ 这些顶点：Chaikin 三遍（原样） */
-    const CONTOUR_SMOOTH_LIMIT = 20000 /* ≤ 两遍，再多一遍 */
+    /* 🔧 Chaikin 遍数改成「按是否动画」分开（旧的是按顶点数 2/1 档）。
+     * 动画态每帧都要重画整个画布：1 遍（顶点 ×2）配后面的约束 Catmull-Rom
+     * 切线已经 C1 连续，圆角肉眼难辨；静止态只画一帧，给回 2 遍（×4）保画质。
+     * 实测「2 遍 vs 直接画折线」差 3.3 倍成本，这一刀最直接。 */
+    const CONTOUR_SMOOTH_ANIM = 1
+    const CONTOUR_SMOOTH_STATIC = 2
     const CONTOUR_MIN_LEN = 40 /* 可见笔画短于此 = 碎屑 */
     const CONTOUR_MIN_RING_BOX = 21 /* 一个中位线距内闭合小环 = 圆点碎屑 */
     const CONTOUR_KEEP_LEN = CONTOUR_MIN_LEN * 1.35 /* 平滑会缩路径，留余量 */
@@ -2736,6 +2768,9 @@ window.__ModuleLoader__.load({
       let f = null /* 场 + 全部 scratch */
       let geom = null /* { w, h, cols, rows, step } */
       let out = [] /* 本帧路径（Float64 平坦数组 [x0,y0,x1,y1,…] 的数组） */
+      /* Chaikin 遍数：动画态 1、静止态 2（见 CONTOUR_SMOOTH_ANIM 注释）。
+       * 由运行时按「要不要动」切换，引擎本身不判断动画。 */
+      let smoothPasses = CONTOUR_SMOOTH_ANIM
 
       /* ---- 场求值：底纹正弦 + 有界散布高斯 + 5 遍可分离平滑 + EMA 连续化 ---- */
       const evaluate = (phase) => {
@@ -2820,16 +2855,61 @@ window.__ModuleLoader__.load({
         f.hasPrevious = true
       }
 
-      /* ---- 一个候选地形：分层抖动放岛 + 3 条长波底纹，含全部 scratch ---- */
-      const buildCandidate = (w, h, salt, step) => {
+      /* ---- 地形 scratch 池：**按几何分配一次，跨 attempt 复用** ----
+       *
+       * 🔧 2026-10-23：旧实现每个 attempt 都新建一整份 field（1080p 约 3.5MB
+       * typed array + 8 条边数组），32 轮最坏 ≈ 112MB 瞬时垃圾。实测 build()
+       * 在粗网格上反而飙到 84ms（比细网格的 24ms 还高）——**那不是算出来的，
+       * 是 GC 出来的**（粗网格要重掷更多轮才过覆盖率验证，分配量按轮数放大）。
+       * 现在数组只按 (cols, rows, step) 分配一次，attempt 只重写随机参数。 */
+      let store = null
+      let appliedSalt = -1
+
+      const ensureField = (w, h, step) => {
         const cols = Math.ceil(w / step) + 1
         const rows = Math.ceil(h / step) + 1
+        if (store !== null && store.cols === cols && store.rows === rows && store.step === step) {
+          return store
+        }
+        const K = contourBumpsFor(w, h)
+        const hCount = (cols - 1) * rows
+        const eCount = hCount + cols * (rows - 1)
+        const blockCols = Math.ceil((cols - 1) / 16)
+        store = {
+          cols, rows, step, K, hCount,
+          bx: new Float32Array(K), by: new Float32Array(K),
+          ba: new Float32Array(K), bs: new Float32Array(K),
+          dx: new Float32Array(K), dy: new Float32Array(K),
+          W2: new Float32Array(9),
+          F: new Float32Array(cols * rows),
+          previous: new Float32Array(cols * rows),
+          hasPrevious: false,
+          smooth: new Float32Array(cols * rows),
+          blockCols,
+          blockMin: new Float32Array(blockCols * (rows - 1)),
+          blockMax: new Float32Array(blockCols * (rows - 1)),
+          boundsReady: false,
+          ex: new Float32Array(eCount),
+          ey: new Float32Array(eCount),
+          es: new Int32Array(eCount).fill(-1),
+          n1: new Int32Array(eCount).fill(-1),
+          n2: new Int32Array(eCount).fill(-1),
+          seen: new Int32Array(eCount).fill(-1),
+          touched: new Int32Array(eCount),
+          seq: 0,
+        }
+        appliedSalt = -1
+        return store
+      }
+
+      /* ---- 一个候选地形：分层抖动放岛 + 3 条长波底纹（只写参数，不分配） ---- */
+      const buildCandidate = (w, h, salt, step) => {
+        /* K 与 ensureField 用同一口径（contourBumpsFor 只依赖 w/h，所以恒等）。 */
         const K = contourBumpsFor(w, h)
         const rnd = contourRng((seed + salt * 0x9E3779B1) >>> 0)
         const m = Math.min(w, h)
-        const bx = new Float32Array(K), by = new Float32Array(K)
-        const ba = new Float32Array(K), bs = new Float32Array(K)
-        const dx = new Float32Array(K), dy = new Float32Array(K)
+        /* 数组来自 scratch 池（几何已由 ensureField 对齐）。 */
+        const bx = f.bx, by = f.by, ba = f.ba, bs = f.bs, dx = f.dx, dy = f.dy
         /* 分层：视口切成近方格点阵，每岛占一格内随机点 —— 大空片几何上不可能。
          * 格序 Fisher-Yates 洗牌：岛编号驱动幅值/半径/漂移，按行序走会把
          * "屏幕左边"和"先抽的尺寸"相关性焊死。 */
@@ -2855,44 +2935,26 @@ window.__ModuleLoader__.load({
         }
         /* 底纹：三条跨越全幅的低幅正弦 —— 高斯之和在岛间精确归零，
          * 电平无处可交 → 大片空白暴露构造；底纹给缝隙一个持续梯度。 */
-        const W2 = new Float32Array(9)
+        const W2 = f.W2
         for (let i = 0; i < 3; i++) {
           W2[i * 3] = (0.35 + rnd() * 0.5) * (Math.PI * 2) / Math.max(1, w)
           W2[i * 3 + 1] = (0.35 + rnd() * 0.5) * (Math.PI * 2) / Math.max(1, h)
           W2[i * 3 + 2] = rnd() * Math.PI * 2
         }
-        const hCount = (cols - 1) * rows
-        const eCount = hCount + cols * (rows - 1)
-        const field = {
-          cols, rows, step, K, bx, by, ba, bs, dx, dy, hCount, W2,
-          F: new Float32Array(cols * rows),
-          previous: new Float32Array(cols * rows),
-          hasPrevious: false,
-          smooth: new Float32Array(cols * rows),
-          blockCols: Math.ceil((cols - 1) / 16),
-          blockMin: new Float32Array(Math.ceil((cols - 1) / 16) * (rows - 1)),
-          blockMax: new Float32Array(Math.ceil((cols - 1) / 16) * (rows - 1)),
-          boundsReady: false,
-          ex: new Float32Array(eCount),
-          ey: new Float32Array(eCount),
-          es: new Int32Array(eCount).fill(-1),
-          n1: new Int32Array(eCount).fill(-1),
-          n2: new Int32Array(eCount).fill(-1),
-          seen: new Int32Array(eCount).fill(-1),
-          touched: new Int32Array(eCount),
-          seq: 0,
-        }
-        return field
+        /* 每个候选都必须从「干净的场」开始：evaluate 首遍用 `=` 写、后续用 `+=`，
+         * 所以 F 要清零；previous / hasPrevious 复位 → 不带上一次的 EMA 结果。 */
+        f.F.fill(0)
+        f.hasPrevious = false
+        f.boundsReady = false
+        appliedSalt = salt
       }
 
       /* ---- 覆盖率打分：在场上量"每格扫过几条电平带 + ink 代理"，
          * 与测试断言同一不变量 → 不合格布局在挂载前就被拒（accept-or-reroll）。 */
-      const coverageScore = (cand, w, h) => {
-        const prev = f
-        f = cand
+      const coverageScore = (w, h) => {
+        /* 候选场已经在 f 里（scratch 复用）：直接算分，不用再换指针。 */
         evaluate(0)
-        f = prev
-        const { cols, rows, F } = cand
+        const { cols, rows, F } = f
         const GX = 8, GY = 5
         const span = CONTOUR_SPAN
         const levelStep = (span * 2) / contourLevelsFor(w, h)
@@ -3176,9 +3238,10 @@ window.__ModuleLoader__.load({
           + (source[1] - source[source.length - 1]) ** 2 < 4
         let points = closed ? source.slice(0, source.length - 2) : source.slice()
         /* 🔧 真机整机卡：3 遍 Chaikin = 顶点 ×8 → 每帧 4.5 万次 bezier 的
-         * 光栅化。2 遍（×4）配后面的 Catmull-Rom 切线，圆角差异肉眼难辨，
-         * 光栅成本减半 —— 与 12fps 合计约 4 倍降幅。 */
-        const passes = count <= CONTOUR_SMOOTH_FULL ? 2 : 1
+         * 光栅化。现在按 smoothPasses 走：动画态 1 遍（×2），静止态 2 遍（×4）。
+         * 实测「2 遍」相对「不密集化」是 3.3 倍成本，动画态砍到 1 遍是最直接
+         * 的一刀，剩下的圆角由后面的约束 Catmull-Rom 切线负责。 */
+        const passes = Math.max(0, Math.min(3, smoothPasses | 0))
         for (let pass = 0; pass < passes; pass++) {
           const n = points.length / 2
           const limit = closed ? n : n - 1
@@ -3294,26 +3357,51 @@ window.__ModuleLoader__.load({
       }
 
       return {
-        /** 选一个通过覆盖率验证的布局（32 次上限，取最优）。
+        /** 选一个通过覆盖率验证的布局（出厂档最多 32 次、降级档 10 次，取最优）。
          * stepOverride：成本自适应降级用的粗化网格（见 contourTune）；
          * 永不低于 contourStepFor 的格数上限地板，永不超过 40。 */
         build(w, h, stepOverride) {
           const floor = contourStepFor(w, h)
           const step = Math.min(40, Math.max(floor,
             typeof stepOverride === 'number' ? stepOverride : floor))
-          let best = null
-          for (let attempt = 0; attempt < 32; attempt++) {
-            const cand = buildCandidate(w, h, attempt, step)
-            const score = coverageScore(cand, w, h)
-            if (best === null || score.worst > best.score.worst
-              || (score.worst === best.score.worst && score.ink > best.score.ink)) best = { cand, score }
+          /* 🔧 2026-10-23：候选**不再每轮重新分配**（见 ensureField 注释）。
+           * ⚠️ 代价：`best` 不能再持有候选对象的引用 —— scratch 只有一个，
+           * 下一轮 attempt 会就地覆盖它。所以只记 salt，循环结束后按 best 的
+           * salt 重放一次，把被选中的布局写回场里。 */
+          f = ensureField(w, h, step)
+          /* 降级档（比出厂地板还粗）是"兜底画质"，不值得为它跑满 32 轮
+           * accept-or-reroll：实测 1080p/step 12 光验证器 32 轮就要 56ms
+           * 同步长任务，而这一档存在的意义本来就是省成本。
+           * 粗网格本来就很难凑过 MIN_INK，跑满也是取"最不坏的那个"。 */
+          const maxAttempts = (typeof stepOverride === 'number' && stepOverride > floor && step > floor)
+            ? 10 : 32
+          let bestSalt = -1
+          let bestScore = null
+          for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            buildCandidate(w, h, attempt, step)
+            const score = coverageScore(w, h)
+            if (bestScore === null || score.worst > bestScore.worst
+              || (score.worst === bestScore.worst && score.ink > bestScore.ink)) {
+              bestSalt = attempt
+              bestScore = score
+            }
             if (score.ok) break
           }
-          f = best.cand
+          if (bestSalt >= 0 && appliedSalt !== bestSalt) {
+            buildCandidate(w, h, bestSalt, step)
+            evaluate(0)
+          }
           geom = { w, h, cols: f.cols, rows: f.rows, step }
         },
         extract(phase) { extractAll(phase) },
         draw(ctx, color) { drawTo(ctx, color) },
+        /** Chaikin 遍数：动画态 1、静止态 2（见 CONTOUR_SMOOTH_ANIM）。 */
+        setSmooth(v) {
+          const n = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(3, v | 0)) : CONTOUR_SMOOTH_ANIM
+          smoothPasses = n
+          return smoothPasses
+        },
+        get smooth() { return smoothPasses },
         get paths() { return out },
         get geometry() { return geom },
       }
@@ -3323,6 +3411,8 @@ window.__ModuleLoader__.load({
 
     let contourEngine = null
     let contourCanvas = null
+    /** 缓存的 2d 上下文（原来每帧调一次 getContext）。 */
+    let contourCtx = null
     let contourRaf = null
     let contourRo = null
     let contourEnvOff = null
@@ -3361,13 +3451,70 @@ window.__ModuleLoader__.load({
      * 只发消息），维持 20.8ms。 */
     const CONTOUR_MAIN_BUDGET = 8
     const CONTOUR_BUDGET_FRAMES = 3 /* 连续几帧超预算才降（防偶发抖动误伤） */
-    let contourStepNow = 0 /* 0 = 未定（用起步值） */
+    /* 学到的降档值。0 = 还没学过（用 contourStepFor 的出厂档）。
+     * 🔧 2026-10-23：这个值以前被 contourScheduleBuild 每次重建都清零，
+     * 于是「降级成果」活不过任何一次 resize / 阶梯重建 —— 降完立刻回到最贵档。
+     * 现在它跨重建、跨 resize 保留，只在 destroyContourLayer（重新挂载）时清。 */
+    let contourStepNow = 0
     let contourOverBudget = 0
     let contourTuneTimer = null
+    let contourTuneIdle = null
+
+    /** 把「重建」这种长任务推迟到浏览器**空闲**时刻。
+     *  🔧 2026-10-23：原来是 setTimeout(fn, 0) —— 那只是把长任务挪到下一个
+     *  立即执行的宏任务，注释说的"推迟到空闲"从来没成立过。改用
+     *  requestIdleCallback（带 timeout 兜底，不会被无限饿死）；没有 rIC 的环境
+     *  才退回 setTimeout。 */
+    function contourScheduleIdle(fn) {
+      const run = () => {
+        contourTuneTimer = null
+        contourTuneIdle = null
+        fn()
+      }
+      if (typeof requestIdleCallback === 'function') {
+        contourTuneIdle = requestIdleCallback(run, { timeout: 500 })
+        return
+      }
+      contourTuneTimer = setTimeout(run, 0)
+      if (contourTuneTimer && typeof contourTuneTimer.unref === 'function') contourTuneTimer.unref()
+    }
+
+    function contourCancelIdle() {
+      if (contourTuneIdle !== null) {
+        if (typeof cancelIdleCallback === 'function') {
+          try { cancelIdleCallback(contourTuneIdle) } catch { /* 无 rIC */ }
+        }
+        contourTuneIdle = null
+      }
+      if (contourTuneTimer !== null) {
+        try { clearTimeout(contourTuneTimer) } catch { /* 无 timer */ }
+        contourTuneTimer = null
+      }
+    }
+
+    function contourIdlePending() {
+      return contourTuneIdle !== null || contourTuneTimer !== null
+    }
+
+    /** 记住档位并重建（合并连续触发）。 */
+    function contourRebuildAt(step) {
+      contourStepNow = step
+      if (contourIdlePending()) return true
+      contourScheduleIdle(() => {
+        if (contourEngine === null) return
+        const g = contourEngine.geometry
+        if (g === null) return
+        contourEngine.build(g.w, g.h, contourStepNow)
+        contourRefresh(true)
+      })
+      return true
+    }
 
     /** 一帧成本对账：超预算连续 N 帧 → step +2。
      *  🔧 重建**绝不在 rAF 回调里同步做**（32 轮验证器 = 百毫秒长任务，
-     *  比它要治的卡顿严重十倍）—— 走调度阶梯，把重建推迟到空闲时刻。 */
+     *  比它要治的卡顿严重十倍）—— 走 contourScheduleIdle 推迟到空闲时刻。
+     *  🔧 2026-10-23：学到的档位**只降不升**（缺滞回时来回重建比卡更糟），
+     *  但它现在会被记住（见 contourStepNow 注释）。 */
     function contourTune(costMs) {
       if (contourEngine === null) return false
       if (costMs <= CONTOUR_MAIN_BUDGET) {
@@ -3381,19 +3528,7 @@ window.__ModuleLoader__.load({
       if (geometry === null) return false
       const next = Math.min(40, geometry.step + 2)
       if (next === geometry.step) return false /* 已到地板：再快不了，靠 duty 让位 */
-      contourStepNow = next
-      /* 延迟到下一个宏任务重建（顺便合并连续触发）。 */
-      if (contourTuneTimer !== null) return true
-      contourTuneTimer = setTimeout(() => {
-        contourTuneTimer = null
-        if (contourEngine === null) return
-        const g = contourEngine.geometry
-        if (g === null) return
-        contourEngine.build(g.w, g.h, contourStepNow)
-        contourRefresh(true)
-      }, 0)
-      if (contourTuneTimer && typeof contourTuneTimer.unref === 'function') contourTuneTimer.unref()
-      return true
+      return contourRebuildAt(next)
     }
 
     /* ══ Worker 后端（2026-10-22 回补，真机"滑动启动那一下"的根治）══════
@@ -3431,8 +3566,8 @@ window.__ModuleLoader__.load({
         ['CONTOUR_SPAN', CONTOUR_SPAN],
         ['CONTOUR_MAX_CELLS', CONTOUR_MAX_CELLS],
         ['CONTOUR_MIN_BUMPSAMPLES', CONTOUR_MIN_BUMPSAMPLES],
-        ['CONTOUR_SMOOTH_FULL', CONTOUR_SMOOTH_FULL],
-        ['CONTOUR_SMOOTH_LIMIT', CONTOUR_SMOOTH_LIMIT],
+        ['CONTOUR_SMOOTH_ANIM', CONTOUR_SMOOTH_ANIM],
+        ['CONTOUR_SMOOTH_STATIC', CONTOUR_SMOOTH_STATIC],
         ['CONTOUR_DENSITY_ANCHOR', CONTOUR_DENSITY_ANCHOR],
         ['CONTOUR_KEEP_LEN', CONTOUR_KEEP_LEN],
         ['CONTOUR_KEEP_RING', CONTOUR_KEEP_RING],
@@ -3455,6 +3590,7 @@ window.__ModuleLoader__.load({
         '        ctx = canvas.getContext("2d")',
         '        engine = createContourEngine(m.seed)',
         '      }',
+        '      if (engine && typeof m.smooth === "number") engine.setSmooth(m.smooth)',
         '      canvas.width = Math.max(1, Math.round(m.w * m.dpr))',
         '      canvas.height = Math.max(1, Math.round(m.h * m.dpr))',
         '      engine.build(m.w, m.h, m.step)',
@@ -3462,11 +3598,13 @@ window.__ModuleLoader__.load({
         '      if (ctx) engine.draw(ctx, m.color)',
         '      self.postMessage({op:"ready", step: engine.geometry ? engine.geometry.step : 0})',
         '    } else if (m.op === "frame") {',
+        '      if (typeof m.smooth === "number") engine.setSmooth(m.smooth)',
         '      const t0 = performance.now()',
         '      engine.extract(m.phase)',
         '      engine.draw(ctx, m.color)',
         '      self.postMessage({op:"done", cost: performance.now() - t0})',
         '    } else if (m.op === "recolor") {',
+        '      if (engine && typeof m.smooth === "number") engine.setSmooth(m.smooth)',
         '      if (engine && ctx) engine.draw(ctx, m.color)',
         '      self.postMessage({op:"done", cost: 0})',
         '    }',
@@ -3484,9 +3622,16 @@ window.__ModuleLoader__.load({
     }
 
     /** worker 路径的降级：成本进同一预算，超标走 rebuild 消息（无长任务风险，
-     *  降的是吞吐/发热/电量）。 */
+     *  降的是吞吐/发热/电量）。
+     *  🔧 2026-10-23：预算从 `(1000/8)*0.5 = 62.5ms` 收到 20ms —— 旧值是主线程
+     *  8ms 的 7.8 倍，等于允许光栅线程每帧烧 62.5ms（8fps 就是 500ms/s）而不降档。
+     *  另注：`cost` 是 performance.now() 包住 extract+draw 的墙钟差，而 canvas 2D
+     *  是**记录式**的、真正光栅化发生在 commit 时 —— 这个反馈回路**看不到最大的
+     *  那笔开销**（实测光栅 7.3ms 而 JS 只有 9ms）。所以这里只能当"JS 兜底闸"，
+     *  真正的成本控制靠 CONTOUR_MAX_CELLS + 动画态 1 遍 Chaikin。 */
+    const CONTOUR_WORKER_BUDGET = 20
     function contourWorkerTune(costMs) {
-      const budget = (1000 / CONTOUR_FPS) * CONTOUR_DUTY
+      const budget = CONTOUR_WORKER_BUDGET
       if (costMs <= budget) {
         contourWorkerOverBudget = 0
         return
@@ -3503,6 +3648,7 @@ window.__ModuleLoader__.load({
       contourWorkerMsg({
         op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr, step: next,
         phase: contourPhase, color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
+        smooth: contourSmoothPasses(),
       })
     }
     let contourWorkerStepOverride = 0
@@ -3618,6 +3764,7 @@ window.__ModuleLoader__.load({
           step: 0, /* 0 = 起步档 */
           phase: contourPhase,
           color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
+          smooth: contourSmoothPasses(),
         }, [offscreen])
         contourLastSize = size
         return true
@@ -3642,13 +3789,34 @@ window.__ModuleLoader__.load({
       if (wasActive) syncContourLayer(true)
     }
 
+    /* 🔧 2026-10-23：原来**每个 rAF tick（60 次/秒）都调一次 window.matchMedia**
+     * —— 等于每秒新建 60 个 MediaQueryList 去查同一个系统偏好。查一次、
+     * 用 change 监听续期即可；顺带把结果缓存下来，让 contourWantsAnim 变纯。 */
+    let contourReducedMql = null
+    let contourReducedKnown = false
+    let contourReducedValue = false
+
     function contourReducedMotion() {
+      if (contourReducedKnown) return contourReducedValue
+      contourReducedKnown = true
+      contourReducedValue = false
       try {
-        return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-          && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      } catch {
-        return false
-      }
+        if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+          contourReducedMql = window.matchMedia('(prefers-reduced-motion: reduce)')
+          contourReducedValue = contourReducedMql.matches === true
+          const onChange = () => {
+            contourReducedValue = contourReducedMql !== null && contourReducedMql.matches === true
+            contourSig = ''
+            contourApplySwitches()
+          }
+          if (typeof contourReducedMql.addEventListener === 'function') {
+            contourReducedMql.addEventListener('change', onChange)
+          } else if (typeof contourReducedMql.addListener === 'function') {
+            contourReducedMql.addListener(onChange)
+          }
+        }
+      } catch { /* 无 matchMedia：按"不减少动效"处理 */ }
+      return contourReducedValue
     }
 
     /* ══ 滚动让路（2026-10-22 三次修订：回到硬暂停）═══════════════
@@ -3679,8 +3847,13 @@ window.__ModuleLoader__.load({
       contourScrollTimer = setTimeout(() => {
         contourScrollTimer = null
         contourScrollPaused = false
-        /* 恢复前把成本对账清零：恢复首帧不该被当成"超预算"触发降级。 */
-        contourOverBudget = 0
+        /* 🔧 2026-10-23（真机"开着等高线一直卡"）：**这里原来会把降级计数
+         * 归零**，等于把降级的资格洗掉 —— 这是个死循环：
+         * 降档要求连续 3 帧超预算，而"边读边滚"的用户每隔几百毫秒就滚一次，
+         * 每次停滚 140ms 后计数归零，于是**永远凑不到 3，永远停在最贵档**。
+         * 恰恰是最需要降级的用法把它锁死在最高画质上。
+         * 现在计数跨滚动保留：恢复首帧照样参与对账（它本来就是全价帧，
+         * 算它一次超预算是正确的，不该当成"偶发抖动"洗掉）。 */
         contourLastField = -1
         contourSig = ''
         contourApplySwitches()
@@ -3719,6 +3892,16 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 当前该用几遍 Chaikin。
+     * 🔧 2026-10-23：动画态 1 遍（每帧重画整幅，贝塞尔段数 ×2 而不是 ×4），
+     * 静止态 2 遍（只画一帧，把画质给回来）。实测 2 遍相对不密集化是 3.3 倍
+     * 光栅成本，而动画态根本来不及看清圆角细节。
+     */
+    function contourSmoothPasses() {
+      return contourWantsAnim() ? CONTOUR_SMOOTH_ANIM : CONTOUR_SMOOTH_STATIC
+    }
+
+    /**
      * 对齐画布到视口；尺寸变了就**调度**重建（不在本帧算）。
      * 🔧 2026-10-22（"启动那一下很难受"的修复）：build 曾经是同步的 ——
      * 覆盖率验证器最多 32 轮全场评估 + 首次 extract/draw，一整块 45ms+
@@ -3739,11 +3922,15 @@ window.__ModuleLoader__.load({
       if (contourWorker !== null) {
         contourWorkerBusy = true
         contourWorkerMsg({
-          op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr, step: 0, /* 0 = 起步档重测 */
+          /* 🔧 2026-10-23：把**学到的档位**带上，而不是每次 resize 都 step:0
+           * 重测 —— 那是主线程路径同款"降了等于没降"的 bug（worker 版）。
+           * 0 只在还没学过时用（= 起步档）。 */
+          op: 'rebuild', w: size.w, h: size.h, dpr: size.dpr,
+          step: contourWorkerStepOverride,
           phase: contourPhase,
           color: contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light'),
+          smooth: contourSmoothPasses(),
         })
-        contourWorkerStepOverride = 0
         contourWorkerOverBudget = 0
         return
       }
@@ -3786,27 +3973,39 @@ window.__ModuleLoader__.load({
         if (contourEngine === null || contourLastSize === null) return
         const w = contourLastSize.w
         const h = contourLastSize.h
-        /* 重建 = 回到起步画质重测：清成本对账与降级计数。 */
-        contourStepNow = 0
+        /* 🔧 2026-10-23：**不再把 contourStepNow 归零**。
+         *
+         * 旧行为：任何重建都把画质/成本拉回 contourStepFor 的出厂最贵档 ——
+         * 于是"降级 → 任何一次 resize / 阶梯重建 → 又变贵"，降了等于没降，
+         * 而且阶梯最后一级恰好落在最贵档（1920×1080 是 …→ 8 → 7 → 6）。
+         * 现在「学到的档位」是阶梯的**终点**（target），只降不升，跨重建保留。
+         * 想让画质回到出厂档：重新选一次背景来源（destroyContourLayer 会清）。 */
         contourOverBudget = 0
         contourLastField = -1
         const floor = contourStepFor(w, h)
-        const coarse = Math.max(floor, Math.min(40, Math.ceil(Math.max(w, h) / 96) * 2))
-        contourLadderStage(gen, w, h, floor, coarse)
+        const target = Math.max(floor, contourStepNow > 0 ? contourStepNow : floor)
+        const coarse = Math.max(target, Math.min(40, Math.ceil(Math.max(w, h) / 96) * 2))
+        /* 已经降过档（target 本身就够粗）就别再爬一遍阶梯，直接一次到位。 */
+        if (coarse <= target * 1.5) {
+          contourLadderStage(gen, w, h, target, target)
+          return
+        }
+        contourLadderStage(gen, w, h, target, coarse)
       }, delayMs)
       if (contourBuildTimer && typeof contourBuildTimer.unref === 'function') contourBuildTimer.unref()
     }
 
-    function contourLadderStage(gen, w, h, floor, step) {
+    /** 先粗后细爬向 target；每档一个独立任务，档间让出 CONTOUR_REFINE_GAP。 */
+    function contourLadderStage(gen, w, h, target, step) {
       if (gen !== contourLadderGen || contourEngine === null) return
       contourEngine.build(w, h, step)
       contourRefresh(true)
-      if (step <= floor) return /* 阶梯走完：已在起步画质 */
-      const mid = Math.max(floor, Math.floor((step + floor) / 2))
-      const next = mid === step ? floor : mid
+      if (step <= target) return /* 阶梯走完：已到目标档 */
+      const mid = Math.max(target, Math.floor((step + target) / 2))
+      const next = mid === step ? target : mid
       contourBuildTimer = setTimeout(() => {
         contourBuildTimer = null
-        contourLadderStage(gen, w, h, floor, next)
+        contourLadderStage(gen, w, h, target, next)
       }, CONTOUR_REFINE_GAP)
       if (contourBuildTimer && typeof contourBuildTimer.unref === 'function') contourBuildTimer.unref()
     }
@@ -3828,26 +4027,32 @@ window.__ModuleLoader__.load({
     function contourRefresh(forceGeometry) {
       if (contourCanvas === null) return
       const color = contourStrokeColor(contourAccentHex(), resolvedScheme() !== 'light')
+      /* 动画态 1 遍 Chaikin、静止态 2 遍（见 contourSmoothPasses）。 */
+      const smooth = contourSmoothPasses()
       if (contourWorker !== null) {
         if (contourWorkerBusy) {
           /* 合帧里优先保留带相位的 frame；纯重画用 pending 槽。 */
           contourWorkerPending = forceGeometry
-            ? {op: 'frame', phase: contourPhase, color}
-            : {op: 'recolor', color}
+            ? {op: 'frame', phase: contourPhase, color, smooth}
+            : {op: 'recolor', color, smooth}
           return
         }
         contourWorkerBusy = true
         contourWorkerMsg(forceGeometry
-          ? {op: 'frame', phase: contourPhase, color}
-          : {op: 'recolor', color})
+          ? {op: 'frame', phase: contourPhase, color, smooth}
+          : {op: 'recolor', color, smooth})
         return
       }
       if (contourEngine === null) return
-      const ctx = typeof contourCanvas.getContext === 'function'
-        ? contourCanvas.getContext('2d') : null
+      /* 🔧 2d 上下文缓存一次（原来每帧 getContext('2d') 一次）。 */
+      if (contourCtx === null && typeof contourCanvas.getContext === 'function') {
+        contourCtx = contourCanvas.getContext('2d') || null
+      }
+      const ctx = contourCtx
       if (ctx === null || ctx === undefined) return
       const geometry = contourEngine.geometry
       if (geometry === null) return
+      contourEngine.setSmooth(smooth)
       if (forceGeometry) contourEngine.extract(contourPhase)
       contourEngine.draw(ctx, color)
     }
@@ -3947,6 +4152,11 @@ window.__ModuleLoader__.load({
         try { clearTimeout(contourBuildTimer) } catch { /* 无 timer */ }
         contourBuildTimer = null
       }
+      /* 🔧 成本降级挂起的空闲重建也一并掐掉（rIC 或 setTimeout 两种句柄）。 */
+      contourCancelIdle()
+      /* 🔧 学到的降档值清零：这是"重新挂载"路径，下一轮从出厂画质重测。
+       * 上面两个重建路径（tune / resize 阶梯）都**不**清它。 */
+      contourStepNow = 0
       contourLastSize = null
       /* 滚动让路的挂起恢复计时器一并清掉（不然销毁后 140ms 它会
        * 把动画又拉起来 —— 泄漏进已死的层）。 */
@@ -3967,6 +4177,7 @@ window.__ModuleLoader__.load({
         try { contourCanvas.remove() } catch { /* 已移除 */ }
       }
       contourCanvas = null
+      contourCtx = null
       contourEngine = null
       contourSig = ''
       contourPhase = 0
@@ -3996,6 +4207,7 @@ window.__ModuleLoader__.load({
           return
         }
         contourCanvas = canvas
+        contourCtx = null /* 新画布：上下文缓存作废 */
         contourPhase = 0 /* 新挂载从 0 相开始（EMA 种子的瞬变防护，上游实测） */
         contourLastField = -1
         contourSig = ''
