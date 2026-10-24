@@ -1257,9 +1257,25 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
     const codeRule = sheet.split('\n').find((l) => l.includes('.md-code-block'))
     check(codeRule !== undefined, '代码块规则存在')
     if (codeRule !== undefined) {
-      /* 白雾的标志是 background-image 上的白色线性渐变。 */
-      check(!/background-image:linear-gradient\(to bottom,rgba\(255, 255, 255/.test(codeRule),
-        '代码块不带白雾（避免与父层叠加）', codeRule.slice(0, 100))
+      /* ⚠️ 2026-10-24 修正：代码块**要有**白雾，但只能是薄的一层。
+       *
+       * 第一版把它完全去掉（background-image:none），用户反馈
+       * 「他们的白雾效果怎么就没了」—— 因为父层的白雾被代码块自己的
+       * 实色底盖住了，子层不补就真的看不见。
+       *
+       * 正确做法：子层给父层的 1/3。
+       *   父 8% + 子 8% → 合成 15.4%（太重，原 bug）
+       *   父 8% + 子 0% → 合成 8%，但子层自己不发白（第一版，白雾"没了"）
+       *   父 8% + 子 2.7% → 合成 10.2%（现在的值）
+       *
+       * 断言：代码块有白雾，但明显比父层淡。 */
+      const codeHaze = codeRule.match(/background-image:linear-gradient\(to bottom,rgba\(255, 255, 255, ([\d.]+)\)/)
+      check(codeHaze !== null, '代码块有白雾（不能是 none）', codeRule.slice(0, 100))
+      if (codeHaze !== null) {
+        const codeVal = Number(codeHaze[1])
+        check(codeVal > 0, '代码块白雾大于 0', String(codeVal))
+        check(codeVal < 0.05, '代码块白雾明显淡于父层（<5%）', String(codeVal))
+      }
       /* 但边缘高光和描边要留着 —— 那是材质感，不是白雾。 */
       check(/box-shadow:/.test(codeRule), '代码块保留边缘阴影')
       check(/border:0\.5px solid/.test(codeRule), '代码块保留描边')

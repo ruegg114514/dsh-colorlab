@@ -3175,6 +3175,26 @@ window.__ModuleLoader__.load({
           + 'rgba(255, 255, 255, 0) 100%)'
         : 'none'
 
+      /* 嵌套层的**薄**白雾（2026-10-24）。
+       *
+       * ## 为什么要一个单独的值
+       *
+       * 白雾是白色叠加，两层叠起来不是相加而是 1-(1-a)(1-b)：
+       *   父 8% + 子 8% → 合成 15.4%，接近两倍（用户报「代码预览白雾特别重」）
+       *   父 8% + 子 0% → 合成 8%，但子层自己完全不发白，看起来"白雾没了"
+       *   父 8% + 子 2.7%（1/3）→ 合成 10.2%，接近别处的观感
+       *
+       * 取 1/3 是因为代码块自身的底色比卡片更实（glassSolidAlpha 更高档），
+       * 白雾在更实的底上视觉权重会被稀释 —— 给满会过白，给零会消失。
+       */
+      const hazeThin = haze > 0 ? haze / 3 : 0
+      const hazeLayerThin = hazeThin > 0
+        ? 'linear-gradient(to bottom,'
+          + 'rgba(255, 255, 255, ' + (hazeThin).toFixed(3) + ') 0%,'
+          + 'rgba(255, 255, 255, ' + (hazeThin * 0.35).toFixed(3) + ') 40%,'
+          + 'rgba(255, 255, 255, 0) 100%)'
+        : 'none'
+
       /* ══ 玻璃的「边缘三件套」══════════════════════════════════════
        *
        * 照抄上游 dsh-acrylic-light 的 box-shadow 四层写法：
@@ -3212,7 +3232,10 @@ window.__ModuleLoader__.load({
       const glassSurface = 'background-image:' + hazeLayer + ' !important;'
         + 'box-shadow:' + glassShadow5 + ' !important;'
         + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
-      const glassSurfaceFlat = 'background-image:none !important;'
+      /* 嵌套层用**薄**白雾（haze/3），不是没有 ——
+       * 给 0 会让代码块看起来「白雾消失了」（用户实测反馈），
+       * 给满会叠成两倍。1/3 让合成浓度落在 10% 左右，接近别处的观感。 */
+      const glassSurfaceFlat = 'background-image:' + hazeLayerThin + ' !important;'
         + 'box-shadow:' + glassShadow5 + ' !important;'
         + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
 

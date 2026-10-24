@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.6] — 2026-10-24
+
+### Fixed
+
+- **Code blocks lost their frosted haze entirely.** v1.1.5 removed the haze
+  from nested surfaces to stop it stacking — but removing it is not the same as
+  reducing it.
+
+  The haze is a white overlay, so two layers combine as `1-(1-a)(1-b)`:
+
+  | Parent | Child | Combined | Look |
+  |---|---|---|---|
+  | 8% | 8% | 15.4% | too heavy (the original bug) |
+  | 8% | **0%** | 8% | **child does not whiten at all — haze is gone** |
+  | 8% | 2.7% | 10.2% | matches the surrounding surfaces |
+
+  The reason zero does not work: a code block paints its own fairly opaque
+  surface, which covers the parent's haze. Without a layer of its own, that
+  surface genuinely has no haze.
+
+  Nested surfaces now get a third of the configured value. A third rather than
+  half because a code block's own fill is one tier more opaque than a card's, so
+  the haze carries less visual weight on it — full value reads too white, zero
+  reads as absent.
+
+### Note
+
+The name `glassSurfaceFlat` is now slightly misleading, since the surface it
+produces is no longer flat. It was kept to avoid touching every call site; the
+comment above it states what it actually produces.
+
 ## [1.1.5] — 2026-10-24
 
 ### Fixed
