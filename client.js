@@ -3446,6 +3446,22 @@ window.__ModuleLoader__.load({
       /* 每个选择器都必须单独带总闸前缀。
        * 之前用 join(',') 拼成一个串，只有第一个带前缀 ——
        * 结果关掉玻璃后其余六个仍然生效（残留污染）。 */
+      /* ⚠️️ 卡片本体必须用 `~=`（class 完整词匹配），不能用 `*=`（子串）。
+       *
+       * 2026-10-24 用户截图实证：交付文件卡与计划卡内部出现"条中条"——
+       * `[class*="flL80G_file"]` 不只命中卡片本体，还命中所有同前缀的
+       * 内部元素：`flL80G_fileBody` / `flL80G_fileName`，计划卡的
+       * `KuQXFq_cardTitle` / `cardDescription` / `cardOpen`（打开按钮），
+       * 甚至整个网格容器 `KuQXFq_cards`。glassSurface 的描边 + 阴影 +
+       * 白雾被逐条涂在标题行、描述行上，看起来就是套娃小盒子。
+       *
+       * `~=` 按空格分词精确匹配 class token：卡片本体的 token 恰好是
+       * `flL80G_file`（宿主 CSS Modules 的 hash_局部名 格式，无序号后缀），
+       * 子元素的 token 是 `flL80G_fileBody` —— 词不同，不再误命中。
+       *
+       * bubble 保留 `*=`：消息气泡的 token 带各自包的哈希
+       * （cJsG2q_bubble / v1fjQa_bubble），哈希不该写死在这里；
+       * 且实测宿主里不存在 bubbleXxx 形态的内部元素，无套娃风险。 */
       const cardSelectors = [
         'kuvljq_card',
         'flL80G_file',
@@ -3453,8 +3469,9 @@ window.__ModuleLoader__.load({
         'QSKnSa_card',
         'KZf9OG_card',
         'j_8BDW_card',
-        'bubble',
-      ].map((name) => g + '[class*="' + name + '"]').join(',')
+      ].map((name) => g + '[class~="' + name + '"]')
+        .concat([g + '[class*="bubble"]'])
+        .join(',')
       /* 🔧 同代码块：卡片不加 backdrop-filter（背后是已糊的壁纸层，再糊
        * 是浪费；且上游实测 filter 的包含块副作用）。三件套照给。 */
       lines.push(cardSelectors + '{' + glassSurface + '}')

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.9] — 2026-10-24
+
+### Fixed
+
+- **Cards grew "boxes inside boxes"**: the deliverable-file and plan cards
+  showed outlined, shadowed strips across their title row, description row and
+  even the grid container around the cards.
+
+  The card glass rule matched with `[class*="flL80G_file"]` — a substring
+  match. CSS Modules give every inner element of the same component a shared
+  prefix (`flL80G_fileBody`, `flL80G_fileName`, `flL80G_fileIcon`;
+  `KuQXFq_cardTitle`, `cardOpen`, and even `KuQXFq_cards` — the grid
+  container), so the haze, border and shadow landed on each of those rows too.
+
+  Fixed by switching the six card prefixes to `[class~="…"]` (whole-word
+  class match). `bubble` deliberately keeps `*=`: message bubbles carry
+  per-package hashes in their token (`cJsG2q_bubble`, `v1fjQa_bubble`) that
+  must not be hard-coded, and no `bubbleXxx` inner elements exist in the host.
+
+  This is the third instance of the same class of mistake (the popover haze
+  selector had the identical problem in v1.1.7): substring matching is unsafe
+  against CSS Modules naming because inner elements share the owner's prefix.
+  Wherever the exact token is known, use `~=`.
+
+### Tests
+
+13 assertions: each of the six prefixes verified to use `~=` and not `*`;
+`bubble` verified to keep `*=`. Mutation (reverting to `*=`) turns all 13 red.
+
 ## [1.1.8] — 2026-10-24
 
 ### Added

@@ -1292,6 +1292,33 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
       '最外层卡片仍有白雾', cardRule ? cardRule.slice(0, 80) : '未找到')
   }
 
+  /* ---- 2026-10-24：卡片本体必须用 ~= 词匹配，不能用 *= 子串 ----
+   *
+   * 用户截图实证：交付文件卡/计划卡内部出现"条中条"——
+   * [class*="flL80G_file"] 连 flL80G_fileBody / fileName / fileIcon
+   * 一起命中，描边+阴影+白雾被涂在每个内部行上。
+   * CSS Modules 每个元素只有一个 token，~= 按词精确匹配即可区分。 */
+  {
+    const sheet = buildGlassSheet(
+      { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16' },
+      dark, true,
+    )
+    const cardLine = sheet.split('\n').find((l) => l.includes('flL80G_file'))
+    check(cardLine !== undefined, '卡片玻璃规则存在')
+    if (cardLine !== undefined) {
+      /* 六个卡片前缀全部必须是 ~=。 */
+      for (const tok of ['kuvljq_card', 'flL80G_file', 'KuQXFq_card',
+        'QSKnSa_card', 'KZf9OG_card', 'j_8BDW_card']) {
+        check(cardLine.includes('[class~="' + tok + '"]'),
+          '卡片本体用 ~= 词匹配：' + tok, cardLine.slice(0, 60))
+        check(!cardLine.includes('[class*="' + tok + '"]'),
+          '不再用 *= 子串（会命中 ' + tok + 'Body/Title 等内部行）')
+      }
+      /* bubble 是唯一保留子串的：token 带各包哈希，不能写死。 */
+      check(cardLine.includes('[class*="bubble"]'), 'bubble 保留子串匹配')
+    }
+  }
+
   /* ---- 2026-10-24：壁纸模式背景亮度 ----
    *
    * 用户要求壁纸模式也能调亮度。实现与渐变不同但语义一致：
