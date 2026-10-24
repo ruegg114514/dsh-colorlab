@@ -1264,17 +1264,23 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
        * 实色底盖住了，子层不补就真的看不见。
        *
        * 正确做法：子层给父层的 1/3。
-       *   父 8% + 子 8% → 合成 15.4%（太重，原 bug）
-       *   父 8% + 子 0% → 合成 8%，但子层自己不发白（第一版，白雾"没了"）
-       *   父 8% + 子 2.7% → 合成 10.2%（现在的值）
+       *   父 8% + 子 8%   → 合成 15.4%（太重，原 bug）
+       *   父 8% + 子 0%   → 合成 8%，但子层自己不发白（第一版，"白雾没了"）
+       *   父 8% + 子 2.7% → 合成 10.5%（第二版，用户说"浓了"）
+       *   父 8% + 子 1%   → 合成 8.9%（现在，基本等于单层基准）
        *
-       * 断言：代码块有白雾，但明显比父层淡。 */
+       * 目标不是"看得出有白雾"，而是"和别处一样" —— 合成浓度贴近 8%。
+       * 断言：代码块有白雾，但合成后不超过父层的 1.5 倍。 */
       const codeHaze = codeRule.match(/background-image:linear-gradient\(to bottom,rgba\(255, 255, 255, ([\d.]+)\)/)
       check(codeHaze !== null, '代码块有白雾（不能是 none）', codeRule.slice(0, 100))
       if (codeHaze !== null) {
         const codeVal = Number(codeHaze[1])
         check(codeVal > 0, '代码块白雾大于 0', String(codeVal))
-        check(codeVal < 0.05, '代码块白雾明显淡于父层（<5%）', String(codeVal))
+        /* 合成浓度必须贴近单层基准：子层 1% + 父层 8% = 8.9%，
+         * 和别处的 8% 肉眼一致。上限 2%（合成 9.8%）已是可接受边界。 */
+        check(codeVal < 0.02, '代码块白雾远淡于父层（<2%，合成≤9.8%）', String(codeVal))
+        /* 但不能为 0 —— 那会让代码块自己完全没白雾。 */
+        check(codeVal >= 0.005, '代码块白雾不为 0（否则该层无白雾）', String(codeVal))
       }
       /* 但边缘高光和描边要留着 —— 那是材质感，不是白雾。 */
       check(/box-shadow:/.test(codeRule), '代码块保留边缘阴影')

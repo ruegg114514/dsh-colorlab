@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.7] — 2026-10-24
+
+### Changed
+
+- **Nested haze reduced from a third to an eighth.** v1.1.6 gave code blocks
+  `haze / 3`, which combined to 10.5% — visibly denser than the 8% single-layer
+  baseline. It is now `haze / 8`, combining to 8.9%, which matches the
+  surrounding surfaces.
+
+  | Divisor | Child | Combined | |
+  |---|---|---|---|
+  | 1 | 8.00% | 15.36% | two full layers — the original bug |
+  | 3 | 2.67% | 10.45% | v1.1.6 — still too dense |
+  | **8** | **1.00%** | **8.92%** | **matches the baseline** |
+
+  The earlier two attempts each had an unclear target: v1.1.5 optimised for
+  "don't stack too thick" and landed on zero, leaving that surface with no haze
+  at all; v1.1.6 optimised for "the haze should be visible" and overshot. The
+  right target is **combined density close to the single-layer baseline** — the
+  child only needs enough to avoid reading as absent.
+
+  The test now bounds it from both sides: `0.005 ≤ haze < 0.02`. Below the
+  lower bound it is effectively invisible; above the upper bound the combined
+  value exceeds 9.8% and reads denser than everything else.
+
 ## [1.1.6] — 2026-10-24
 
 ### Fixed
