@@ -2436,7 +2436,22 @@ window.__ModuleLoader__.load({
       /* 饱和度同理：渐变模式的色相是我们自己调的，再 saturate 会改歪。
        * （等高线早就是这么处理的，见上面的注释。） */
       const sat = (contourActive || gradientMode) ? 100 : wallpaperSat
+      /* 背景亮度（2026-10-24 用户要求：壁纸模式也要能调）。
+       *
+       * 两种来源实现不同但语义一致：
+       *   · 渐变 → 程序生成的底色，亮度走 mixTowards 改 base 颜色
+       *             （拉到两端就是纯黑 / 纯白）
+       *   · 壁纸 → 真实图片，用 CSS brightness() 滤镜最直接，
+       *             和 blur / saturate 同一条 filter 串，全窗一次生效
+       * 50 = 原样，0 = 全黑，100 = 翻倍（不拉到纯白 —— 那会把照片细节全抹掉，
+       * 而渐变拉到 100 变纯白是刻意的行为）。
+       * 等高线不作用：线色由强调色直出，改亮度只会改歪（与 sat 同理）。 */
+      const bpct = parsePercent(state && state.glassBrightness, 0, 100, 50)
+      const bright = (contourActive || gradientMode)
+        ? 1
+        : (bpct < 50 ? Math.max(0, bpct / 50) : 1 + (bpct - 50) / 50)
       const parts = []
+      if (bright !== 1) parts.push('brightness(' + bright.toFixed(3) + ')')
       if (blur > 0) parts.push('blur(' + blur + 'px)')
       if (sat !== 100) parts.push('saturate(' + (sat / 100) + ')')
       const value = parts.length > 0 ? parts.join(' ') : 'none'
@@ -10151,16 +10166,20 @@ function makeColorizer(scheme) {
               )
               : null,
 
-          /* ---------------- 渐变 ---------------- */
-/* 背景亮度（2026-10-23）：双向调节地面底色，50 = 中性。
-             离开中性时氛围层自动淡出 —— 拉到两端就是纯白 / 纯黑。 */
-          snapshot.glassBackground === 'gradient'
+          /* ---------------- 背景亮度（壁纸 + 渐变共用）----------------
+           * 2026-10-24 用户要求：壁纸模式也要能调。
+           * 两种来源实现不同但语义一致：
+           *   · 渐变 → 改程序生成的底色（mixTowards，拉到两端是纯黑/纯白）
+           *   · 壁纸 → CSS brightness() 滤镜（0 全黑 / 100 翻倍，保留照片细节）
+           * 等高线不适用：线色由强调色直出，改亮度只会改歪。 */
+          (snapshot.glassBackground === 'gradient' || snapshot.glassBackground === 'wallpaper')
             ? h(
               Row,
               {
                 title: '背景亮度',
-                hint: '调地面底色的明暗：50 = 原样，往左压暗、往右提亮。'
-                  + '离开中性越远，上面的氛围光斑越淡 —— 拉到两端会变成纯色，不再有渐变。即时生效。',
+                hint: '调背景的明暗：50 = 原样，往左压暗、往右提亮。'
+                  + '渐变模式离开中性越远，上面的氛围光斑越淡（拉到两端变纯色）；'
+                  + '壁纸模式走滤镜，保留照片细节。即时生效。',
               },
               h(Slider, {
                 label: '背景亮度',

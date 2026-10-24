@@ -1007,8 +1007,11 @@ console.log('Z. 玻璃界面：常显项 + 两个折叠块（2026-10-23 重组�
    * 每个模式段的第一项控件是固定的：壁纸=图片链接 / 渐变=背景亮度 / 等高线=速度。 */
   check(/snapshot\.glassBackground === 'wallpaper'\s*\n\s*\? h\(\s*\n\s*Row,\s*\n\s*\{\s*\n\s*title: '壁纸图片链接'/.test(modeSeg),
     '壁纸段守卫紧邻「壁纸图片链接」')
-  check(/snapshot\.glassBackground === 'gradient'\s*\n\s*\? h\(\s*\n\s*Row,\s*\n\s*\{\s*\n\s*title: '背景亮度'/.test(modeSeg),
-    '渐变段守卫紧邻「背景亮度」')
+  /* 2026-10-24：背景亮度改为壁纸 + 渐变共用（用户要求壁纸模式也能调）。
+   * 守卫条件是 (gradient || wallpaper)，不再是渐变独有。 */
+  check(/\(snapshot\.glassBackground === 'gradient' \|\| snapshot\.glassBackground === 'wallpaper'\)/.test(modeSeg),
+    '背景亮度守卫覆盖渐变 + 壁纸')
+  check(/title: '背景亮度'/.test(modeSeg), '背景亮度行存在')
   check(/snapshot\.glassBackground === 'contour'\s*\n\s*\? h\(\s*\n\s*Row,\s*\n\s*\{\s*\n\s*title: '等高线速度'/.test(modeSeg),
     '等高线段守卫紧邻「等高线速度」')
   check((modeSeg.match(/: null,/g) || []).length >= 3, '三段都是三元条件渲染', String((modeSeg.match(/: null,/g) || []).length))

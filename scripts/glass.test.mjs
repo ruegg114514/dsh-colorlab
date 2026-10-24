@@ -1292,6 +1292,25 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
       '最外层卡片仍有白雾', cardRule ? cardRule.slice(0, 80) : '未找到')
   }
 
+  /* ---- 2026-10-24：壁纸模式背景亮度 ----
+   *
+   * 用户要求壁纸模式也能调亮度。实现与渐变不同但语义一致：
+   *   渐变 → mixTowards 改底色（拉到两端纯黑/纯白）
+   *   壁纸 → CSS brightness() 滤镜（0 全黑 / 50 原样 / 100 翻倍）
+   * 关键约束：等高线不适用（线色由强调色直出，改亮度会改歪）。 */
+  {
+    const wallSrc = src.slice(src.indexOf('function applyWallpaperFilter'), src.indexOf('function applyWallpaperFilter') + 2600)
+    check(/brightness\(/.test(wallSrc), '壁纸滤镜链含 brightness()')
+    /* 50 = 原样（brightness 不为 1 时才写进 filter 串）。 */
+    check(/const bright = \(contourActive \|\| gradientMode\)\s*\n\s*\? 1/.test(wallSrc),
+      '渐变/等高线时 brightness 为 1（不生效）')
+    /* 换算：0 → 0（全黑），50 → 1，100 → 2（翻倍，保留照片细节）。 */
+    check(/bpct < 50 \? Math\.max\(0, bpct \/ 50\) : 1 \+ \(bpct - 50\) \/ 50/.test(wallSrc),
+      '换算公式：0→0, 50→1, 100→2')
+    /* 亮度必须排在 blur/saturate 之前或之后都行，但必须在同一条 filter 串。 */
+    check(/parts\.push\('brightness\('/.test(wallSrc), 'brightness 进入 filter 串')
+  }
+
   /* 3. 打开 → 两个浮层**额外**被钉成实色。 */
   check(/_float_/.test(on), '打开 → 覆盖 _float_（历史消息浮层）')
   check(/_preview_/.test(on), '打开 → 覆盖 _preview_（悬停预览浮层）')

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.8] — 2026-10-24
+
+### Added
+
+- **Background brightness now applies to wallpaper mode too.** It was
+  gradient-only before.
+
+  The two sources need different implementations but share one meaning:
+
+  | Source | Implementation | 50 = as-is | Extremes |
+  |---|---|---|---|
+  | Gradient | `mixTowards()` shifts the generated base colour | middle | 0 pure black / 100 pure white (deliberate; the ambience layer fades with it) |
+  | Wallpaper | CSS `brightness()`, on the same filter chain as blur and saturate | 1.0 | 0 full black / 100 doubles |
+
+  Wallpaper stops at doubling rather than pure white — pure white would erase the
+  photo's detail, whereas gradient reaching pure white is intentional.
+
+  Contour mode is unaffected: its line colour comes straight from the accent
+  colour, so brightness would only distort it, same reasoning as `saturate`.
+
+  The settings row is now shared by both sources instead of being gated on
+  gradient alone.
+
+### Tests
+
+Four new assertions on the filter chain and conversion formula, plus one on the
+settings guard covering both sources. Mutation-tested: making brightness a no-op
+turns 3 assertions red; restricting the settings row back to gradient turns 2 red.
+
 ## [1.1.7] — 2026-10-24
 
 ### Changed
