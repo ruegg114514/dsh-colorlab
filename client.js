@@ -2975,7 +2975,7 @@ window.__ModuleLoader__.load({
      * @param {boolean} isDark - 深色模式。
      * @returns {string} CSS 文本；功能关闭时为空串。
      */
-    function buildGlassSheet(state, surfaces, isDark, cardTargetsForSheet, floatTargetsForSheet) {
+    function buildGlassSheet(state, surfaces, isDark, cardTargetsForSheet, floatTargetsForSheet, popoverClassesForSheet) {
       const s = state || {}
       if (s.glass !== 'on') return ''
       const surf = surfaces || {}
@@ -3676,31 +3676,58 @@ window.__ModuleLoader__.load({
           ? Math.min(1, glassFloatTarget(alpha, popFog, s) + 0.03)
           : panelOverride
         const popAlpha = glassDeltaAlpha(alpha, popTarget)
-        /* ⚠️ 类名有两种格式，选择器必须都覆盖（2026-10-24 实测）：
+        /* ⚠️⚠️ 选择器必须**精确到浮层本体**，不能用 `[class*="preview"]`。
          *
-         *   格式 A  CSS Modules 哈希：`_preview_38jqx_52`、`_float_6nhg2_156`
-         *           → 匹配 `[class*="_preview_"]`
-         *   格式 B  模块名_元素名：`xpvNua_preview`（TurnNavigator 的轮次预览）
-         *           → **前后没有下划线**，`[class*="_preview_"]` 匹配不到！
+         * ## 踩过的坑（2026-10-24 两轮）
          *
-         * 用户报的「右侧历史记录悬浮窗」正是格式 B 的 `.xpvNua_preview`：
-         *   `position:absolute; background:var(--dsw-alias-bg-layer-1)`
-         * 它既没有 role，类名又不含 `_preview_`，所以之前完全漏掉。
+         * 宿主里含 "preview" 的类名有 8 个，但**只有两个是浮层**：
          *
-         * 用 `[class*="preview"]` / `[class*="float"]` 兜住两种格式。
-         * 放宽的风险：宿主里 `_previewProperty_`、`_previewEllipsis_` 这类
-         * 子元素也会命中 —— 但它们都在浮层内部，跟着一起玻璃化是**正确**的
-         * （否则浮层是玻璃、内部文字块是实色，会露出方块）。 */
-        /* `:not([class*="dmt-"])` 排除插件自己的设置页元素
-         * （`.dmt-preview` / `.dmt-prosePreview` 在设置页内，不该被当浮层涂）。 */
-        lines.push(g + '[class*="preview"]:not([class*="dmt-"]),'
-          + g + '[class*="float"]:not([class*="dmt-"]){'
-          + 'background-color:' + hexToRgba(
-            glassSurfaceColor(surf.base || overlayColor, overlayColor, alpha, glassComposite(alpha, popAlpha)),
-            popAlpha) + ' !important;'
-          + glassSurface + ';'
-          + frostedFilter
-          + 'isolation:isolate !important}')
+         *   ✅ `_preview_38jqx_52`   悬停文件预览
+         *         `background:var(--dsw-alias-bg-layer-1); box-shadow:var(--dsw-elevation-panel)`
+         *   ✅ `xpvNua_preview`      轮次预览（用户报的「右侧历史记录」）
+         *         `background:var(--dsw-alias-bg-layer-1); box-shadow:var(--dsw-elevation-panel)`
+         *
+         *   ❌ `_preview_1alm6_221`   JSON 树的语法着色，**只有 color 没有 background**
+         *   ❌ `_previewProperty_1alm6_225`  同上
+         *   ❌ `_previewEllipsis_1alm6_229`  同上
+         *   ❌ `xpvNua_previewPrompt` / `previewResponse`  浮层内部的文字块
+         *   ❌ `_floatingCell_6nhg2_156`   dockkit 的 0×0 定位格
+         *
+         * 第一版写 `[class*="preview"]`，把 JSON 树的着色 span 也涂成了
+         * 实心块 —— diff 区域里每个 JSON 值底下都多出一个深色方块
+         * （用户报「字底下和周围有这个东西」）。`[class*="float"]` 同理
+         * 会命中 `_floatingCell_`。
+         *
+         * ## 现在怎么选
+         *
+         * 两类浮层的**共同结构特征**：都同时带 `background` 和 `box-shadow`，
+         * 而内部文字块只有 color。所以按「类名 + 有背景」双重限定：
+         *
+         *   `[class*="preview"][class*="38jqx"]` —— 不行，哈希会变。
+         *
+         * 改用**位置特征**：浮层本体是 `position:absolute` 或 `fixed`，
+         * 内部文字块是 `position:static`。CSS 没有「按计算值选」的能力，
+         * 所以退回白名单：把**局部名**写进选择器，哈希用子串兜住。
+         *
+         *   `[class*="preview"]` 里排除掉已知的非浮层局部名。
+         *
+         * 这样哈希变了仍然命中，且不会误伤语法着色。 */
+        const popovers = Array.isArray(popoverClassesForSheet) ? popoverClassesForSheet : []
+        if (popovers.length > 0) {
+          const sel = popovers
+            .filter((c) => typeof c === 'string' && c !== '')
+            .map((c) => g + '.' + c)
+            .join(',')
+          if (sel !== '') {
+            lines.push(sel + '{'
+              + 'background-color:' + hexToRgba(
+                glassSurfaceColor(surf.base || overlayColor, overlayColor, alpha, glassComposite(alpha, popAlpha)),
+                popAlpha) + ' !important;'
+              + glassSurface + ';'
+              + frostedFilter
+              + 'isolation:isolate !important}')
+          }
+        }
 
         /* ⑥b-2 解除祖先的 contain:layout（否则 backdrop-filter 采不到样）。
          *
@@ -3724,10 +3751,18 @@ window.__ModuleLoader__.load({
          * `:has()` 从 Chrome 105 起原生支持，DSH 的 Electron 远高于此。
          * 浏览器不支持时这条规则被整条忽略，不会造成其它破坏
          * （退化成「有半透明色、无模糊」，与修复前一致）。 */
-        /* `:not([class*="dmt-"])` 排除插件设置页里的容器 —— 那里
-         * `.dmt-prosePreview` 等元素的祖先不该被我们改 contain。 */
-        lines.push(g + '*:not([class*="dmt-"]):has(> [class*="preview"]),'
-          + g + '*:not([class*="dmt-"]):has(> [class*="float"]){contain:none !important}')
+        /* 用**检测到的精确类名**，不能用 `[class*="preview"]` ——
+         * 那会命中 JSON 树容器（里面有 `_preview_1alm6_221` 子元素），
+         * 把它们祖先的 contain 也解掉，虽然无害但没必要。
+         *
+         * 只对「直接包含浮层本体」的祖先生效：`.xpvNua_frame > .xpvNua_preview`。 */
+        if (popovers.length > 0) {
+          const hasSel = popovers
+            .filter((c) => typeof c === 'string' && c !== '')
+            .map((c) => g + '*:not([class*="dmt-"]):has(> .' + c + ')')
+            .join(',')
+          if (hasSel !== '') lines.push(hasSel + '{contain:none !important}')
+        }
       }
 
       /* ⑥c HoverCard 气泡：同一个问题的第三个实例。
@@ -7323,6 +7358,81 @@ function makeColorizer(scheme) {
     }
 
     /**
+     * 检测「悬停浮层」的真实类名（2026-10-24）。
+     *
+     * ## 为什么不能靠类名白名单
+     *
+     * 宿主里含 "preview" 的类名有 8 个，但只有 2 个是浮层：
+     *
+     *   ✅ `_preview_38jqx_52`  / `xpvNua_preview`
+     *         → 都有 `background`（浮层本体）
+     *   ❌ `_preview_1alm6_221` / `_previewProperty_` / `_previewEllipsis_`
+     *         → 只有 `color`（JSON 树的语法着色）
+     *   ❌ `xpvNua_previewPrompt` / `previewResponse`
+     *         → 只有 font/color（浮层内部的文字块）
+     *
+     * 按类名写 `:not()` 白名单能用，但**宿主加一个新 previewXxx 就会再次误伤**
+     * （第一次就是这么把 diff 区域的 JSON 值涂成实心块的）。
+     *
+     * ## 判据：规则里有没有 `background`
+     *
+     * 浮层本体必须自己画底色，文字块不会。所以扫样式表时看
+     * `style.getPropertyValue('background')` 或 `background-color` 是否非空 ——
+     * 这条判据跟着宿主实现走，不依赖任何类名清单。
+     *
+     * @returns {string[]} 真实类名（不含前导点），如 `['_preview_38jqx_52', 'xpvNua_preview']`。
+     */
+    function detectPopoverClasses(docForScan) {
+      const doc = docForScan === undefined ? (typeof document === 'undefined' ? null : document) : docForScan
+      if (doc === null || doc === undefined) return []
+      const sheets = doc.styleSheets
+      if (!sheets || typeof sheets.length !== 'number') return []
+      const found = new Set()
+      /* 只认这两种命名格式，避免把 `.dmt-preview` 之类卷进来。
+       *
+       *   格式 A  `_preview_38jqx_52`  → 局部名在前，哈希在中
+       *           正则：`_` + 局部名 + `_` + 哈希 + `_` + 序号
+       *   格式 B  `xpvNua_preview`     → 哈希在前，局部名在后
+       *           正则：哈希 + `_` + 局部名
+       *
+       * ⚠️ 第一版把格式 A 写成 `_[a-zA-Z0-9]+_(?:preview|float)_...`，
+       * 那是「哈希在前、局部名在中」的形态，宿主里不存在 ——
+       * 结果 `_preview_38jqx_52` 漏掉了。正确的是**局部名在前**：
+       * `_(?:preview|float)_<哈希>_<序号>`。 */
+      const pickClass = (selector) => {
+        /* 格式 A：`._preview_38jqx_52` —— 前导下划线 + 局部名 + 哈希 + 序号。
+         * ⚠️ 前导 `_` 必须写进正则：`._preview_...` 里 `.` 后面紧跟的是
+         * `_` 而不是 `p`，漏了它整条都匹配不上（第一版就是这么漏的）。 */
+        const a = /\.(_(?:preview|float)_[a-z0-9]+_\d+)(?![\w-])/.exec(selector)
+        if (a !== null) return a[1]
+        /* 格式 B：xpvNua_preview（前面不能再有下划线，避免误吃格式 A） */
+        const b = /\.([a-zA-Z0-9]+_(?:preview|float))(?![\w-])/.exec(selector)
+        if (b !== null) return b[1]
+        return null
+      }
+      for (let s = 0; s < sheets.length; s += 1) {
+        const sheet = sheets[s]
+        if (!sheet) continue
+        let rules
+        try { rules = sheet.cssRules } catch { continue }
+        if (!rules || typeof rules.length !== 'number') continue
+        for (let r = 0; r < rules.length; r += 1) {
+          const rule = rules[r]
+          if (!rule) continue
+          const style = rule.style
+          if (!style || typeof style.getPropertyValue !== 'function') continue
+          const hasBg = style.getPropertyValue('background') !== ''
+            || style.getPropertyValue('background-color') !== ''
+            || style.getPropertyValue('background-image') !== ''
+          if (!hasBg) continue
+          const cls = pickClass(rule.selectorText || '')
+          if (cls !== null) found.add(cls)
+        }
+      }
+      return [...found]
+    }
+
+    /**
      * 检测 HoverCard 浮层（`--dsw-hovercard-bg`）的真实哈希类名。
      *
      * 复用 detectCardTargets 的扫描逻辑，只是换一张目标表 ——
@@ -8131,6 +8241,10 @@ function makeColorizer(scheme) {
      * 同样要等宿主样式表进 DOM 才检测得到，所以也在 syncCardSheet 里顺带刷新。
      */
     let floatTargets = undefined
+    /* 悬停浮层的真实类名（2026-10-24）。与 floatTargets 分开：那个是
+     * 「定义 --dsw-hovercard-bg 的类」（用于改实心），这个是「自己画底色的
+     * 浮层类」（用于玻璃化）。检测判据见 detectPopoverClasses()。 */
+    let popoverClasses = undefined
     let cardRetryTimer = null
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
@@ -8216,6 +8330,13 @@ function makeColorizer(scheme) {
       if (!Array.isArray(floatTargets) || floatTargets.length === 0) {
         const foundFloats = detectFloatTargets()
         if (foundFloats.length > 0) floatTargets = foundFloats
+      }
+      /* 悬停浮层类名：同样等宿主样式表进 DOM。判据是「规则里声明了
+       * background」—— 浮层本体自己画底色，浮层内部的文字块不会。
+       * 这样不依赖类名白名单，宿主加新浮层也能自动跟上。 */
+      if (!Array.isArray(popoverClasses) || popoverClasses.length === 0) {
+        const foundPopovers = detectPopoverClasses()
+        if (foundPopovers.length > 0) popoverClasses = foundPopovers
       }
       const css = buildCardSheet(state, cardTargets)
       const wanted = state.enabled !== 'off' && shouldApply() && css !== ''
@@ -11337,6 +11458,8 @@ function makeColorizer(scheme) {
         buildCardSheet,
         detectCardTargets,
         detectFloatTargets,
+        detectPopoverClasses,
+        detectPopoverClassesWith: detectPopoverClasses,
         FLOAT_TARGETS,
         mergeCardTargets,
         cardTargetsComplete,

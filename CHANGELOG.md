@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.3] — 2026-10-24
+
+### Fixed
+
+- **Diff regions turned solid, and the popover text gained dark boxes around
+  it.** A regression from v1.1.2.
+
+  v1.1.2 widened the popover selector to `[class*="preview"]` so it would
+  cover both class naming formats. But the host has **eight** class names
+  containing "preview", and only two of them are popovers — the rest are
+  JSON-tree syntax colouring (`_preview_1alm6_221` and friends), which live
+  inside diff regions and only declare `color`. Painting them as surfaces put
+  a dark box under every JSON value.
+
+  The selector is gone; popovers are now found at runtime instead. A new
+  `detectPopoverClasses()` scans the stylesheets and accepts a class only if
+  **both** conditions hold: the name matches a popover naming pattern, and the
+  rule declares a `background`. A popover has to paint its own surface; an
+  inner text block does not. That criterion follows the host implementation
+  rather than a class-name list, so a new `previewXxx` class in a future host
+  build cannot silently break it again.
+
+  The generated rule now targets exact class names:
+  `html[data-dsh-glass] ._preview_38jqx_52` rather than a substring match.
+  The `contain` override uses the same detected names.
+
+### Note
+
+Three iterations, each fixing the previous one's failure mode:
+
+| Version | Selector | Outcome |
+|---|---|---|
+| v1.1.1 | `[class*="_preview_"]` | missed `xpvNua_preview` (no leading underscore) |
+| v1.1.2 | `[class*="preview"]` | matched JSON-tree colouring, diff went solid |
+| v1.1.3 | runtime detection + exact names | both cases covered |
+
+Substring matching on class names was the wrong tool: too narrow and it misses,
+too broad and it hits unrelated elements. The fix was to write the definition of
+"is a popover" as an executable condition instead of enumerating names.
+
 ## [1.1.2] — 2026-10-24
 
 ### Fixed

@@ -1157,33 +1157,67 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
    *   · 开启改实心 → 再钉成完全不透明（后一条规则覆盖前一条）
    * 所以「默认不写规则」这条旧断言必须反转。 */
 
-  /* 1. 默认就要有玻璃规则 —— 这是这次修的核心。 */
-  check(/class\*="float"/.test(off), '默认 → 也覆盖 float 类浮层（跟玻璃走）')
-  /* ---- 2026-10-24：TurnNavigator 轮次预览（.xpvNua_preview）----
-   * 它是用户报的「右侧历史记录悬浮窗」。两个坑：
-   *   ① 类名格式 `xpvNua_preview`（模块名_元素名），旧的
-   *      `[class*="_preview_"]` 匹配不到 → 必须用 `[class*="preview"]`
-   *   ② 父容器有 `contain:layout`，会阻断 backdrop-filter 采样
-   *      （实测对照见 preview-contain-test.html）→ 必须解除 */
-  check(/\[class\*="preview"\]/.test(off), '选择器用 preview 子串（覆盖两种类名格式）')
-  check(!/\[class\*="_preview_"\]/.test(off), '不再依赖 _preview_ 格式')
-  check(/:not\(\[class\*="dmt-"\]\)/.test(off), '排除插件自己的 dmt- 类')
-  check(/:has\(> \[class\*="preview"\]\)/.test(off), '解除含 preview 子元素容器的 contain')
-  check(/contain:none !important/.test(off), 'contain 被设为 none（否则模糊失效）')
-  check(/xpvNua_preview/.test(src) || /TurnNavigator/.test(src),
-    '源码注释记录了 TurnNavigator 这个真实来源')
 
+  /* ---- 2026-10-24：浮层类名检测（detectPopoverClasses）----
+   *
+   * 为什么不能按类名硬匹配（两次踩坑）：
+   *   第一版 [class*="_preview_"] → 漏掉 xpvNua_preview（无前导下划线）
+   *   第二版 [class*="preview"]   → 误伤 JSON 树着色（_preview_1alm6_221
+   *                                只有 color 没有 background），
+   *                                diff 区域每个 JSON 值都变成实心块
+   * 现在改为扫样式表 + 判「规则里有没有 background」。 */
+  {
+    const hostCss = [
+      '._preview_38jqx_52{display:flex;background:var(--dsw-alias-bg-layer-1)}',
+      '.xpvNua_preview{position:absolute;background:var(--dsw-alias-bg-layer-1)}',
+      '._float_6nhg2_156{background:var(--dsw-alias-bg-base)}',
+      '._preview_1alm6_221,._previewProperty_1alm6_225{color:var(--json-tree-punctuation)}',
+      '._previewEllipsis_1alm6_229{color:var(--dsw-alias-label-tertiary)}',
+      '.xpvNua_previewPrompt{font:var(--dsw-font-xs-strong-13)}',
+      '.xpvNua_previewResponse{color:var(--dsw-alias-label-caption)}',
+      '._floatingCell_6nhg2_156{width:0;height:0}',
+      '.dmt-preview{background:var(--dsw-alias-markdown-code-block)}',
+    ].join('\n')
+    const cssom = (() => {
+      const out = []
+      const re = /([^{}]+)\{([^}]*)\}/g
+      let m
+      while ((m = re.exec(hostCss)) !== null) {
+        const map = {}
+        for (const d of m[2].split(';')) {
+          const i = d.indexOf(':')
+          if (i < 0) continue
+          map[d.slice(0, i).trim()] = d.slice(i + 1).trim()
+        }
+        out.push({ selectorText: m[1].trim(), style: { getPropertyValue: (n) => map[n] === undefined ? '' : map[n] } })
+      }
+      return out
+    })()
+    const found = t.detectPopoverClasses({ styleSheets: [{ cssRules: cssom }] })
 
-  check(/class\*="preview"/.test(off), '默认 → 也覆盖 preview 类浮层（跟玻璃走）')
+    /* 三个浮层本体必须命中 —— 包括两种命名格式。 */
+    check(found.includes('_preview_38jqx_52'), '检测到 _preview_38jqx_52（格式 A）', JSON.stringify(found))
+    check(found.includes('xpvNua_preview'), '检测到 xpvNua_preview（格式 B）', JSON.stringify(found))
+    check(found.includes('_float_6nhg2_156'), '检测到 _float_6nhg2_156', JSON.stringify(found))
+    /* 只有 color 没有 background 的必须排除 —— 第二版误伤的根源。 */
+    for (const c of ['_preview_1alm6_221', '_previewProperty_1alm6_225',
+      '_previewEllipsis_1alm6_229', 'xpvNua_previewPrompt', 'xpvNua_previewResponse',
+      '_floatingCell_6nhg2_156', 'dmt-preview']) {
+      check(!found.includes(c), '排除非浮层 ' + c, JSON.stringify(found))
+    }
 
-  /* 2. 默认档必须是**半透明**（rgba），且带 backdrop-filter。 */
-  const offRule = off.match(/\[class\*="float"\][^{]*\{[^}]*\}/)
-  check(offRule !== null, '默认档规则体存在')
-  const offBody = offRule === null ? '' : offRule[0]
-  check(/background-color:rgba\(/.test(offBody),
-    '默认档是 rgba 半透明（不是实色）', offBody.slice(0, 80))
-  check(/backdrop-filter:blur\(/.test(offBody),
-    '默认档带 backdrop-filter（真玻璃）')
+    /* 检测结果必须真的被用进 CSS：精确类名，不是子串匹配。 */
+    const withPop = buildGlassSheet(
+      { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16' },
+      dark, true, [], [], ['_preview_38jqx_52', 'xpvNua_preview'],
+    )
+    check(/\._preview_38jqx_52/.test(withPop), '规则用精确类名（不用 [class*=]）')
+    check(/\.xpvNua_preview/.test(withPop), '规则覆盖 xpvNua_preview')
+    check(/:has\(> \._preview_38jqx_52\)/.test(withPop), 'contain 解除用精确类名')
+    check(/contain:none !important/.test(withPop), 'contain 被设为 none')
+    /* 未检测到时不该瞎猜。 */
+    check(!/[^{]*_preview_38jqx[^{]*\{background/.test(off), '未检测到 → 不生成浮层规则')
+  }
 
   /* 3. 打开 → 两个浮层**额外**被钉成实色。 */
   check(/_float_/.test(on), '打开 → 覆盖 _float_（历史消息浮层）')

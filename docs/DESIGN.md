@@ -895,6 +895,83 @@ const veilMode = state.glassBackground === 'gradient' && state.glassVeil === 'au
 
 `glass.test` 有断言锁这条（含变异验证：还原成旧行为会让 3 条断言变红）。
 
+### 浮层检测：从类名匹配改成运行时探测（2026-10-24 第十五轮）
+
+上一轮修好了模糊，但引入新 bug：**diff 区域变成纯实心**，
+右侧悬停浮层的字底下和周围多出深色块。
+
+#### 误伤原因
+
+上一轮把选择器放宽成 `[class*="preview"]` 来覆盖两种命名格式。
+但宿主里含 "preview" 的类名有 **8 个，只有 2 个是浮层**：
+
+| 类名 | 是什么 | 有 background？ |
+|---|---|---|
+| `_preview_38jqx_52` | 悬停文件预览 | ✅ 浮层本体 |
+| `xpvNua_preview` | 轮次预览 | ✅ 浮层本体 |
+| `_preview_1alm6_221` | **JSON 树语法着色** | ❌ 只有 color |
+| `_previewProperty_1alm6_225` | 同上 | ❌ |
+| `_previewEllipsis_1alm6_229` | 同上 | ❌ |
+| `xpvNua_previewPrompt` | 浮层内部文字块 | ❌ |
+| `xpvNua_previewResponse` | 同上 | ❌ |
+| `_floatingCell_6nhg2_156` | dockkit 0×0 定位格 | ❌ |
+
+JSON 树那几个在 diff 区域里，被涂成实心块后每个 JSON 值底下都多一个深色方块。
+
+#### 最终方案：运行时探测
+
+不写类名白名单（宿主加一个 `previewXxx` 就会再次误伤），改成
+**扫样式表 + 判「规则里有没有 background」**：
+
+```js
+function detectPopoverClasses(docForScan) {
+  // 遍历所有样式表规则
+  //   ① 类名匹配浮层命名格式（两种）
+  //   ② 规则里声明了 background / background-color / background-image
+  // 两条都满足才算浮层本体
+}
+```
+
+判据跟着宿主实现走：**浮层本体必须自己画底色，内部文字块不会。**
+
+两种命名格式的正则（第一版写错过）：
+
+| 格式 | 例子 | 正则 |
+|---|---|---|
+| A 局部名在前 | `_preview_38jqx_52` | `\._((?:preview\|float)_[a-z0-9]+_\d+)` |
+| B 哈希在前 | `xpvNua_preview` | `\.([a-zA-Z0-9]+_(?:preview\|float))` |
+
+⚠️ 格式 A 的正则**必须带前导 `_`** —— `._preview_...` 里 `.` 后面
+紧跟的是 `_` 而不是 `p`。第一版漏了它，格式 A 全部失效。
+
+#### 生成结果
+
+```css
+/* 精确类名，不是子串匹配 */
+html[data-dsh-glass] ._preview_38jqx_52,
+html[data-dsh-glass] .xpvNua_preview,
+html[data-dsh-glass] ._float_6nhg2_156 {
+  background-color: rgba(31, 36, 40, 0.71) !important;
+  backdrop-filter: blur(26px) saturate(120%) !important;
+}
+
+/* contain 解除也改用精确类名 */
+html[data-dsh-glass] *:not([class*="dmt-"]):has(> .xpvNua_preview) {
+  contain: none !important;
+}
+```
+
+#### 三次迭代的教训
+
+| 版本 | 选择器 | 结果 |
+|---|---|---|
+| v1 | `[class*="_preview_"]` | 漏掉 `xpvNua_preview`（无前导下划线） |
+| v2 | `[class*="preview"]` | 误伤 JSON 树着色 → diff 变实心 |
+| v3 | 运行时探测 + 精确类名 | ✅ |
+
+**类名子串匹配是不可靠的**：要么漏（格式不对），要么误伤（局部名太常见）。
+正确做法是把「什么是浮层」的判据**写成可执行的条件**，而不是枚举。
+
 ### 轮次预览浮层：两个坑（2026-10-24 第十四轮）
 
 用户报「右侧历史记录还是没变化，没有模糊」。上一轮的修复**确实注入了规则**，
