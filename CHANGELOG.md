@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.5] — 2026-10-24
+
+### Fixed
+
+- **Code blocks looked noticeably whiter and duller than other glass
+  surfaces.** The frosted haze is a translucent white gradient defined on the
+  shared `glassSurface` constant, which every glass surface used — including
+  nested ones. A code block sits inside a card or column, so the haze stacked:
+  `1 - (1-0.08)² ≈ 15.4%`, nearly double the configured value.
+
+  Split into two constants by nesting level:
+
+  | Constant | Haze | Used by |
+  |---|---|---|
+  | `glassSurface` | yes | outermost surfaces — columns, cards, dialogs, popovers, composer |
+  | `glassSurfaceFlat` | no | nested surfaces — code blocks, `pre`, inline code |
+
+  Both keep the `box-shadow` and `border`; those draw on the element's own
+  edges and do not accumulate brightness, so stacking them is harmless.
+
+  Lowering the global haze value would have been the wrong fix: it exists to
+  give the outermost layer its material feel, and thinning it everywhere would
+  make single-layer surfaces too flat.
+
+### Note
+
+Detecting this needed the generated stylesheet rather than the source: the
+duplication only appears once you list which selectors end up carrying the
+haze gradient.
+
 ## [1.1.4] — 2026-10-24
 
 ### Fixed

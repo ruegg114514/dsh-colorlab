@@ -3197,7 +3197,22 @@ window.__ModuleLoader__.load({
        * 点亮成淡蓝环；层数一致浏览器才能逐层插值（参考插件实测：
        * 层数不一致时聚焦是"跳变"而不是"渐显"）。多一层透明阴影零成本。 */
       const glassShadow5 = glassShadow + ',0 0 0 3px rgba(120, 150, 255, 0)'
+      /* ⚠️ 白雾（hazeLayer）只能叠**一次**。
+       *
+       * 2026-10-24 用户报「代码预览的白雾比其他地方重很多」。
+       * 原因是嵌套：代码块（`.md-code-block` / `[data-code-preview]`）
+       * 嵌在卡片或列里，而两者都拿到了 glassSurface —— 白雾叠了两层，
+       * 8% + 8% 合成约 15.4%，视觉上就是"更白更闷"。
+       *
+       * 现在分两个版本：
+       *   · glassSurface      —— 带白雾，给**最外层**表面用（列/卡片/弹层/浮层）
+       *   · glassSurfaceFlat  —— 不带白雾，给**嵌套在别的玻璃里**的表面用
+       *                          （代码块、pre、行内 code）
+       * 描边和阴影两者都保留：那是边缘质感，叠两层不会变脏。 */
       const glassSurface = 'background-image:' + hazeLayer + ' !important;'
+        + 'box-shadow:' + glassShadow5 + ' !important;'
+        + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
+      const glassSurfaceFlat = 'background-image:none !important;'
         + 'box-shadow:' + glassShadow5 + ' !important;'
         + 'border:0.5px solid rgba(' + edgeLight + ', 0.10) !important'
 
@@ -3323,13 +3338,16 @@ window.__ModuleLoader__.load({
        * 而且 backdrop-filter 会让元素成为 fixed 后代的包含块（上游实测：
        * 输入卡加模糊后，fixed 定位的 tooltip 坐标解析错乱 + ResizeObserver
        * 循环重测 → 布局抖动）。白雾/描边/阴影三件套留下，那才是"材质感"。 */
+      /* ⚠️ 用 glassSurfaceFlat（无白雾）：代码块嵌在卡片/列里，
+       * 父层已经叠过白雾了，这里再叠一次会变成两倍浓度
+       * （用户报「代码预览白雾特别重」）。 */
       lines.push(
         g + '.md-code-block,'
         + g + '[data-code-wrap],'
         + g + '[data-code-block-content],'
         + g + '[data-code-block-banner],'
         + g + '[data-code-preview]{'
-        + glassSurface + '}')
+        + glassSurfaceFlat + '}')
       /* ══ pre 与 pre code 的底色：半透明代码色（2026-10-22 重写）════
        *
        * 旧版把 `pre / pre code / p code / li code / td code` 一律清成

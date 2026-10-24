@@ -1238,6 +1238,38 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
     check(/diag\.popovers/.test(src), '诊断暴露 popovers 计数')
   }
 
+  /* ---- ⚠️ 2026-10-24：白雾只能叠一层 ----
+   *
+   * 用户报「代码预览的白雾比其他地方重很多」。
+   * 根因：代码块嵌在卡片/列里，两者都应用了 glassSurface（含白雾），
+   * 8% + 8% 合成约 15.4% —— 视觉上明显更白更闷。
+   *
+   * 修法：拆成两个版本
+   *   glassSurface     带白雾 → 只给最外层（列/卡片/弹层/浮层）
+   *   glassSurfaceFlat 无白雾 → 给嵌套层（代码块）
+   *
+   * 这条断言锁死「代码块不带白雾」。 */
+  {
+    const sheet = buildGlassSheet(
+      { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16', glassHaze: '8' },
+      dark, true,
+    )
+    const codeRule = sheet.split('\n').find((l) => l.includes('.md-code-block'))
+    check(codeRule !== undefined, '代码块规则存在')
+    if (codeRule !== undefined) {
+      /* 白雾的标志是 background-image 上的白色线性渐变。 */
+      check(!/background-image:linear-gradient\(to bottom,rgba\(255, 255, 255/.test(codeRule),
+        '代码块不带白雾（避免与父层叠加）', codeRule.slice(0, 100))
+      /* 但边缘高光和描边要留着 —— 那是材质感，不是白雾。 */
+      check(/box-shadow:/.test(codeRule), '代码块保留边缘阴影')
+      check(/border:0\.5px solid/.test(codeRule), '代码块保留描边')
+    }
+    /* 最外层仍然要有白雾。 */
+    const cardRule = sheet.split('\n').find((l) => l.includes('kuvljq_card'))
+    check(cardRule !== undefined && /rgba\(255, 255, 255/.test(cardRule),
+      '最外层卡片仍有白雾', cardRule ? cardRule.slice(0, 80) : '未找到')
+  }
+
   /* 3. 打开 → 两个浮层**额外**被钉成实色。 */
   check(/_float_/.test(on), '打开 → 覆盖 _float_（历史消息浮层）')
   check(/_preview_/.test(on), '打开 → 覆盖 _preview_（悬停预览浮层）')
