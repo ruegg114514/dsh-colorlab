@@ -369,18 +369,38 @@ console.log('J. 浮层改实心：按检测到的类名写覆盖')
     { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16', ...extra },
     darkSurf, true, [], floats)
 
+  /* ⚠️ 2026-10-24 行为改变（用户报 bug）：HoverCard 气泡默认也要跟玻璃走。
+   * 之前只有「改实心」开关会碰它，且直接钉成不透明 —— 默认状态下这个浮层
+   * 完全没被玻璃处理，背后活文字透上来。现在分两层：
+   *   · 默认 → rgba 半透明 + backdrop-filter
+   *   · 改实心 on → 6 位 hex 实色，且撤掉模糊
+   * 两条规则同选择器，后一条覆盖前一条（CSS 顺序）。 */
+  const off = build({})
+  const offRule = off.match(/\._card_38jqx_9\{[^}]*\}/)
+  check(offRule !== null, '默认 → 也覆盖 hovercard 变量（跟玻璃走）',
+    offRule ? offRule[0].slice(0, 80) : '未生成')
+  check(offRule !== null && /--dsw-hovercard-bg:rgba\(/.test(offRule[0]),
+    '默认档是 rgba 半透明', offRule ? offRule[0].slice(0, 90) : '')
+  check(offRule !== null && /backdrop-filter:blur\(/.test(offRule[0]),
+    '默认档带 backdrop-filter（真玻璃）')
+
   const on = build({ glassSolidFloats: 'on' })
-  const rule = on.match(/\._card_38jqx_9\{[^}]*\}/)
-  check(rule !== null, '打开 → 按真实类名覆盖 hovercard 变量', rule ? rule[0] : '未生成')
-  check(rule !== null && /--dsw-hovercard-bg:#[0-9a-fA-F]{6} !important/.test(rule[0]),
-    '覆盖值是 6 位 hex 实色')
+  const rules = [...on.matchAll(/\._card_38jqx_9\{[^}]*\}/g)].map(x => x[0])
+  check(rules.length >= 2, '打开 → 两条规则（玻璃档 + 实心档）', String(rules.length))
+  const solidRule = rules.find(r => /#[0-9a-fA-F]{6} !important/.test(r) && !/rgba\(/.test(r))
+  check(solidRule !== undefined, '打开 → 有 6 位 hex 实色规则',
+    solidRule ? solidRule.slice(0, 90) : '未生成')
+  /* 实心档必须排在玻璃档之后 —— CSS 同特异性靠顺序决胜。 */
+  if (solidRule !== undefined) {
+    const idxGlass = on.indexOf(rules[0])
+    const idxSolid = on.indexOf(solidRule)
+    check(idxSolid > idxGlass, '实心档在玻璃档之后（同特异性靠顺序覆盖）',
+      idxGlass + ' < ' + idxSolid)
+  }
 
   /* 绝对不能写成 body 级 —— 自定义属性不从 body 继承过元素本地声明。 */
   check(!/body\{--dsw-hovercard-bg/.test(on),
     '不写在 body 上（元素本地声明会挡住 body 级 !important）')
-
-  const off = build({})
-  check(!/hovercard-bg/.test(off), '关闭 → 不覆盖 hovercard 变量')
 
   /* 没检测到类名（还没扫描）→ 只生成 _float_/_preview_，不崩不瞎写。 */
   const noTargets = test.buildGlassSheet(

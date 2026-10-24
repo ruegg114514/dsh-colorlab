@@ -1150,26 +1150,47 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
   const off = build({})
   const on = build({ glassSolidFloats: 'on' })
 
-  /* 1. 默认关 → 不产生任何规则（玻璃观感不变）。 */
-  check(!/_float_/.test(off), '默认关 → 不写 _float_ 规则')
-  check(!/_preview_/.test(off), '默认关 → 不写 _preview_ 规则')
+  /* ⚠️ 2026-10-24 行为改变（用户报 bug）：
+   * 之前默认关时这两个浮层**完全没被玻璃处理**，背后活文字直接透上来。
+   * 现在分两层：
+   *   · 默认 → 跟 dialog/menu 同一套差值+预补偿+模糊（半透明玻璃）
+   *   · 开启改实心 → 再钉成完全不透明（后一条规则覆盖前一条）
+   * 所以「默认不写规则」这条旧断言必须反转。 */
 
-  /* 2. 打开 → 两个浮层都被钉成实色。 */
+  /* 1. 默认就要有玻璃规则 —— 这是这次修的核心。 */
+  check(/_float_/.test(off), '默认 → 也覆盖 _float_（跟玻璃走）')
+  check(/_preview_/.test(off), '默认 → 也覆盖 _preview_（跟玻璃走）')
+
+  /* 2. 默认档必须是**半透明**（rgba），且带 backdrop-filter。 */
+  const offRule = off.match(/\[class\*="_float_"\][^{]*\{[^}]*\}/)
+  check(offRule !== null, '默认档规则体存在')
+  const offBody = offRule === null ? '' : offRule[0]
+  check(/background-color:rgba\(/.test(offBody),
+    '默认档是 rgba 半透明（不是实色）', offBody.slice(0, 80))
+  check(/backdrop-filter:blur\(/.test(offBody),
+    '默认档带 backdrop-filter（真玻璃）')
+
+  /* 3. 打开 → 两个浮层**额外**被钉成实色。 */
   check(/_float_/.test(on), '打开 → 覆盖 _float_（历史消息浮层）')
   check(/_preview_/.test(on), '打开 → 覆盖 _preview_（悬停预览浮层）')
 
-  /* 3. 必须是**不透明**实色，不能是 rgba 带 alpha ——
-   *    否则「字压字」问题原样存在。 */
-  const rule = on.match(/\[class\*="_float_"\][^{]*\{[^}]*\}/)
-  check(rule !== null, '规则体存在')
-  const body = rule === null ? '' : rule[0]
-  check(/background-color:#[0-9a-fA-F]{6}\s*!important/.test(body),
-    '底色是 6 位 hex 实色（不是 rgba 带 alpha）', body.slice(0, 90))
-  check(!/rgba\(/.test(body), '规则里没有 rgba（必须完全不透明）')
+  /* 4. 实心档必须是**不透明**，否则「字压字」原样存在。 */
+  const rule = on.match(/\[class\*="_float_"\],html\[data-dsh-glass\] \[class\*="_preview_"\]\{background-color:#[0-9a-fA-F]{6}/)
+    || on.match(/\[class\*="_float_"\][^{]*\{background-color:#[0-9a-fA-F]{6}[^}]*backdrop-filter:none/)
+  check(rule !== null, '打开 → 有 6 位 hex 实色规则', rule === null ? '' : rule[0].slice(0, 80))
+  /* 实心档那条规则体里不能有 rgba。 */
+  const solidBody = (() => {
+    const all = [...on.matchAll(/\[class\*="_float_"\][^{]*\{[^}]*\}/g)].map(x => x[0])
+    return all.find(b => /backdrop-filter:none/.test(b)) || ''
+  })()
+  check(solidBody !== '', '找到实心档规则体')
+  check(/background-color:#[0-9a-fA-F]{6}\s*!important/.test(solidBody),
+    '实心档底色是 6 位 hex（不带 alpha）', solidBody.slice(0, 90))
+  check(!/rgba\(/.test(solidBody), '实心档规则里没有 rgba（完全不透明）')
 
   /* 4. 打开后必须**撤掉** backdrop-filter：实色之后模糊已无意义，
    *    留着只会白白建一层合成层。 */
-  check(/backdrop-filter:none/.test(body), '打开后撤掉 backdrop-filter（实色后模糊无意义）')
+  check(/backdrop-filter:none/.test(solidBody), '打开后撤掉 backdrop-filter（实色后模糊无意义）')
 
   /* 5. 深/浅两套用不同实色。 */
   const onDark = build({ glassSolidFloats: 'on' }, true, dark)

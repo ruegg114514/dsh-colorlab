@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.1] — 2026-10-24
+
+### Fixed
+
+- **Hover popovers were not glassed at all.** The file-change diff popover and
+  the conversation-history popover — both `position:fixed` elements with no
+  `role` attribute — fell outside the `[role="dialog"]` / `[role="menu"]`
+  rules, so they rendered as flat opaque boxes over live text. The only code
+  that touched them lived behind the *Solid floats* switch (off by default),
+  and it pinned them fully opaque rather than glassing them.
+
+  They now follow the glass in two layers: by default they get the same
+  delta-alpha compositing and blur as dialogs and menus (with a slightly
+  higher +0.03 readability compensation, since these are transient and you
+  read them immediately); turning on *Solid floats* still pins them opaque,
+  and its rule wins by source order.
+
+  The HoverCard bubble has the same problem in a different shape — its
+  background is the hard-coded `--dsw-hovercard-bg: #2C2C2E`, which no token
+  override can reach. It is now overridden at the variable itself with a
+  translucent glass value, resolved through runtime class detection so the
+  hashed class name keeps working across builds.
+
 ## [1.1.0] — 2026-10-24
 
 Background ground is now a compositor of its own, the settings page has been

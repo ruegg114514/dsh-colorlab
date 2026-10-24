@@ -3640,6 +3640,86 @@ window.__ModuleLoader__.load({
           + hoverVar + ':' + hexToRgba(cardHoverAdj, cardHoverA) + ' !important}')
       }
 
+      /* ⑥b 无 role 的瞬态浮层：默认也要跟玻璃走（2026-10-24 用户报 bug）。
+       *
+       * ## 问题
+       *
+       * 宿主有三类 `position:fixed` 的浮层，**都没有 role 属性**，所以上面
+       * 那组 `[role="dialog"]` / `[role="menu"]` 规则完全压不到它们：
+       *
+       *   ① `._card_38jqx_9`    HoverCard 气泡，底色是**硬编码** `#2C2C2E`
+       *   ② `._preview_38jqx_52` 悬停文件预览（文件变更 diff 的悬浮窗）
+       *   ③ `._float_6nhg2_156`  dockkit 浮层（右侧历史用户记录的悬浮窗）
+       *
+       * 之前只有「浮层改实心」开关（默认关）会碰它们，且是直接钉成**不透明**。
+       * 于是默认状态下这三个浮层是**完全没被玻璃处理**的 —— 背后是活文字，
+       * 半透明下字压字，观感突兀（用户截图实证）。
+       *
+       * ## 修法：分两层
+       *
+       *   · 默认（本条）：跟 dialog/menu **同一套**差值 + 预补偿 + 模糊，
+       *     只是多 +0.03 的可读性补偿（瞬态浮层面积小、要立刻读清）。
+       *   · 开启「浮层改实心」：仍然钉成完全不透明（⑦ 段，语义不变）。
+       *
+       * 这样既保住「浮层也是玻璃」的一致性，又保留「读不清就钉实」的退路。
+       *
+       * ## 选择器
+       *
+       * 用局部名子串匹配（`[class*="_preview_"]` 等），哈希每次构建都变、
+       * 局部名稳定。`_card_` 是通用局部名（消息卡片/计划卡片都用），
+       * 所以 ① 单独走「覆盖 `--dsw-hovercard-bg` 变量」那条路（见 ⑦ 段），
+       * 这里只处理 ② ③ 两个局部名唯一的。 */
+      {
+        const popFog = Math.max(0, Math.min(1, parsePercent(s.glassFog, 0, 40, 16) / 40))
+        const panelOverride = glassPanelAlpha(s)
+        const popTarget = panelOverride === null
+          ? Math.min(1, glassFloatTarget(alpha, popFog, s) + 0.03)
+          : panelOverride
+        const popAlpha = glassDeltaAlpha(alpha, popTarget)
+        lines.push(g + '[class*="_preview_"],'
+          + g + '[class*="_float_"]{'
+          + 'background-color:' + hexToRgba(
+            glassSurfaceColor(surf.base || overlayColor, overlayColor, alpha, glassComposite(alpha, popAlpha)),
+            popAlpha) + ' !important;'
+          + glassSurface + ';'
+          + frostedFilter
+          + 'isolation:isolate !important}')
+      }
+
+      /* ⑥c HoverCard 气泡：同一个问题的第三个实例。
+       *
+       * `._card_38jqx_9` 的底色是**硬编码** `--dsw-hovercard-bg: #2C2C2E`，
+       * 不走任何 `--dsw-alias-*` 令牌，所以令牌层碰不到它；它也没有 role，
+       * dialog/menu 规则压不到。⑥b 的 `[class*="_preview_"]` / `[class*="_float_"]`
+       * 也匹配不到 —— 它的局部名是通用的 `_card_`。
+       *
+       * 修法与 ⑦ 相同：直接覆盖变量本身，但值改成**半透明玻璃**而不是实色。
+       * 类名靠运行时检测（`detectFloatTargets()`），哈希变了自动跟上。
+       *
+       * ⑦ 开启「浮层改实心」时这条会被后面的规则覆盖（同一变量、更靠后）。 */
+      {
+        const cardFloatTargets = Array.isArray(floatTargetsForSheet) ? floatTargetsForSheet : []
+        if (cardFloatTargets.length > 0) {
+          const popFog = Math.max(0, Math.min(1, parsePercent(s.glassFog, 0, 40, 16) / 40))
+          const panelOverride = glassPanelAlpha(s)
+          /* 与 ⑥b 保持同一档：浮层目标 + 0.03 补偿。 */
+          const target = panelOverride === null
+            ? Math.min(1, glassFloatTarget(alpha, popFog, s) + 0.03)
+            : panelOverride
+          const popAlpha = glassDeltaAlpha(alpha, target)
+          const popColor = hexToRgba(
+            glassSurfaceColor(surf.base || overlayColor, overlayColor, alpha, glassComposite(alpha, popAlpha)),
+            popAlpha)
+          for (const defClass of cardFloatTargets) {
+            if (typeof defClass !== 'string' || defClass === '') continue
+            lines.push(g + '.' + defClass + '{'
+              + '--dsw-hovercard-bg:' + popColor + ' !important;'
+              + 'backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
+              + '-webkit-backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important}')
+          }
+        }
+      }
+
       /* ⑦ 浮层改实心（2026-10-23 第三轮，默认关）。
        *
        * ## 为什么需要单独一条
