@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.2] — 2026-10-24
+
+### Fixed
+
+- **The turn-preview popover still was not blurred.** v1.1.1 injected the right
+  rule but it had no effect on this one popover, for two independent reasons:
+
+  1. **Class name format.** The rule matched `[class*="_preview_"]`, which only
+     covers CSS Modules hashed names like `_preview_38jqx_52`. The turn
+     navigator's popover is `xpvNua_preview` — module name, then element name,
+     no leading underscore — so the selector never matched it.
+  2. **`contain: layout` blocked the backdrop sampling.** Its parent nav has
+     `contain: layout`, which establishes a new containing block and confines
+     `backdrop-filter` sampling to that box — and the box is only 28px wide,
+     so the blur had nothing to sample. Verified with a side-by-side test page:
+     the same markup blurs without `contain`, and does not with it.
+
+  The selector now uses `[class*="preview"]` to cover both naming formats
+  (excluding the plugin's own `dmt-` classes), and a new rule clears `contain`
+  on any ancestor that directly contains a popover, via `:has()`. The hashed
+  class name cannot be hard-coded since it changes on every build.
+
+### Note
+
+v1.1.1 was verified by checking that the CSS rule reached the page — it did.
+That turned out not to be sufficient: `contain` makes `backdrop-filter` fail
+silently while `background-color` still applies, so the popover looked
+"translucent but not frosted" and the injection check passed.
+
 ## [1.1.1] — 2026-10-24
 
 ### Fixed

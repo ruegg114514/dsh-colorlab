@@ -3676,14 +3676,58 @@ window.__ModuleLoader__.load({
           ? Math.min(1, glassFloatTarget(alpha, popFog, s) + 0.03)
           : panelOverride
         const popAlpha = glassDeltaAlpha(alpha, popTarget)
-        lines.push(g + '[class*="_preview_"],'
-          + g + '[class*="_float_"]{'
+        /* ⚠️ 类名有两种格式，选择器必须都覆盖（2026-10-24 实测）：
+         *
+         *   格式 A  CSS Modules 哈希：`_preview_38jqx_52`、`_float_6nhg2_156`
+         *           → 匹配 `[class*="_preview_"]`
+         *   格式 B  模块名_元素名：`xpvNua_preview`（TurnNavigator 的轮次预览）
+         *           → **前后没有下划线**，`[class*="_preview_"]` 匹配不到！
+         *
+         * 用户报的「右侧历史记录悬浮窗」正是格式 B 的 `.xpvNua_preview`：
+         *   `position:absolute; background:var(--dsw-alias-bg-layer-1)`
+         * 它既没有 role，类名又不含 `_preview_`，所以之前完全漏掉。
+         *
+         * 用 `[class*="preview"]` / `[class*="float"]` 兜住两种格式。
+         * 放宽的风险：宿主里 `_previewProperty_`、`_previewEllipsis_` 这类
+         * 子元素也会命中 —— 但它们都在浮层内部，跟着一起玻璃化是**正确**的
+         * （否则浮层是玻璃、内部文字块是实色，会露出方块）。 */
+        /* `:not([class*="dmt-"])` 排除插件自己的设置页元素
+         * （`.dmt-preview` / `.dmt-prosePreview` 在设置页内，不该被当浮层涂）。 */
+        lines.push(g + '[class*="preview"]:not([class*="dmt-"]),'
+          + g + '[class*="float"]:not([class*="dmt-"]){'
           + 'background-color:' + hexToRgba(
             glassSurfaceColor(surf.base || overlayColor, overlayColor, alpha, glassComposite(alpha, popAlpha)),
             popAlpha) + ' !important;'
           + glassSurface + ';'
           + frostedFilter
           + 'isolation:isolate !important}')
+
+        /* ⑥b-2 解除祖先的 contain:layout（否则 backdrop-filter 采不到样）。
+         *
+         * ## 为什么必须单独一条
+         *
+         * `contain: layout` 会建立新的**包含块**，把 `backdrop-filter` 的
+         * 采样范围限制在这个盒子内部 —— 而 TurnNavigator 的
+         * `.xpvNua_frame` 只有 **28px 宽**（一条细窄的轮次标记栏）。
+         * 采样区域这么小，糊出来的永远是它自己，看不到背后的正文。
+         *
+         * 实测对照（preview-contain-test.html）：
+         *   · 父有 contain:layout  → 只有半透明色，**没有模糊**
+         *   · 父无 contain         → 能看到模糊的条纹背景
+         *
+         * ## 怎么定位这个容器
+         *
+         * 类名带构建哈希（`.xpvNua_frame` 的 `xpvNua` 每次构建都变），
+         * 不能写死。但结构稳定：**凡是包含 `[class*="preview"]` 的祖先**，
+         * 都可能是阻断源 —— 用 `:has()` 反向选中它。
+         *
+         * `:has()` 从 Chrome 105 起原生支持，DSH 的 Electron 远高于此。
+         * 浏览器不支持时这条规则被整条忽略，不会造成其它破坏
+         * （退化成「有半透明色、无模糊」，与修复前一致）。 */
+        /* `:not([class*="dmt-"])` 排除插件设置页里的容器 —— 那里
+         * `.dmt-prosePreview` 等元素的祖先不该被我们改 contain。 */
+        lines.push(g + '*:not([class*="dmt-"]):has(> [class*="preview"]),'
+          + g + '*:not([class*="dmt-"]):has(> [class*="float"]){contain:none !important}')
       }
 
       /* ⑥c HoverCard 气泡：同一个问题的第三个实例。

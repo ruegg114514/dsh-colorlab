@@ -1158,11 +1158,26 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
    * 所以「默认不写规则」这条旧断言必须反转。 */
 
   /* 1. 默认就要有玻璃规则 —— 这是这次修的核心。 */
-  check(/_float_/.test(off), '默认 → 也覆盖 _float_（跟玻璃走）')
-  check(/_preview_/.test(off), '默认 → 也覆盖 _preview_（跟玻璃走）')
+  check(/class\*="float"/.test(off), '默认 → 也覆盖 float 类浮层（跟玻璃走）')
+  /* ---- 2026-10-24：TurnNavigator 轮次预览（.xpvNua_preview）----
+   * 它是用户报的「右侧历史记录悬浮窗」。两个坑：
+   *   ① 类名格式 `xpvNua_preview`（模块名_元素名），旧的
+   *      `[class*="_preview_"]` 匹配不到 → 必须用 `[class*="preview"]`
+   *   ② 父容器有 `contain:layout`，会阻断 backdrop-filter 采样
+   *      （实测对照见 preview-contain-test.html）→ 必须解除 */
+  check(/\[class\*="preview"\]/.test(off), '选择器用 preview 子串（覆盖两种类名格式）')
+  check(!/\[class\*="_preview_"\]/.test(off), '不再依赖 _preview_ 格式')
+  check(/:not\(\[class\*="dmt-"\]\)/.test(off), '排除插件自己的 dmt- 类')
+  check(/:has\(> \[class\*="preview"\]\)/.test(off), '解除含 preview 子元素容器的 contain')
+  check(/contain:none !important/.test(off), 'contain 被设为 none（否则模糊失效）')
+  check(/xpvNua_preview/.test(src) || /TurnNavigator/.test(src),
+    '源码注释记录了 TurnNavigator 这个真实来源')
+
+
+  check(/class\*="preview"/.test(off), '默认 → 也覆盖 preview 类浮层（跟玻璃走）')
 
   /* 2. 默认档必须是**半透明**（rgba），且带 backdrop-filter。 */
-  const offRule = off.match(/\[class\*="_float_"\][^{]*\{[^}]*\}/)
+  const offRule = off.match(/\[class\*="float"\][^{]*\{[^}]*\}/)
   check(offRule !== null, '默认档规则体存在')
   const offBody = offRule === null ? '' : offRule[0]
   check(/background-color:rgba\(/.test(offBody),

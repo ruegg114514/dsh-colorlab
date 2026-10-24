@@ -895,6 +895,76 @@ const veilMode = state.glassBackground === 'gradient' && state.glassVeil === 'au
 
 `glass.test` 有断言锁这条（含变异验证：还原成旧行为会让 3 条断言变红）。
 
+### 轮次预览浮层：两个坑（2026-10-24 第十四轮）
+
+用户报「右侧历史记录还是没变化，没有模糊」。上一轮的修复**确实注入了规则**，
+但对这个浮层无效。查下来是**两个独立问题叠加**。
+
+#### 它是谁
+
+不是 HoverCard，是 **TurnNavigator 的轮次预览**（对话滚动条右侧那条细栏，
+悬停某个轮次标记时弹出的预览卡片）：
+
+```
+div.slot
+  └ nav.frame          ← contain: layout  ← 坑②
+      ├ div.scroller
+      │   └ div.marks   ← 那些 .mark 按钮
+      └ div.preview    ← role="tooltip"，class="xpvNua_preview"  ← 坑①
+```
+
+#### 坑①：类名格式
+
+上一轮的选择器是 `[class*="_preview_"]`（前后都带下划线），只能匹配
+CSS Modules 哈希格式。但这个组件的类名是 **`xpvNua_preview`**
+（模块名_元素名，前面没有下划线）：
+
+| 格式 | 例子 | 旧选择器 |
+|---|---|---|
+| CSS Modules 哈希 | `_preview_38jqx_52` | ✅ |
+| 模块名_元素名 | `xpvNua_preview` | ❌ |
+
+改成 `[class*="preview"]` 兜住两种。放宽后用 `:not([class*="dmt-"])`
+排除插件设置页自己的 `.dmt-preview` / `.dmt-prosePreview`。
+
+#### 坑②：contain:layout 阻断 backdrop-filter
+
+`.frame` 上有 `contain: layout`，它建立新的包含块，把
+`backdrop-filter` 的**采样范围限制在这个盒子内部** —— 而 `.frame`
+只有 **28px 宽**（一条细栏）。采样区域这么小，糊出来的永远是它自己。
+
+实测对照（`preview-contain-test.html`，用户确认结果）：
+
+| 组 | 结构 | 有模糊？ |
+|---|---|---|
+| A | 父有 `contain:layout` | ❌ 只有半透明色 |
+| B | 父无 `contain` | ✅ |
+| C | `position:fixed` 脱离 | ✅ |
+
+#### 修法
+
+新增 ⑥b-2：解除**包含浮层子元素的祖先**的 `contain`：
+
+```css
+html[data-dsh-glass] *:not([class*="dmt-"]):has(> [class*="preview"]),
+html[data-dsh-glass] *:not([class*="dmt-"]):has(> [class*="float"]) {
+  contain: none !important;
+}
+```
+
+用 `:has()` 而不是写死类名，因为 `xpvNua` 这个哈希每次构建都变。
+`:has()` 从 Chrome 105 起原生支持，DSH 的 Electron 远高于此；不支持时
+整条规则被忽略，退化成「有半透明色、无模糊」，与修复前一致，不会更糟。
+
+#### 为什么上一轮没修好
+
+上一轮我只验证了「规则有没有注入」，看到 `rgba(26,30,33,0.51)` 就以为成了。
+**但注入成功 ≠ 视觉生效** —— `contain` 让 `backdrop-filter` 静默失效，
+而 `background-color` 是生效的，所以看起来「半透明了但没模糊」。
+
+诊断脚本第一版也没抓到，因为它筛的是 `position:fixed`，而这个浮层是
+`position:absolute`。第二版把筛选条件放宽才捕获到。
+
 ### 无 role 浮层默认跟玻璃走（2026-10-24 第十三轮）
 
 **用户报 bug：「文件变更 diff 和右侧历史用户记录这两个鼠标放上去才有的悬浮窗
