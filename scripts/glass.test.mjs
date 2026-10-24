@@ -1219,6 +1219,25 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
     check(!/[^{]*_preview_38jqx[^{]*\{background/.test(off), '未检测到 → 不生成浮层规则')
   }
 
+  /* ---- ⚠️ 2026-10-24 真 bug：调用点没传 popoverClasses ----
+   *
+   * buildGlassSheet 加了第 6 个参数，但**真正的调用点漏传了** ——
+   * 我改字符串时改到的是导出区的同名文本，不是调用点。
+   * 表现：规则生成逻辑本身没问题（单测能过），但运行时永远拿不到
+   * 浮层类名，规则从不生成，浮层没模糊。
+   *
+   * 这条断言锁死「所有调用点都传第 6 个参数」。 */
+  {
+    const callLines = src.split('\n').filter((l) => l.includes('buildGlassSheet(state, surfaces'))
+    check(callLines.length > 0, '找到 buildGlassSheet 的运行时调用点', String(callLines.length))
+    for (const l of callLines) {
+      check(/popoverClasses/.test(l), '调用点传入 popoverClasses', l.trim().slice(0, 100))
+    }
+    /* 兜底检测：syncGlassSheet 里也要有，否则启动期检测失败后没第二次机会。 */
+    check(/foundHere/.test(src), 'syncGlassSheet 里有兜底检测')
+    check(/diag\.popovers/.test(src), '诊断暴露 popovers 计数')
+  }
+
   /* 3. 打开 → 两个浮层**额外**被钉成实色。 */
   check(/_float_/.test(on), '打开 → 覆盖 _float_（历史消息浮层）')
   check(/_preview_/.test(on), '打开 → 覆盖 _preview_（悬停预览浮层）')

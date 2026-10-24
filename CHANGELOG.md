@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.4] — 2026-10-24
+
+### Fixed
+
+- **The turn-preview popover had no blur again.** A one-line wiring bug
+  introduced in v1.1.3.
+
+  `buildGlassSheet` gained a sixth parameter for the detected popover class
+  names, but **the real call site never passed it**. The edit had been applied
+  to an identically-worded string in the module's export block rather than to
+  the function that actually builds the stylesheet. The rule-generation logic
+  was correct and its unit tests passed — the rule simply never received any
+  class names at runtime, so it was never emitted.
+
+  All call sites now pass the parameter, and a test asserts that every runtime
+  call site includes it — mutation-tested by removing the argument, which turns
+  the assertion red.
+
+- **Detection now also runs inside `syncGlassSheet`, not only `syncCardSheet`.**
+  `syncCardSheet` runs early in startup, when the host may not have injected
+  all of its stylesheets yet; detection would return nothing and there was no
+  second attempt. `syncGlassSheet` now retries (bounded at 60 attempts, after
+  which the result is cached), so a late-arriving stylesheet still gets picked
+  up.
+
+- The status object now exposes `popovers` — the number of popover classes
+  detected. `0` means detection has not succeeded yet, which makes this class
+  of failure visible instead of silent.
+
+### Note
+
+This is the fourth release in a row touching the same feature, and each time
+the failure was different:
+
+| Version | What broke |
+|---|---|
+| v1.1.1 | selector too narrow — missed `xpvNua_preview` |
+| v1.1.2 | selector too broad — hit JSON-tree colouring, diff went solid |
+| v1.1.3 | detection correct, but the call site never passed the result |
+| v1.1.4 | wiring fixed; detection also retries and is observable |
+
+The recurring pattern: **the unit-tested piece kept passing while the
+integration point silently dropped the data.** The test added here asserts the
+call-site wiring directly, not just the builder's behaviour.
+
 ## [1.1.3] — 2026-10-24
 
 ### Fixed

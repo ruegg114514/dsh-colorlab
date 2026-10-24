@@ -4149,8 +4149,22 @@ window.__ModuleLoader__.load({
       /* 🔧 传入 cardTargets：卡片填充变量要写在宿主声明它们的**哈希类**
        * 上（body 级覆盖会被元素本地声明挡住，见 buildGlassSheet 一节）。
        * applyNowOnce 里 syncCardSheet 先于本函数跑，检测结果是最新的；
-       * 懒加载没跟上的组由 syncCardSheet 的重试循环再次 applyNow 重建。 */
-      const css = on ? buildGlassSheet(state, surfaces, isDark, cardTargets, floatTargets) : ''
+       * 懒加载没跟上的组由 syncCardSheet 的重试循环再次 applyNow 重建。
+       *
+       * 🔧 2026-10-24：浮层类名也在这里**兜底检测一次**。
+       * 之前只靠 syncCardSheet 检测，而它在启动早期跑 —— 那时宿主的
+       * 样式表可能还没全部注入，检测返回空，之后就没有第二次机会，
+       * 结果浮层规则永远不生成（用户实测：右侧浮层没模糊）。
+       * 这里每次 syncGlassSheet 都试一次，代价是遍历一遍样式表
+       * （宿主约 200 张，但只有拿到结果前才扫，之后走缓存）。 */
+      if ((!Array.isArray(popoverClasses) || popoverClasses.length === 0)
+        && popoverScanTries < POPOVER_SCAN_MAX) {
+        popoverScanTries += 1
+        const foundHere = detectPopoverClasses()
+        if (foundHere.length > 0) popoverClasses = foundHere
+      }
+      diag.popovers = Array.isArray(popoverClasses) ? popoverClasses.length : 0
+      const css = on ? buildGlassSheet(state, surfaces, isDark, cardTargets, floatTargets, popoverClasses) : ''
       if (css === '') {
         if (glassEl !== null) {
           try {
@@ -7915,7 +7929,7 @@ function makeColorizer(scheme) {
     let draft = {}
 
     function initialStatus() {
-      return { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', row: 'off', card: 'off', shape: 'off' }
+      return { theme: 'pending', form: 'pending', scheme: 'unknown', applied: 0, channel: 'none', prose: 'off', popovers: 0, row: 'off', card: 'off', shape: 'off' }
     }
 
     /**
@@ -8245,6 +8259,10 @@ function makeColorizer(scheme) {
      * 「定义 --dsw-hovercard-bg 的类」（用于改实心），这个是「自己画底色的
      * 浮层类」（用于玻璃化）。检测判据见 detectPopoverClasses()。 */
     let popoverClasses = undefined
+    /* 兜底检测的尝试次数上限：宿主样式表注入完成后就不必再扫了。
+     * 每次 applyNow 最多扫一次，60 次足够覆盖启动期的分批注入。 */
+    let popoverScanTries = 0
+    const POPOVER_SCAN_MAX = 60
     let cardRetryTimer = null
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
@@ -8338,6 +8356,9 @@ function makeColorizer(scheme) {
         const foundPopovers = detectPopoverClasses()
         if (foundPopovers.length > 0) popoverClasses = foundPopovers
       }
+      /* 诊断：暴露检测到的浮层数，便于在控制台排查。
+       * 0 = 宿主样式表还没进 DOM，或判据没命中。 */
+      diag.popovers = Array.isArray(popoverClasses) ? popoverClasses.length : 0
       const css = buildCardSheet(state, cardTargets)
       const wanted = state.enabled !== 'off' && shouldApply() && css !== ''
       if (!wanted) {
