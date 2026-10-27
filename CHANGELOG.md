@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.12] — 2026-10-27
+
+### Fixed
+
+- **Late-loading plugin stylesheets never triggered a rescan.** The popover
+  class scan only ran inside `syncGlassSheet` / `syncCardSheet`, which fire on
+  **settings changes**. A plugin whose CSS is lazy-injected — the team roster
+  panel loads its stylesheet only when the roster tab is first opened — never
+  caused a rescan, so its class could never enter the glass sheet. A
+  MutationObserver on the document tree (300ms coalesced, the pattern the
+  LaTeX sheet already uses) now drives `refreshPopoverClasses()`, and a
+  changed result rebuilds the sheet.
+
+- **contract.test misreported a duplicate loader entry.** The YAML `insert:`
+  block parser never exited the block when a top-level `- id:` entry followed
+  it — its exit condition excluded lines starting with `- `, which is exactly
+  how every top-level entry begins. The plugin's own config-override row was
+  then misread as an insert row, making normal user settings look like a
+  duplicate mount.
+
+### Note
+
+The reported "team panel has no glass" is **not** a selector failure: the
+panel carries `role="dialog"`, which the glass sheet matches unconditionally.
+With this profile's settings (surface density 0, float increment 0) the
+computed overlay alpha is 0.22 — nearly transparent by construction. The fix
+is the panel-density independent tier, not a new selector.
+
 ## [1.1.11] — 2026-10-27
 
 ### Fixed

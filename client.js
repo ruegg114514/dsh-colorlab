@@ -4287,6 +4287,8 @@ window.__ModuleLoader__.load({
        * 这里每次 syncGlassSheet 都试一次，代价是遍历一遍样式表
        * （宿主约 200 张，但只有拿到结果前才扫，之后走缓存）。 */
       refreshPopoverClasses()
+      if (on) ensurePopoverObserver()
+      else disposePopoverObserver()
       diag.popovers = Array.isArray(popoverClasses) ? popoverClasses.length : 0
       const css = on ? buildGlassSheet(state, surfaces, isDark, cardTargets, floatTargets, popoverClasses) : ''
       if (css === '') {
@@ -7653,6 +7655,53 @@ function makeColorizer(scheme) {
       return changed
     }
 
+    /** 合帧重扫：样式表可能刚变化，扫一次；结果变了就重建玻璃表。 */
+    function schedulePopoverRescan() {
+      if (popoverRescanTimer !== null) return
+      if (typeof setTimeout !== 'function') return
+      popoverRescanTimer = setTimeout(() => {
+        popoverRescanTimer = null
+        let changed = false
+        try {
+          changed = refreshPopoverClasses()
+        } catch { /* DOM 变动中，下一轮再来 */ }
+        if (changed) {
+          /* 新类名进来了 → 玻璃表必须重建，否则规则还是旧的。 */
+          try {
+            syncGlassSheet()
+          } catch { /* 设置路径上会再同步 */ }
+        }
+      }, 300)
+      if (popoverRescanTimer && typeof popoverRescanTimer.unref === 'function') popoverRescanTimer.unref()
+    }
+
+    /** 观察整棵文档树（含 head）—— <style> 注入在 head，只看 body 会漏。 */
+    function ensurePopoverObserver() {
+      if (typeof document === 'undefined' || typeof MutationObserver !== 'function') return
+      if (popoverObserver !== null) return
+      try {
+        popoverObserver = new MutationObserver(() => schedulePopoverRescan())
+        popoverObserver.observe(document.documentElement, { childList: true, subtree: true })
+      } catch {
+        popoverObserver = null
+      }
+    }
+
+    function disposePopoverObserver() {
+      if (popoverObserver !== null) {
+        try {
+          popoverObserver.disconnect()
+        } catch { /* 已断 */ }
+        popoverObserver = null
+      }
+      if (popoverRescanTimer !== null) {
+        try {
+          clearTimeout(popoverRescanTimer)
+        } catch { /* 已触发 */ }
+        popoverRescanTimer = null
+      }
+    }
+
     /**
      * 检测 HoverCard 浮层（`--dsw-hovercard-bg`）的真实哈希类名。
      *
@@ -8478,6 +8527,15 @@ function makeColorizer(scheme) {
     /** 上一轮扫描时的样式表张数（-1 = 还没扫过）。 */
     let popoverScannedSheets = -1
     const POPOVER_SCAN_MAX = 400
+    /* ⚠️ 2026-10-27（用户报「还是没有」后找到的真正缺口）：
+     * 重扫只挂在 syncGlassSheet / syncCardSheet 上 —— 两者都只在
+     * **设置变更**时跑。而队友面板的 CSS 是**点开「编队」标签才
+     * 注入**的懒加载：注入后没有任何东西触发重扫，玻璃表里永远
+     * 没有它的类名。观察 body/html 的 childList 才能等到晚到的
+     * <style>。合帧 300ms：流式渲染期间回调很密，但 refresh 的
+     * 第一道守卫是 O(1) 的张数比较，没变化直接 return。 */
+    let popoverObserver = null
+    let popoverRescanTimer = null
     let cardRetryTimer = null
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
@@ -11514,6 +11572,7 @@ function makeColorizer(scheme) {
                 /* 无 DOM */
               }
               disposeLatexObserver()
+              disposePopoverObserver()
               if (latexEl !== null) {
                 try {
                   latexEl.remove()
@@ -11698,6 +11757,9 @@ function makeColorizer(scheme) {
         detectPopoverClasses,
         detectPopoverClassesWith: detectPopoverClasses,
         refreshPopoverClasses,
+        schedulePopoverRescan,
+        ensurePopoverObserver,
+        disposePopoverObserver,
         getPopoverClasses: () => (Array.isArray(popoverClasses) ? popoverClasses.slice() : []),
         /* 扫描状态归零。测试必须用它隔离自己 —— popoverClasses /
          * popoverScanTries 是模块级状态，前一个测试的消耗会让

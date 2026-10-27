@@ -118,8 +118,11 @@ function readInsertedRows(yamlText) {
       continue
     }
     if (!inInsert) continue
-    /* insert 列表结束：出现缩进不大于 insert 的顶层键。 */
-    if (indent <= insertIndent && !/^\s*-\s/.test(line)) {
+    /* insert 列表结束：出现缩进不大于 insert 的**任何**行。
+     * 旧条件排除了 "- xxx" 开头的行，但顶层条目恰恰都以 "- " 开头
+     * （- id: tool-bash 等）—— insert 块之后紧跟顶层条目时解析出不来，
+     * 把后面的配置覆盖行（- id: mariana-theme）误判成本插件的 insert 行。 */
+    if (indent <= insertIndent) {
       inInsert = false
       continue
     }
