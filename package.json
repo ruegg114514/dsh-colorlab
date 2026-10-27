@@ -1,6 +1,6 @@
 {
   "name": "dsh-colorlab",
-  "version": "1.1.13",
+  "version": "1.1.14",
   "private": true,
   "description": "Chat UI colour theme plugin for DeepSeek Harness. Ships the Mariana palette as its default preset and adds a colour engine: 18 adjustable colour slots, 9 Markdown prose roles, saved presets, WCAG contrast hints and light/dark modes.",
   "license": "MIT",

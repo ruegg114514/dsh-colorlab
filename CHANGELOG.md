@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.14] — 2026-10-27
+
+### Reverted
+
+- **The entire seat-lift rework from v1.1.10/v1.1.13 is reverted**
+  (throttle -> debounce, the 1500ms wait cap, the `data-dsh-seat-lifted`
+  marker and the unlifed-seat fallback fill). The debounce change was made
+  on a wrong diagnosis: the "conversation fails to auto-load after restart"
+  symptom was never caused by the lift timing. The user confirmed that
+  symptom persisted under the debounce build too, and the rework introduced
+  a new visible bug — during the debounce window the composer area stayed
+  transparent while body text scrolled underneath, and the fallback fill was
+  itself governed by density settings (with surface density 0 it computed to
+  alpha 0.2, effectively no cover at all).
+
+  The lift is back to the original 250ms throttle with no marker and no
+  fallback fill. Tests now lock the throttle semantics (a debounce
+  re-introduction turns them red).
+
+### Fixed (kept from v1.1.13)
+
+- The background-jobs panel blur (`data-menu-material` shell) is unrelated
+  to the seat rework and stays.
+
+### Known issue
+
+**"After restart the conversation does not auto-load; clicking twice fixes
+it" remains unresolved.** The seat-timing theory was wrong; the real cause
+is still unknown and needs a fresh diagnosis (next step: capture the
+console error / component state at the moment of failure rather than
+guessing from the DOM).
+
 ## [1.1.13] — 2026-10-27
 
 ### Fixed

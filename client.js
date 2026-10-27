@@ -3595,18 +3595,6 @@ window.__ModuleLoader__.load({
         + glassSurface + ';'
         + 'isolation:isolate !important}')
 
-      /* ⚠️ 2026-10-27（用户报「新会话时输入区透明，过一下才盖上」）：
-       * 硬裁依赖 JS 抬升，而抬升是防抖的（React 空闲才动手）。空窗期里
-       * 座还浮在滚动内容之上，正文从输入框底下穿过 —— 座透明 = 字压字。
-       * 修法：未抬升时（缺 JS 打的 lifted 标记）让座自己垫一层输入卡
-       * 浓度 + 模糊；抬升后标记出现，这条自动失效，回到硬裁。
-       * :not() 只接受简单选择器，属性标记正好够用。 */
-      lines.push(g + '[data-composer-seat]:not([' + SEAT_LIFTED_ATTR + ']){'
-        + 'background-color:' + hexToRgba(
-          glassSurfaceColor(seatColor, inputColor, alpha, glassComposite(alpha, inputAlpha)),
-          inputAlpha) + ' !important;'
-        + frostedFilter + '}')
-
       /* ══ ②（对齐参考插件）输入卡聚焦态：描边亮一档 + 一圈极淡外环。
        * ⚠️ 阴影层数与静置态必须一致（4 层 + 外环 = 5 层，静置也要 5 层，
        * 最后一层透明）—— 否则浏览器无法逐层插值，聚焦是"跳变"不是"渐显"。 */
@@ -4116,12 +4104,8 @@ window.__ModuleLoader__.load({
      *   · 不能给 seat 设 position:absolute —— 会脱离 flex 流，裁切失效；
      *   · 玻璃关闭/卸载时 restoreSeat 搬回去，不留结构改动。
      */
-    /** 座已抬升的标记（CSS 靠它决定座要不要自己垫底，见 buildGlassSheet ④）。 */
-    const SEAT_LIFTED_ATTR = 'data-dsh-seat-lifted'
     let seatObserver = null
     let seatLiftTimer = null
-    /** 本轮防抖开始等待的时刻（0 = 没在等）。用于最长等待上限。 */
-    let seatLiftSince = 0
     let seatBootGuarded = false
     let seatBootTimer = null
 
@@ -4129,19 +4113,8 @@ window.__ModuleLoader__.load({
       const seat = host.querySelector('[data-conversation-content] [data-composer-seat], [data-composer-seat]')
       const scroll = host.querySelector('[data-conversation-scroll]')
       if (seat === null || scroll === null || scroll === seat) return false
-      /* ⚠️ 2026-10-27（用户报「新会话时输入区透明、过一下才盖上」）：
-       * CSS 无法判断"座是否还在滚动容器里"（:has 只查后代），所以抬升
-       * 状态由 JS 打标记，样式表按标记决定座要不要自己垫底。
-       * 标记必须在**两个**提前 return 的分支里也补上 —— 已在正确位置
-       * 那条尤其重要，否则重排后标记丢失、CSS 会以为还没抬。 */
-      if (seat.parentElement === host) {
-        if (!seat.hasAttribute(SEAT_LIFTED_ATTR)) seat.setAttribute(SEAT_LIFTED_ATTR, '')
-        return true /* 已在正确位置 */
-      }
+      if (seat.parentElement === host) return true /* 已在正确位置 */
       scroll.insertAdjacentElement('afterend', seat)
-      try {
-        seat.setAttribute(SEAT_LIFTED_ATTR, '')
-      } catch { /* 极端情况下属性写不进，退化成"未抬升"样式（有毛玻璃，可接受） */ }
       return true
     }
 
@@ -4158,49 +4131,17 @@ window.__ModuleLoader__.load({
       return touched
     }
 
-    /* ⚠️ 2026-10-24（用户报「重启后会话自动加载失败，手动点两下才出来」）：
-     * 原来这里是**节流**（timer 已挂就直接 return，250ms 到点就搬）——
-     * 流式渲染 / 会话自动加载期间 React 的 commit 一个接一个，
-     * 250ms 到点时大概率正卡在两次 commit 之间搬 DOM：
-     * React 的 fiber 树记着 seat 在 scroll 里，删除子树时
-     * removeChild(scroll, seat) 找不到节点 → NotFoundError →
-     * 整个会话子树被错误边界卸载 = 主面板空白。
-     * 点两下别的会话再回来 = 重新挂载，才恢复。
-     *
-     * 改成**真防抖**：每次 DOM 变动都把 timer 往后推，
-     * 直到 600ms 内没有任何变动（React 空闲了）才动手。
-     * 流式输出期间永远不搬，输出结束才搬一次。 */
-    /* ⚠️ 2026-10-27 二修：纯防抖有**饿死**问题 —— 流式输出时 DOM 每帧都在变，
-     * timer 被无限重置，座可能好几秒都抬不上去（用户报的"过一下才盖上"
-     * 就是这个空窗）。加最长等待上限：从首次调度算起最多 SEAT_LIFT_MAX_WAIT
-     * 必须动手一次，哪怕 DOM 还在变。
-     * 崩溃风险仍由"900ms 冷启动保护 + 抬升幂等"兜住；上限只是不再无限顺延。 */
-    const SEAT_LIFT_QUIET = 600
-    const SEAT_LIFT_MAX_WAIT = 1500
-    /**
-     * 本轮该等多久 —— 纯函数，便于单测两条边界：
-     *   · 正常：等 QUIET 让 React 静下来；
-     *   · 但**总等待不超过 MAX_WAIT**（否则流式输出会把它无限顺延，
-     *     座永远抬不上去 = 用户报的"要过一下才盖上"）。
-     */
-    function seatLiftDelay(now, since) {
-      const budget = SEAT_LIFT_MAX_WAIT - (now - since)
-      return Math.max(0, Math.min(SEAT_LIFT_QUIET, budget))
-    }
+    /* 节流 250ms（原始设计，2026-10-27 回退确认）：
+     * 10-24 曾改成防抖（理由：抬升落在 React commit 中间会崩会话），
+     * 真机证伪 —— 重启后会话加载失败与抬升时机无关，防抖反而引入
+     * 「空窗期正文穿过输入框」的新问题，且垫底方案又受浓度设置支配。
+     * 全部回退到节流 + 无标记 + 无垫底的原始形态。 */
     function scheduleSeatLift() {
-      const now = Date.now()
-      if (seatLiftTimer !== null) {
-        try { clearTimeout(seatLiftTimer) } catch { /* 已触发 */ }
-        seatLiftTimer = null
-      } else {
-        seatLiftSince = now
-      }
-      const delay = seatLiftDelay(now, seatLiftSince)
+      if (seatLiftTimer !== null) return
       seatLiftTimer = setTimeout(() => {
         seatLiftTimer = null
-        seatLiftSince = 0
         try { liftSeats() } catch { /* DOM 变动中，下一轮 observer 再来 */ }
-      }, delay)
+      }, 250)
       if (seatLiftTimer && typeof seatLiftTimer.unref === 'function') seatLiftTimer.unref()
     }
 
@@ -4228,12 +4169,6 @@ window.__ModuleLoader__.load({
           const seat = hosts[i].querySelector('[data-composer-seat]')
           if (seat !== null && scroll !== null && seat.parentElement !== scroll) {
             scroll.appendChild(seat)
-          }
-          /* 搬回原位 → 标记必须一起清掉，否则 CSS 还按"已抬升"给透明。 */
-          if (seat !== null && seat.hasAttribute(SEAT_LIFTED_ATTR)) {
-            try {
-              seat.removeAttribute(SEAT_LIFTED_ATTR)
-            } catch { /* 无属性可清 */ }
           }
         } catch { /* 结构已变，随它去 */ }
       }
@@ -11843,10 +11778,6 @@ function makeColorizer(scheme) {
         detectCardTargets,
         detectFloatTargets,
         liftOneSeat,
-        seatLiftDelay,
-        SEAT_LIFT_QUIET,
-        SEAT_LIFT_MAX_WAIT,
-        SEAT_LIFTED_ATTR,
         detectPopoverClasses,
         detectPopoverClassesWith: detectPopoverClasses,
         refreshPopoverClasses,
