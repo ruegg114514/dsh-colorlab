@@ -2172,7 +2172,15 @@ window.__ModuleLoader__.load({
         }
         return
       }
-      if (wallpaperStatus === 'ready' && wallpaperObjectUrl !== null) {
+      /* ⚠️ 2026-10-24（用户报「切渐变要点两下才生效」）：
+       * 必须同时确认**当前模式就是壁纸**。原来只看 status === 'ready'，
+       * 而从壁纸切到渐变的那一刻：syncWallpaperLayer → paint 先跑，
+       * 此时 status 还是上一模式的 'ready'（syncGlassSheet 里置
+       * fallback 的代码在它**之后**才执行）—— 于是第一下点击
+       * 把旧壁纸又画了一遍，毫无变化；第二下才轮到渐变。
+       * 判据改成「模式 + 状态」双条件，切换立即生效。 */
+      if (state && state.glassBackground === 'wallpaper'
+        && wallpaperStatus === 'ready' && wallpaperObjectUrl !== null) {
         /* 多层背景：压暗渐变是**第一层**（画在最上），壁纸 url 在第二层。
          * ⚠️ 渐变层只接受合法颜色 —— 必须用 backdropImage() 加 veil，
          * 否则会出现 `linear-gradient(, ,)` 这种非法值让整条 background-image 失效。
@@ -2209,6 +2217,8 @@ window.__ModuleLoader__.load({
         wallpaperEl.style.backgroundColor = 'transparent'
         return
       }
+      /* 非壁纸模式：出血层（blur 填充的第二张糊图）没有存在意义，撤掉。 */
+      syncWallpaperBleed(false, '')
       const gradient = backdropGradient(dark, isDark)
       if (wallpaperEl.__dmtBackdrop !== gradient) {
         wallpaperEl.__dmtBackdrop = gradient
@@ -3032,8 +3042,18 @@ window.__ModuleLoader__.load({
       lines.push(g + '#root{position:relative !important;z-index:1 !important;'
         + 'background:transparent !important}')
 
-      /* ② 窗口框架与标题栏拖动区：被涂了侧栏色，必须清透明。 */
-      lines.push(g + '[class*="_frame"]{background:transparent !important;'
+      /* ② 窗口框架与标题栏拖动区：被涂了侧栏色，必须清透明。
+       *
+       * ⚠️ 2026-10-24（用户报「子智能体悬浮卡是透明的、没有玻璃」）：
+       * 裸 `[class*="_frame"]` 会误伤**所有**含 _frame 的类 —— 宿主里实测有
+       * 11 个，其中 `jIHOOq_frame`（子智能体只读卡）、`BMNXqa_frame`
+       * （文档预览框）、`qWvkEq_frame`（浏览器面板）都是**带底色的内容卡**，
+       * 被这条规则连坐刷成全透明。
+       *
+       * 判据：布局 frame 是唯一带**内联 grid-template-columns** 的
+       * （AppFrame 的 JSX 里 style 恒有这一项，其它包的 frame 没有）。
+       * `[style*="grid-template-columns"]` 精确锁定它。 */
+      lines.push(g + '[class*="_frame"][style*="grid-template-columns"]{background:transparent !important;'
         + 'background-image:none !important}')
       /* 🔴 回归记录（2026-10-22，「只有标题栏会变」事故的根因）：
        * 上一轮 ❼ 我一度撤掉这条 transparent、改成给 frame 整块铺
@@ -3080,7 +3100,9 @@ window.__ModuleLoader__.load({
       const stripSide = hexToRgba(surf.sidebar || surf.layer1 || surf.base, alpha)
       const stripMain = hexToRgba(surf.base || surf.layer1, alpha)
       const seam = 'var(--dsh-windows-sidebar-width, 280px)'
-      lines.push(g + '[class*="_frame"]::before{'
+      /* 同上：顶部条也只给布局 frame 画 —— 否则子智能体卡等
+       * 含 _frame 的元素会凭空多出一条 40px 标题栏渐变。 */
+      lines.push(g + '[class*="_frame"][style*="grid-template-columns"]::before{'
         + 'background:linear-gradient(to right,' + stripSide + ' 0,'
         + stripSide + ' calc(' + seam + ' - 1px),'
         + stripMain + ' calc(' + seam + ' + 1px),' + stripMain + ' 100%) !important;'
@@ -4069,12 +4091,26 @@ window.__ModuleLoader__.load({
       return touched
     }
 
+    /* ⚠️ 2026-10-24（用户报「重启后会话自动加载失败，手动点两下才出来」）：
+     * 原来这里是**节流**（timer 已挂就直接 return，250ms 到点就搬）——
+     * 流式渲染 / 会话自动加载期间 React 的 commit 一个接一个，
+     * 250ms 到点时大概率正卡在两次 commit 之间搬 DOM：
+     * React 的 fiber 树记着 seat 在 scroll 里，删除子树时
+     * removeChild(scroll, seat) 找不到节点 → NotFoundError →
+     * 整个会话子树被错误边界卸载 = 主面板空白。
+     * 点两下别的会话再回来 = 重新挂载，才恢复。
+     *
+     * 改成**真防抖**：每次 DOM 变动都把 timer 往后推，
+     * 直到 600ms 内没有任何变动（React 空闲了）才动手。
+     * 流式输出期间永远不搬，输出结束才搬一次。 */
     function scheduleSeatLift() {
-      if (seatLiftTimer !== null) return
+      if (seatLiftTimer !== null) {
+        try { clearTimeout(seatLiftTimer) } catch { /* 已触发 */ }
+      }
       seatLiftTimer = setTimeout(() => {
         seatLiftTimer = null
         try { liftSeats() } catch { /* DOM 变动中，下一轮 observer 再来 */ }
-      }, 250)
+      }, 600)
       if (seatLiftTimer && typeof seatLiftTimer.unref === 'function') seatLiftTimer.unref()
     }
 

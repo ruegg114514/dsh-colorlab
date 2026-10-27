@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.10] — 2026-10-24
+
+### Fixed
+
+- **After a restart, the conversation failed to auto-load until you clicked
+  into another session and back.** The input-card seat lift was *throttled*
+  (fire 250ms after a DOM change regardless of what else is happening). During
+  streaming or auto-load, React commits run back to back, so the lift landed
+  mid-render: React then removed a subtree while believing the seat was still
+  inside it, hit a NotFoundError, and the error boundary unmounted the whole
+  conversation. The lift is now a real debounce — every DOM change pushes the
+  timer back and it only fires once the tree has been quiet for 600ms.
+
+- **The subagent hover card was fully transparent instead of glass.**
+  `[class*="_frame"]{background:transparent}` — meant for the layout frame —
+  also matched ten other `_frame` classes in the host, including the
+  subagent read-only card, the document preview frame and the browser panel,
+  all of which paint their own background. The rule now additionally requires
+  `[style*="grid-template-columns"]`, which only the layout frame carries.
+  The title-strip `::before` rule got the same qualifier (it used to add a
+  40px gradient strip inside those cards too).
+
+- **Switching the background to gradient needed two clicks.** The wallpaper
+  paint branch only checked `status === 'ready'`, which was still true from
+  the previous mode when the first click ran — so the first click repainted
+  the old wallpaper and only the second reached the gradient. The check now
+  requires the current mode to actually be wallpaper. The bleed layer (the
+  blurred fill image, wallpaper-only) is also torn down on every non-wallpaper
+  paint.
+
+### Tests
+
+Seven new assertions plus four updated ones. Mutation-tested: reverting each
+fix turns 4 / 2 / 3 assertions red respectively.
+
 ## [1.1.9] — 2026-10-24
 
 ### Fixed

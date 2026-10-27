@@ -895,6 +895,66 @@ const veilMode = state.glassBackground === 'gradient' && state.glassVeil === 'au
 
 `glass.test` 有断言锁这条（含变异验证：还原成旧行为会让 3 条断言变红）。
 
+### 三个真机 bug：seat 崩树 / frame 连坐 / paint 时序（2026-10-24 第二十一轮）
+
+用户报三件事，逐一查因。
+
+#### 1. 重启后会话自动加载失败，手动点两下才出来
+
+**元凶是输入卡抬升（seat lift）的节流语义。**
+
+宿主结构 `body > scroll + seat`，玻璃下把 seat 抬成 scroll 的兄弟让
+正文硬断在输入卡上沿。抬升由 MutationObserver 驱动 —— 但
+`scheduleSeatLift` 原来是**节流**（有 timer 挂着就 return，250ms 到点就搬）。
+
+流式渲染 / 会话自动加载期间 React 的 commit 一个接一个，250ms 到点
+大概率落在**两次 commit 之间**：React 的 fiber 树记着 seat 还在 scroll 里，
+此时我们把它搬走 → 它删除子树时 `removeChild` 找不到节点 →
+NotFoundError → 整个会话子树被错误边界卸载 = 主面板空白。
+点两下别的会话再回来 = 重新挂载才恢复 —— 与用户描述完全吻合。
+
+**修法**：改成**真防抖** —— 每次 DOM 变动都 `clearTimeout` 重排 600ms，
+直到 React 空闲了才动手。流式期间永不搬，结束才搬一次。
+
+#### 2. 子智能体悬浮卡透明、没有玻璃
+
+**`[class*="_frame"]{background:transparent}` 连坐。**
+
+这条是给布局 frame（`BynINW_frame`，三列的父容器）清底用的 ——
+父容器铺色会吃掉列的壁纸信号（2026-10-22 有回归记录）。
+但宿主里含 `_frame` 的类实测有 **11 个**，其中带底色的内容卡：
+
+- `jIHOOq_frame` —— 子智能体只读卡（用户报的这张）
+- `BMNXqa_frame` —— 文档预览框
+- `qWvkEq_frame` —— 浏览器面板
+
+全被子串匹配连坐刷成透明。
+
+**修法**：布局 frame 有独有特征 —— AppFrame 的 JSX 恒给它内联
+`gridTemplateColumns`，其它包的 frame 没有。选择器加一条
+`[style*="grid-template-columns"]` 精确锁定。::before 顶部条同理
+（否则内容卡会凭空多出 40px 标题栏渐变条）。
+
+#### 3. 切渐变背景要点两下
+
+**paint 只看残留状态、不看当前模式。**
+
+`paintWallpaperLayer` 的壁纸分支判据是 `wallpaperStatus === 'ready'`。
+从壁纸切到渐变的那一次 applyNow：`syncWallpaperLayer → paint` 先跑，
+此时 status 还是上一模式的 'ready'（置 fallback 的代码在
+`syncGlassSheet` 里、排在它**后面**）—— 于是第一下把旧壁纸又画了一遍，
+毫无变化；第二下 status 已是 fallback，才轮到渐变。
+
+**修法**：判据改成「当前模式 = 壁纸 **且** status = ready」双条件。
+顺手在非壁纸路径撤掉出血层（`syncWallpaperBleed(false)` —— 它是壁纸
+blur 填充档的第二张糊图，其它模式留着会盖住渐变/等高线）。
+
+#### 测试
+
+7 条新断言（frame 限定 ×2、paint 模式判据 ×2、seat 防抖 ×2、
+外加 J 段 4 条同步更新）。变异验证：三个 bug 各自复现回去，
+分别 4 / 2 / 3 条变红。
+
 ### 卡片选择器从子串改成词匹配（2026-10-24 第二十轮）
 
 **用户截图：交付文件卡与计划卡内部出现"条中条"，标题行、描述行

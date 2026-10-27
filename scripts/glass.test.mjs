@@ -119,7 +119,7 @@ console.log('  C. 模糊位置（失败原因 2）')
     const colFilter = filterLines.filter((l) => /_sidebarCol|_centerCol|_rightbarCol/.test(l))
     check(colFilter.length === 0, '三列没有 backdrop-filter（模糊来自背景层）',
       String(colFilter.length) + ' 条')
-    const shouldBlur = filterLines.filter((l) => /role="dialog"|_frame"\]::before/.test(l))
+    const shouldBlur = filterLines.filter((l) => /role="dialog"|_frame"\]\[style\*="grid-template-columns"\]::before/.test(l))
     const mustNotBlur = filterLines.filter((l) => /RlGAzG|_card|md-code-block|data-code|composerSeat|bubble/.test(l))
     check(shouldBlur.length >= 2, '对话框/菜单 + 标题栏有 backdrop-filter（糊活文字）',
       String(shouldBlur.length) + ' 条')
@@ -592,12 +592,18 @@ console.log('  I. 生成 CSS 结构合法（括号平衡 / 无非法值）')
 console.log('  J. 跨列容器不涂色 / 顶部双色')
 
 {
-  const frameLine = lines.find((l) => /\[class\*="_frame"\]\{/.test(l))
+  /* 2026-10-24：frame 规则必须限定「布局 frame」——
+   * 裸 [class*="_frame"] 会误伤 jIHOOq_frame（子智能体卡）等
+   * 10 个带底色的内容框。判据 = 内联 grid-template-columns。 */
+  const frameLine = lines.find((l) => /\[class\*="_frame"\]\[style\*="grid-template-columns"\]\{/.test(l))
   check(frameLine !== undefined && /background:transparent/.test(frameLine),
-    'frame 容器 = transparent（父容器铺色会吃掉列的壁纸信号）')
-  check(!lines.some((l) => /\[class\*="_frame"\]\{[^}]*rgba\(/.test(l)),
-    '没有任何规则给 frame 容器铺 rgba 色')
-  const beforeLine = lines.find((l) => /\[class\*="_frame"\]::before\{/.test(l))
+    '布局 frame 容器 = transparent（父容器铺色会吃掉列的壁纸信号）')
+  check(!lines.some((l) => /\[class\*="_frame"\](\[[^\]]*\])?\{[^}]*rgba\(/.test(l)),
+    '没有任何规则给 frame 容器铺 rgba 色（::before 双色条除外）')
+  /* 反向：不许再用不限定的裸 _frame 子串（会连坐内容卡）。 */
+  check(!lines.some((l) => /\[class\*="_frame"\]\{/.test(l) && !l.includes('grid-template-columns')),
+    'frame 透明规则必须限定布局 frame')
+  const beforeLine = lines.find((l) => /\[class\*="_frame"\]\[style\*="grid-template-columns"\]::before\{/.test(l))
   check(beforeLine !== undefined
     && beforeLine.includes('linear-gradient(to right')
     && beforeLine.includes('rgba(46, 54, 63') /* 夹具 sidebar #2E363F */
@@ -1290,6 +1296,36 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
     const cardRule = sheet.split('\n').find((l) => l.includes('kuvljq_card'))
     check(cardRule !== undefined && /rgba\(255, 255, 255/.test(cardRule),
       '最外层卡片仍有白雾', cardRule ? cardRule.slice(0, 80) : '未找到')
+  }
+
+  /* ---- 2026-10-24：三个真机 bug 的修复锁 ---- */
+  {
+    /* A. 子智能体悬浮卡透明（bug2）：frame 规则必须限定布局 frame。 */
+    check(/\[class\*="_frame"\]\[style\*="grid-template-columns"\]\{background:transparent/.test(src),
+      'frame 透明规则限定布局 frame（不误伤 jIHOOq_frame 等内容卡）')
+    check(/\[class\*="_frame"\]\[style\*="grid-template-columns"\]::before/.test(src),
+      '顶部条规则同样限定（否则内容卡会多出 40px 渐变条）')
+
+    /* B. 切渐变要点两下（bug3）：paint 必须同时判「当前模式 = 壁纸」。
+     *    只判 status 时，切走的瞬间旧壁纸还会被画一遍。 */
+    const paintFn = src.slice(src.indexOf('function paintWallpaperLayer'),
+      src.indexOf('function paintWallpaperLayer') + 1200)
+    check(/state\.glassBackground === 'wallpaper'/.test(paintFn),
+      'paint 判当前模式（切换立即生效，不需要第二下）')
+    /* 非壁纸路径要撤出血层（blur 填充的糊图层只属于壁纸模式）。 */
+    const gradPath = paintFn.slice(paintFn.indexOf('syncWallpaperBleed(false'))
+    check(gradPath.length > 0 && paintFn.indexOf('syncWallpaperBleed(false') > paintFn.indexOf('const gradient = backdropGradient') - 400,
+      '非壁纸模式撤出血层')
+
+    /* C. 重启后会话加载失败（bug1）：seat 抬升必须是防抖（每次变动
+     *    clearTimeout 重排），不能是节流（有 timer 就 return）。
+     *    节流的 250ms 到点常落在 React commit 之间 → removeChild 崩树。 */
+    const schedFn = src.slice(src.indexOf('function scheduleSeatLift'),
+      src.indexOf('function scheduleSeatLift') + 900)
+    check(/clearTimeout\(seatLiftTimer\)/.test(schedFn),
+      'scheduleSeatLift 是防抖（clearTimeout 重排，React 空闲才搬）')
+    check(!/if \(seatLiftTimer !== null\) return\n/.test(schedFn),
+      '不再是节流语义（有 timer 直接 return 会在 commit 中途搬 DOM）')
   }
 
   /* ---- 2026-10-24：卡片本体必须用 ~= 词匹配，不能用 *= 子串 ----
