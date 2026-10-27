@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.11] — 2026-10-27
+
+### Fixed
+
+- **The agent-team hover panel was still transparent — v1.1.10 had fixed the
+  wrong element.** `jIHOOq_frame` is the subagent read-only input card; the
+  panel in the screenshot is the team roster panel (
+  `.EBLgjq_panel` from the experimental agent-team plugin). Its host CSS has
+  `position:fixed` + radius + shadow but **no background at all** — the fill
+  lives on each member row. The class-name criterion (contains preview/float)
+  cannot see it.
+
+  A second detection criterion was added: any class whose rule declares
+  `position:fixed` + `border-radius` + `box-shadow` (and is not a full-window
+  inset overlay) is a floating panel. Scanned against the whole host: 13
+  classes match, all genuinely floating, zero false positives.
+
+- **The detection never actually found the late panels (the real "still
+  broken").** Two timing traps stacked on top of the wrong target:
+  1. scanning stopped permanently once *any* results existed — but the team
+     panel's stylesheet arrives later than startup (experimental plugin), so
+     it was always missed;
+  2. the old skip-guard required a non-empty result, so every startup
+     `applyNow` (every 250ms) burned scan budget while finding nothing — the
+     60-attempt budget was exhausted before the plugin's sheet even existed.
+
+  `refreshPopoverClasses()` replaces both call sites: it skips only when the
+  stylesheet **count is unchanged** (no budget burn on idle polls), rescans
+  and **merges** when the count changes (late sheets join, HMR sheet swaps
+  keep old results), and the budget moved 60 → 400 (the host injects ~200
+  sheets during startup alone).
+
+- **Switching wallpaper paths still flashed the gradient first (regression
+  from v1.1.10's fix).** While a new wallpaper is loading, the paint now
+  keeps the current picture instead of falling back to gradient; the fetch
+  completion repaints.
+
+### Tests
+
+Behavioral tests drive the real timing scenarios (late sheet arrival, 450
+idle polls, 250 startup injections, sheet replacement) against an injected
+document, with `resetPopoverScan()` isolating module state. Mutation-tested:
+the old guard, the 60 budget, and overwrite-instead-of-merge each turn
+assertions red. (The first version of these tests only checked that functions
+exist — every mutation passed green.)
+
 ## [1.1.10] — 2026-10-24
 
 ### Fixed

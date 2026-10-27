@@ -23,6 +23,27 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
+/** 把 CSS 文本转成最小可用的 CSSOM 替身（供 detectPopoverClasses 测试）。 */
+function toCssom(cssText) {
+  const out = []
+  const re = /([^{}]+)\{([^}]*)\}/g
+  let m
+  while ((m = re.exec(cssText)) !== null) {
+    const map = {}
+    for (const d of m[2].split(';')) {
+      const i = d.indexOf(':')
+      if (i < 0) continue
+      map[d.slice(0, i).trim()] = d.slice(i + 1).trim()
+    }
+    out.push({
+      selectorText: m[1].trim(),
+      cssText: m[0],
+      style: { getPropertyValue: (n) => (map[n] === undefined ? '' : map[n]) },
+    })
+  }
+  return out
+}
+
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 
@@ -1239,9 +1260,88 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
     for (const l of callLines) {
       check(/popoverClasses/.test(l), '调用点传入 popoverClasses', l.trim().slice(0, 100))
     }
-    /* 兜底检测：syncGlassSheet 里也要有，否则启动期检测失败后没第二次机会。 */
-    check(/foundHere/.test(src), 'syncGlassSheet 里有兜底检测')
+    /* ⚠️ 2026-10-27：检测从「找到就永久停止」改成 refreshPopoverClasses()
+     * —— 跟着样式表张数变化重扫并**合并**。队友面板（EBLgjq_panel）的
+     * CSS 来自实验性插件、注入晚于启动期，旧写法扫到 hovercard 就不再
+     * 重扫，晚到的面板类永远抓不到（用户报「还是不行」的直接原因）。 */
+    check(/function refreshPopoverClasses/.test(src), '检测走统一重扫入口')
+    check(/popoverScannedSheets/.test(src), '记录上一轮扫描的样式表张数')
+    check(/mergePopoverClasses/.test(src), '多轮检测结果合并（不互相覆盖）')
     check(/diag\.popovers/.test(src), '诊断暴露 popovers 计数')
+
+    /* ⚠️ 行为驱动测试（不是查函数存在——那是第四次假绿教训）。
+     * refreshPopoverClasses 接受注入的 doc，直接模拟
+     * 「启动期一张表 → 插件晚到注入第二张」的真实时序。 */
+    {
+      const earlySheet = { cssRules: toCssom(
+        '.xpvNua_preview{position:absolute;background:#2F3841;box-shadow:0 0 0 red}') }
+      const lateSheet = { cssRules: toCssom(
+        '.EBLgjq_panel{position:fixed;border-radius:12px;box-shadow:0 8px 32px #000}') }
+      /* ⚠️ 每个场景先 reset —— popoverClasses/ScanTries 是模块级状态，
+       * 不隔离的话前一个场景烧掉的预算会让后一个看到"预算已尽"的假象。 */
+      t.resetPopoverScan()
+
+      /* 场景 1：启动期一张表 → 插件晚到注入第二张（真实时序）。 */
+      t.refreshPopoverClasses({ styleSheets: [earlySheet] })
+      const after1 = t.getPopoverClasses()
+      check(after1.includes('xpvNua_preview'),
+        '第一轮扫到启动期浮层', JSON.stringify(after1))
+      t.refreshPopoverClasses({ styleSheets: [earlySheet, lateSheet] })
+      const after2 = t.getPopoverClasses()
+      check(after2.includes('xpvNua_preview') && after2.includes('EBLgjq_panel'),
+        '张数变化后合并晚到的面板类（"找到就停"会漏 EBLgjq_panel）',
+        JSON.stringify(after2))
+      /* 张数没变 → 不扫。 */
+      check(t.refreshPopoverClasses({ styleSheets: [earlySheet, lateSheet] }) === false,
+        '张数未变时不重复扫描')
+
+      /* 场景 2：结果为空 + 张数不变时**不消耗预算**。
+       * 旧守卫要求「已有结果才跳过」—— 结果为空时每次 applyNow
+       * （启动期每 250ms 一次）都放行到计数，预算在宿主注入完成前
+       * 就被白白烧光，插件晚到的表反而扫不到。
+       * 判别法：空集合下 refresh 超过预算次数，然后新表出现 ——
+       * 新守卫一次都没消耗（张数没变），照样扫到；旧守卫烧光，扫不到。 */
+      t.resetPopoverScan()
+      for (let i = 0; i < 450; i += 1) {
+        t.refreshPopoverClasses({ styleSheets: [] })
+      }
+      t.refreshPopoverClasses({ styleSheets: [lateSheet] })
+      check(t.getPopoverClasses().includes('EBLgjq_panel'),
+        '空结果+张数不变不烧预算（450 次空转后仍能扫到新表）',
+        JSON.stringify(t.getPopoverClasses()))
+
+      /* 场景 3：预算必须 > 启动期注入量（宿主约 200 张表）。
+       * 模拟 250 次"张数+1"的空扫（每步都触发扫描），第 251 步
+       * 才出现浮层表：预算 60 会在第 61 步耗尽 → 永远扫不到。 */
+      t.resetPopoverScan()
+      let budgetOk = true
+      for (let n = 1; n <= 250; n += 1) {
+        t.refreshPopoverClasses({ styleSheets: new Array(n).fill({ cssRules: [] }) })
+      }
+      t.refreshPopoverClasses({ styleSheets: [lateSheet] })
+      check(t.getPopoverClasses().includes('EBLgjq_panel'),
+        '预算扛得住启动期 250 次注入（60 不够，本次提到 400）',
+        JSON.stringify(t.getPopoverClasses()))
+
+      /* 场景 4：表被替换（HMR/插件重载）时旧结果不丢——合并语义。
+       * 必须让**张数变化**才会触发扫描（张数相同走守卫直接返回）：
+       * 1 张 → 2 张（合并进 EBLgjq_panel）→ 1 张（只剩 lateSheet）。
+       * 最后一轮本轮扫描看不到 xpvNua_preview —— 覆盖式赋值会把它丢掉，
+       * 合并则保住。 */
+      t.resetPopoverScan()
+      t.refreshPopoverClasses({ styleSheets: [earlySheet] })
+      t.refreshPopoverClasses({ styleSheets: [earlySheet, lateSheet] })
+      t.refreshPopoverClasses({ styleSheets: [lateSheet] })
+      const after4 = t.getPopoverClasses()
+      check(after4.includes('xpvNua_preview') && after4.includes('EBLgjq_panel'),
+        '表被替换时旧结果不丢（合并而非覆盖）', JSON.stringify(after4))
+
+      /* 合并函数本身：保序、去重。 */
+      const merged = t.mergePopoverClasses(['a', 'b'], ['b', 'c'])
+      check(JSON.stringify(merged) === JSON.stringify(['a', 'b', 'c']),
+        'merge 保序去重', JSON.stringify(merged))
+      t.resetPopoverScan()
+    }
   }
 
   /* ---- ⚠️ 2026-10-24：白雾只能叠一层 ----
@@ -1326,6 +1426,94 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
       'scheduleSeatLift 是防抖（clearTimeout 重排，React 空闲才搬）')
     check(!/if \(seatLiftTimer !== null\) return\n/.test(schedFn),
       '不再是节流语义（有 timer 直接 return 会在 commit 中途搬 DOM）')
+  }
+
+  /* ---- 2026-10-27：判据②（悬浮面板特征）+ paint 的 loading 分支 ----
+   *
+   * bug2 上一轮修错了对象：jIHOOq_frame 是「只读输入卡」，用户截图里
+   * 那块是**队友面板** .EBLgjq_panel —— 它类名里没有 preview/float，
+   * 而且**宿主没给它 background**（底色铺在每一行成员上），
+   * 所以判据①完全抓不到，面板本体一直裸透明。
+   *
+   * 判据②：position:fixed + border-radius + box-shadow，且非铺满整窗。
+   * 全宿主扫这条命中 13 个类，全是真浮层，零误伤。 */
+  {
+    const hostCss = [
+      /* 真浮层：无底色的面板本体（队友面板） */
+      '.EBLgjq_panel{z-index:100;width:min(500px,100vw - 32px);border-radius:12px;box-shadow:var(--dsw-elevation-prominent);position:fixed;overflow:hidden}',
+      /* 真浮层：有底色但名字不含 preview */
+      '.Xt1eiG_panel{position:fixed;border-radius:12px;background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}',
+      '._toast_l6cvn_6{position:fixed;border-radius:8px;background:var(--dsw-alias-bg-tooltip);box-shadow:0 4px 16px rgba(0,0,0,.3)}',
+      /* 真浮层，但类名**含连字符**（宿主全局类常见形态）。
+       * 正则若退化成 [a-zA-Z0-9_]+，配合 (?![\w-]) 前瞻会整体匹配失败
+       * → 这个浮层被漏掉（不是误伤，是漏检，更难发现）。 */
+      '.team-hoverPanel{position:fixed;border-radius:12px;box-shadow:var(--dsw-elevation-prominent);z-index:120}',
+      /* 判据①的两种命名 */
+      '._preview_38jqx_52{background:var(--dsw-alias-bg-layer-1);position:absolute}',
+      '.xpvNua_preview{position:absolute;background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-panel)}',
+      /* 非浮层：面板内的成员行（有底色，但没 fixed/投影） */
+      '.EBLgjq_member{background:var(--dsw-alias-bg-layer-2);border-radius:8px;padding:8px}',
+      /* 非浮层：正文卡片（有底色有圆角，但是 static） */
+      '.kuvljq_card{background:var(--changes-fill);border-radius:12px;width:100%}',
+      /* 非浮层：布局 frame（有底色，relative） */
+      '.BynINW_frame{background:var(--dsw-alias-bg-base);display:grid;position:relative;height:100%}',
+      /* 非浮层：铺满整窗的遮罩（fixed 但 inset:0） */
+      '._backdrop_19zw2_2{position:fixed;inset:0;background:rgba(0,0,0,.4)}',
+      /* 非浮层：吸顶工具条 —— fixed + 圆角，但**没有投影**
+       * （只有 box-shadow 要求能挡住它） */
+      '.Zticky_bar{position:fixed;border-radius:8px;background:var(--dsw-alias-bg-layer-1);top:0;left:0;right:0;height:40px}',
+      /* 非浮层：全宽抽屉 —— fixed + 投影，但**没有圆角**
+       * （只有 border-radius 要求能挡住它） */
+      '.Drawer_root{position:fixed;box-shadow:0 0 40px rgba(0,0,0,.5);background:var(--dsw-alias-bg-layer-1);top:0;right:0;width:420px;height:100%}',
+      /* 非浮层：全屏模态底 —— fixed + 圆角 + 投影，但 inset:0 铺满整窗
+       * （只有 inset 排除能挡住它；涂上去 = 整屏糊一遍） */
+      '.Modal_sheet{position:fixed;inset:0;border-radius:12px;box-shadow:var(--dsw-elevation-prominent);background:var(--dsw-alias-bg-layer-1)}',
+      /* 非浮层：插件自己的设置页浮层 —— 命中特征但带 dmt- 前缀
+       * （只有 dmt- 排除能挡住它，它由设置页样式表自己管） */
+      '.dmt-floatPanel{position:fixed;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.4);background:var(--dsw-alias-bg-layer-2)}',
+      /* 非浮层：插件设置页自己的元素 */
+      '.dmt-preview{background:var(--dsw-alias-markdown-code-block);border-radius:8px}',
+    ].join('\n')
+    const found = t.detectPopoverClasses({ styleSheets: [{ cssRules: toCssom(hostCss) }] })
+    for (const c of ['EBLgjq_panel', 'Xt1eiG_panel', '_toast_l6cvn_6',
+      'team-hoverPanel', '_preview_38jqx_52', 'xpvNua_preview']) {
+      check(found.includes(c), '检测到浮层 ' + c, JSON.stringify(found))
+    }
+    /* 每个排除项都由**特定一条守卫**挡住 —— 缺任何守卫都会漏进来。 */
+    for (const c of ['EBLgjq_member', 'kuvljq_card', 'BynINW_frame',
+      '_backdrop_19zw2_2', 'Zticky_bar', 'Drawer_root', 'Modal_sheet',
+      'dmt-floatPanel', 'dmt-preview']) {
+      check(!found.includes(c), '排除非浮层 ' + c, JSON.stringify(found))
+    }
+    /* ⚠️ 类名正则必须含连字符：宿主里 `dmt-floatPanel` 形态的 token，
+     * 若正则退化成 [a-zA-Z0-9_]+，捕获到的是被连字符截断的 `dmt` ——
+     * 前缀排除 /^dmt-/ 匹配不上 'dmt'，垃圾 token 混进结果。
+     * 断言两头：完整 token 不出现，截断的 'dmt' 也不出现。 */
+    check(!found.includes('dmt'),
+      '类名正则含连字符（不把 dmt-floatPanel 截断成 dmt）', JSON.stringify(found))
+    /* 检测到的类名要真的进 CSS，且带 backdrop-filter（浮在活文字上必须糊）。 */
+    const withPanel = buildGlassSheet(
+      { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16' },
+      dark, true, [], [], ['EBLgjq_panel'],
+    )
+    const panelRule = withPanel.split('\n').find((l) => l.includes('.EBLgjq_panel'))
+    check(panelRule !== undefined, '队友面板规则已生成')
+    check(panelRule !== undefined && /backdrop-filter:blur/.test(panelRule),
+      '队友面板带 backdrop-filter（糊掉背后正文）')
+    check(panelRule !== undefined && /background-color:rgba\(/.test(panelRule),
+      '队友面板有半透明底色（原本全透明）')
+  }
+
+  /* paint 的 loading 分支：换壁纸路径时不能先画渐变再翻回来。 */
+  {
+    const paintFn = src.slice(src.indexOf('function paintWallpaperLayer'),
+      src.indexOf('function paintWallpaperLayer') + 1600)
+    check(/if \(wallpaperStatus === 'loading'\) return/.test(paintFn),
+      '壁纸模式 loading 期间保持当前画面（不闪渐变）')
+    /* 顺序：loading 检查必须在 ready 检查之前。 */
+    check(paintFn.indexOf("wallpaperStatus === 'loading'")
+      < paintFn.indexOf("wallpaperStatus === 'ready'"),
+      'loading 检查先于 ready')
   }
 
   /* ---- 2026-10-24：卡片本体必须用 ~= 词匹配，不能用 *= 子串 ----

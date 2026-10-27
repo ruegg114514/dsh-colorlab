@@ -2179,8 +2179,14 @@ window.__ModuleLoader__.load({
        * fallback 的代码在它**之后**才执行）—— 于是第一下点击
        * 把旧壁纸又画了一遍，毫无变化；第二下才轮到渐变。
        * 判据改成「模式 + 状态」双条件，切换立即生效。 */
-      if (state && state.glassBackground === 'wallpaper'
-        && wallpaperStatus === 'ready' && wallpaperObjectUrl !== null) {
+      if (state && state.glassBackground === 'wallpaper') {
+        /* 🔧 2026-10-27（上一修的回归，用户报「还是不行」）：
+         * 换壁纸路径/URL 后 loadWallpaper 把 status 置 'loading' ——
+         * 旧判据把 loading 当失败 → **第一下先画渐变**，fetch 完成
+         * 再翻回壁纸。用户看到的就是"点一下不对、再点一下才对"。
+         * loading 期间保持当前画面不动（新图到位后 then 分支会再 paint）。 */
+        if (wallpaperStatus === 'loading') return
+        if (wallpaperStatus === 'ready' && wallpaperObjectUrl !== null) {
         /* 多层背景：压暗渐变是**第一层**（画在最上），壁纸 url 在第二层。
          * ⚠️ 渐变层只接受合法颜色 —— 必须用 backdropImage() 加 veil，
          * 否则会出现 `linear-gradient(, ,)` 这种非法值让整条 background-image 失效。
@@ -2217,7 +2223,9 @@ window.__ModuleLoader__.load({
         wallpaperEl.style.backgroundColor = 'transparent'
         return
       }
-      /* 非壁纸模式：出血层（blur 填充的第二张糊图）没有存在意义，撤掉。 */
+      }
+      /* 非壁纸模式（或壁纸模式但拉取失败 → 渐变兜底）：
+       * 出血层（blur 填充的第二张糊图）没有存在意义，撤掉。 */
       syncWallpaperBleed(false, '')
       const gradient = backdropGradient(dark, isDark)
       if (wallpaperEl.__dmtBackdrop !== gradient) {
@@ -4278,12 +4286,7 @@ window.__ModuleLoader__.load({
        * 结果浮层规则永远不生成（用户实测：右侧浮层没模糊）。
        * 这里每次 syncGlassSheet 都试一次，代价是遍历一遍样式表
        * （宿主约 200 张，但只有拿到结果前才扫，之后走缓存）。 */
-      if ((!Array.isArray(popoverClasses) || popoverClasses.length === 0)
-        && popoverScanTries < POPOVER_SCAN_MAX) {
-        popoverScanTries += 1
-        const foundHere = detectPopoverClasses()
-        if (foundHere.length > 0) popoverClasses = foundHere
-      }
+      refreshPopoverClasses()
       diag.popovers = Array.isArray(popoverClasses) ? popoverClasses.length : 0
       const css = on ? buildGlassSheet(state, surfaces, isDark, cardTargets, floatTargets, popoverClasses) : ''
       if (css === '') {
@@ -7556,15 +7559,98 @@ function makeColorizer(scheme) {
           if (!rule) continue
           const style = rule.style
           if (!style || typeof style.getPropertyValue !== 'function') continue
+          const selector = rule.selectorText || ''
           const hasBg = style.getPropertyValue('background') !== ''
             || style.getPropertyValue('background-color') !== ''
             || style.getPropertyValue('background-image') !== ''
-          if (!hasBg) continue
-          const cls = pickClass(rule.selectorText || '')
-          if (cls !== null) found.add(cls)
+          /* 判据①：类名含 preview / float 且自己画底色。 */
+          if (hasBg) {
+            const cls = pickClass(selector)
+            if (cls !== null) found.add(cls)
+          }
+          /* 判据②（2026-10-27）：**悬浮面板特征** —— position:fixed
+           * + 圆角 + 投影，且不是铺满全屏的遮罩（inset:0）。
+           *
+           * 用户报「子智能体悬浮卡透明」，查因：宿主给的
+           * `.EBLgjq_panel`（编队/队友面板本体）**根本没有 background** ——
+           * 它只有 box-shadow:var(--dsw-elevation-prominent) + 圆角，
+           * 底色铺在**每一行成员**（.EBLgjq_member）上。
+           * 于是面板边缘与行间全是透明的，壁纸直接透出来，
+           * 观感就是"这块板没有玻璃、是空的"。
+           *
+           * 判据①（类名含 preview/float）抓不到它 —— 名字里没有这些词。
+           * 全宿主扫这条特征命中 13 个类，**全部是真浮层**
+           * （chat/conversation/schedule/documentpreview/subagent/
+           *  agent-team 的 panel、plugin-manager 的 registry、
+           *  toast、hovercard），零误伤 —— 比类名匹配可靠得多。
+           *
+           * 这类面板浮在**活文字**上，所以必须带 backdrop-filter
+           * 糊掉背后正文（⑥b 的规则体本来就带 frostedFilter）。 */
+          if (style.getPropertyValue('position') !== 'fixed') continue
+          if (style.getPropertyValue('border-radius') === '') continue
+          if (style.getPropertyValue('box-shadow') === '') continue
+          /* 铺满整窗的不是浮层：遮罩、拖拽区、背景层。 */
+          if (/inset:\s*0/.test(selector) || /inset:\s*0/.test(rule.cssText || '')) continue
+          /* ⚠️ 点必须转义：`/.(x+)/` 里的 `.` 是"任意字符"，
+           * 会把 `X.foo` 之类的组合选择器误抓成别的词。
+           * 类名段必须含 `-`：插件自己的类都是 `dmt-xxx` 形态，
+           * 漏了连字符就只捕获到 `dmt`，下面的前缀排除会失效（假绿）。 */
+          const panelCls = /\.([a-zA-Z0-9_-]+)(?![\w-])/.exec(selector)
+          if (panelCls !== null && !/^(?:dmt-|_?markdown)/.test(panelCls[1])) found.add(panelCls[1])
         }
       }
       return [...found]
+    }
+
+    /** 当前可读样式表张数（宿主分批注入，这个数会一路涨）。 */
+    function popoverSheetCount(docForScan) {
+      const doc = docForScan === undefined
+        ? (typeof document === 'undefined' ? null : document) : docForScan
+      if (doc === null || doc === undefined) return -1
+      const sheets = doc.styleSheets
+      if (!sheets || typeof sheets.length !== 'number') return -1
+      return sheets.length
+    }
+
+    /** 合并两轮检测结果（去重、保序）。 */
+    function mergePopoverClasses(prev, next) {
+      const out = Array.isArray(prev) ? prev.slice() : []
+      if (Array.isArray(next)) {
+        for (const c of next) if (!out.includes(c)) out.push(c)
+      }
+      return out
+    }
+
+    /**
+     * 刷新浮层类名检测。
+     *
+     * ⚠️ 2026-10-27（用户报「还是不行」）：原来两处扫描都是
+     * **「找到结果就永久停止」** —— 但队友面板（`.EBLgjq_panel`）的
+     * CSS 来自**实验性插件**，注入时机晚于启动期。启动时扫到
+     * 两三个 hovercard 类就不再重扫，晚到的面板类**永远抓不到**。
+     *
+     * 改成**跟着样式表数量走**：数量一变就重扫并**合并**结果
+     * （宿主分批注入，这个数在启动期一路涨）。这样
+     * 「晚到的 CSS」一定还有一次机会；数量稳定后不再扫描。
+     * 预算 POPOVER_SCAN_MAX 次，防止病态循环注入卡住我们。
+     *
+     * @returns {boolean} 结果集是否发生了变化（调用者可据此决定是否重建样式表）。
+     */
+    function refreshPopoverClasses(docForScan) {
+      const count = popoverSheetCount(docForScan)
+      /* 张数没变 → 直接返回，**不消耗预算**。
+       * 注意守卫不能要求「已有结果」：applyNow 在启动期每 250ms
+       * 被调一次，若结果为空就放行到计数，预算会在没有任何新表时
+       * 被白白烧光（然后晚到的插件表反而扫不到 —— 本次 bug 的
+       * 第二种烧法）。同样一张表集合重扫必然得到同样结果，跳过。 */
+      if (count === popoverScannedSheets) return false
+      if (popoverScanTries >= POPOVER_SCAN_MAX) return false
+      popoverScanTries += 1
+      popoverScannedSheets = count
+      const merged = mergePopoverClasses(popoverClasses, detectPopoverClasses(docForScan))
+      const changed = merged.length !== (Array.isArray(popoverClasses) ? popoverClasses.length : 0)
+      popoverClasses = merged
+      return changed
     }
 
     /**
@@ -8380,10 +8466,18 @@ function makeColorizer(scheme) {
      * 「定义 --dsw-hovercard-bg 的类」（用于改实心），这个是「自己画底色的
      * 浮层类」（用于玻璃化）。检测判据见 detectPopoverClasses()。 */
     let popoverClasses = undefined
-    /* 兜底检测的尝试次数上限：宿主样式表注入完成后就不必再扫了。
-     * 每次 applyNow 最多扫一次，60 次足够覆盖启动期的分批注入。 */
+    /* 扫描预算。refreshPopoverClasses 的守卫顺序保证预算只在
+     * **张数真的变化**时才消耗（数量没变会在第一道守卫直接 return，
+     * 不计数）—— 宿主启动期分批注入约 200 张表，之后基本静止。
+     * ⚠️ 2026-10-27：上限从 60 提到 400。60 在启动期就会烧光，
+     * 之后再加载的插件（队友面板正来自实验性插件）注入新表时
+     * 一次都扫不到 —— 正是这次 bug 的形态。400 ≈ 启动 + 两次
+     * 完整插件重载；每次扫描只读 getPropertyValue、不序列化
+     * cssText（见 detectTargetsFor 的注释），开销可忽略。 */
     let popoverScanTries = 0
-    const POPOVER_SCAN_MAX = 60
+    /** 上一轮扫描时的样式表张数（-1 = 还没扫过）。 */
+    let popoverScannedSheets = -1
+    const POPOVER_SCAN_MAX = 400
     let cardRetryTimer = null
     /** 重试有界：卡片组件（ui-deliverables）可能被禁用，不能每秒轮询到天荒地老。 */
     const CARD_RETRY_MAX = 60
@@ -8473,10 +8567,7 @@ function makeColorizer(scheme) {
       /* 悬停浮层类名：同样等宿主样式表进 DOM。判据是「规则里声明了
        * background」—— 浮层本体自己画底色，浮层内部的文字块不会。
        * 这样不依赖类名白名单，宿主加新浮层也能自动跟上。 */
-      if (!Array.isArray(popoverClasses) || popoverClasses.length === 0) {
-        const foundPopovers = detectPopoverClasses()
-        if (foundPopovers.length > 0) popoverClasses = foundPopovers
-      }
+      refreshPopoverClasses()
       /* 诊断：暴露检测到的浮层数，便于在控制台排查。
        * 0 = 宿主样式表还没进 DOM，或判据没命中。 */
       diag.popovers = Array.isArray(popoverClasses) ? popoverClasses.length : 0
@@ -11606,6 +11697,17 @@ function makeColorizer(scheme) {
         detectFloatTargets,
         detectPopoverClasses,
         detectPopoverClassesWith: detectPopoverClasses,
+        refreshPopoverClasses,
+        getPopoverClasses: () => (Array.isArray(popoverClasses) ? popoverClasses.slice() : []),
+        /* 扫描状态归零。测试必须用它隔离自己 —— popoverClasses /
+         * popoverScanTries 是模块级状态，前一个测试的消耗会让
+         * 后一个测试看到的是"预算已尽"的假象（实测假绿过）。 */
+        resetPopoverScan: () => {
+          popoverClasses = undefined
+          popoverScanTries = 0
+          popoverScannedSheets = -1
+        },
+        mergePopoverClasses,
         FLOAT_TARGETS,
         mergeCardTargets,
         cardTargetsComplete,

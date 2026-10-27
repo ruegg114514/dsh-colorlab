@@ -895,6 +895,64 @@ const veilMode = state.glassBackground === 'gradient' && state.glassVeil === 'au
 
 `glass.test` 有断言锁这条（含变异验证：还原成旧行为会让 3 条断言变红）。
 
+### 队友面板：修了对象、又栽在时序里（2026-10-27 第二十二轮）
+
+用户报「还是不行」—— 上一轮对 bug2 的修复**修错了对象**：
+`jIHOOq_frame` 是子智能体的**只读输入卡**，而截图里那块悬浮面板是
+**编队/队友面板**（`dsh-experimental-client-ui-agent-team` 的
+`.EBLgjq_panel`）。这轮把真正的对象修好，顺带把 bug3 也修对
+（上一轮的修法引入了新回归）。
+
+#### 队友面板为什么一直透明
+
+宿主 CSS 实读：`.EBLgjq_panel` 有 `position:fixed` + 圆角 + 大投影，
+**但没有 background** —— 底色铺在每一行成员（`.EBLgjq_member`）上。
+面板边缘和行间全是透明的，壁纸直接透出来，观感就是"这块板没有玻璃"。
+
+判据①（类名含 preview/float + 有底色）抓不到它：名字不对、也没底色。
+
+#### 判据②：悬浮面板特征
+
+扫样式表，命中条件 = `position:fixed` + `border-radius` + `box-shadow`，
+且 `inset` 非空排除铺满整窗的遮罩。全宿主扫这条命中 **13 个类，
+全部是真浮层**（chat/conversation/schedule/documentpreview/subagent/
+agent-team 的 panel、plugin-manager 的 registry、toast、hovercard），
+零误伤 —— 比类名匹配可靠得多。
+
+每条守卫都有专属夹具（吸顶条挡 box-shadow、抽屉挡 border-radius、
+模态底挡 inset、dmt- 前缀挡自己人）—— 变异测试逐条验证过，
+删任何一条守卫都有断言变红。
+
+#### 真正让修复失效的是扫描时序（"还是不行"的根因）
+
+检测逻辑对了，但**运行时永远抓不到 `EBLgjq_panel`**，两个叠加的坑：
+
+1. **「找到就永久停止」**：启动期扫到两三个 hovercard 类就不再重扫，
+   而队友面板的 CSS 来自**实验性插件**，注入晚于启动期 → 永远漏掉。
+2. **预算被空转烧光**：旧守卫要求「已有结果才跳过」—— 结果为空时
+   每次 applyNow（启动期 250ms 一次）都消耗计数，宿主注入完成前
+   60 次预算就烧光了 → 晚到的表一次都扫不到。
+
+**修法**：`refreshPopoverClasses()` 统一入口 ——
+- 跳过条件只看**样式表张数没变**（不依赖结果非空），不消耗预算；
+- 张数变化 → 重扫并**合并**结果（多轮不互相覆盖，HMR 换表也不丢）；
+- 预算 60 → 400（宿主启动就注入约 200 张表，60 必烧穿）。
+
+#### bug3 的二次修复
+
+上一轮把 paint 判据改成「模式=壁纸 且 status=ready」，
+引入了新回归：换壁纸路径后 status='loading'，旧代码把 loading
+当失败 → **第一下先画渐变**，fetch 完成再翻回壁纸 ——
+用户看到的还是"点两下"。现在 loading 期间直接 return（保持当前
+画面），新图到位后 then 分支自会再 paint。
+
+#### 测试的教训（第四次假绿）
+
+行为测试最初只查「函数存在」—— 变异全部假绿。
+补了 `resetPopoverScan`（模块级状态隔离）+ 四个**驱动真实时序**的场景
+（晚到注入 / 空转烧预算 / 预算>启动量 / 表替换合并），
+三个错误版本才各自被抓住。**「函数存在」不是测试，「行为可驱动」才是。**
+
 ### 三个真机 bug：seat 崩树 / frame 连坐 / paint 时序（2026-10-24 第二十一轮）
 
 用户报三件事，逐一查因。
