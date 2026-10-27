@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.13] — 2026-10-27
+
+### Fixed
+
+- **The background-jobs hover panel had no blur at all.** The host
+  primitives `MenuSurface` puts its fill and blur on an inner `.material`
+  child, driven by `--dsw-menu-surface-fill` + `--dsw-menu-backdrop-filter`.
+  We set that filter token to `none` (to avoid double-blurring dialogs that
+  our own `[role="dialog"]` rule already frosts) — but the jobs panel
+  instance renders MenuSurface **without a role on the outer element**
+  (role is passed through by the caller and ui-jobs does not pass it). So
+  neither side had blur: translucent fill, no frost, text showing through.
+
+  The host marks every MenuSurface shell with a stable
+  `data-menu-material="translucent"` attribute, which is more reliable than
+  class names or roles. The glass sheet now gives that shell the overlay
+  blur directly. Only `backdrop-filter` is added — the fill stays on the
+  inner `.material` layer, otherwise the two would stack and go muddy.
+  The token remains `none`, so role-carrying dialogs keep exactly one blur.
+
+- **A new session showed a transparent input area for a moment before the
+  cover appeared.** The hard clip of scrolling text at the composer edge
+  depends on the JS seat lift, and the lift is debounced (it waits for React
+  to go quiet). During that window the seat still floats over the scrolling
+  body while our rule keeps the seat transparent — text passed straight
+  under the input box.
+
+  Two changes:
+  1. The lift now writes a `data-dsh-seat-lifted` marker (on both the
+     freshly-lifted and already-lifted paths, so React moving the node back
+     and us re-lifting it cannot lose the marker); `restoreSeats()` clears
+     it. The glass sheet gives an *unlifted* seat the composer card's own
+     fill plus blur, and the marker makes that rule stop the moment the
+     hard clip takes over. Same alpha as the card, so the switch is
+     invisible.
+  2. The pure debounce could starve: while streaming, the DOM changes every
+     frame and the timer resets forever. `seatLiftDelay()` now caps total
+     waiting at 1500ms (quiet window stays 600ms), so the lift always
+     happens within 1.5s even mid-stream.
+
+### Tests
+
+CSS-side assertions cover the generated rules (menu shell blurs without a
+fill; seat padding keyed on the marker; seat alpha equal to the card alpha
+so the transition does not flash). JS-side tests drive `liftOneSeat` with
+fake nodes and `seatLiftDelay` as a pure function — the CSS tests could not
+see either one (both mutations passed green until the behavioural tests
+were added).
+
+Nine mutations tested: deleting the menu rule, restoring the token,
+deleting the seat fallback, dropping the marker on either lift path,
+removing the wait cap, and unclamping the delay each turn assertions red.
+
 ## [1.1.12] — 2026-10-27
 
 ### Fixed

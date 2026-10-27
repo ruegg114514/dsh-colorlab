@@ -895,7 +895,72 @@ const veilMode = state.glassBackground === 'gradient' && state.glassVeil === 'au
 
 `glass.test` 有断言锁这条（含变异验证：还原成旧行为会让 3 条断言变红）。
 
+### 菜单外壳的雾面与座的空窗期（2026-10-27 第二十三轮）
+
+用户报两件事：后台任务悬浮窗没模糊；新会话时输入区先透明、过一下才盖上。
+
+#### 1. 后台任务面板：两头都没模糊
+
+宿主 primitives 的 `MenuSurface` 把**底色和模糊做在内层 `.material` 子元素**上：
+
+```css
+._material_ri079_21 {
+  position: absolute; inset: 0; z-index: -1;
+  background: var(--dsw-menu-surface-fill);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+}
+```
+
+我们的令牌层把 `--dsw-menu-backdrop-filter` 设成 `none`（避免与
+`[role=dialog]` 的 blur 双重叠加）。但 **role 是调用方透传的**：
+ui-jobs 的后台任务面板只传 className/style，外层没有 role ——
+于是外层命中不了我们的 blur，子层的 blur 又被令牌关了，
+**两头都没有模糊**。
+
+修法的判据：宿主给外壳恒写 `data-menu-material="translucent"`，
+比类名/role 都稳定。给它直接补 blur，**只补 blur 不补 background**
+（底色仍由内层 .material 消费，外层再涂会叠加变闷）。
+令牌保持 `none` —— 有 role 的对话框仍只有一层 blur，不回归。
+
+#### 2. 输入区空窗期：硬裁依赖 JS，CSS 要能感知
+
+硬裁（正文断在输入卡上沿）依赖 seat 抬升，抬升是防抖的（等 React 空闲）。
+空窗期座还在滚动容器内、浮在正文之上，而我们的规则让座**透明** ——
+字直接穿过输入框。
+
+CSS 无法判断「座是否还在 scroll 里」（`:has` 只查后代），所以：
+
+```
+JS 抬升成功 → seat.setAttribute("data-dsh-seat-lifted")
+restoreSeats() → removeAttribute
+CSS: [data-composer-seat]:not([data-dsh-seat-lifted]) → 垫输入卡浓度 + 模糊
+```
+
+抬升瞬间标记出现、垫底规则失效，回到硬裁。垫底 alpha 与输入卡**同值**
+（测试锁死 `rgba(62,71,80,0.63) === rgba(62,71,80,0.63)`），切换不跳色。
+
+⚠️ 标记必须在**两个**分支都写：抬升成功、以及「已在正确位置」的
+提前 return —— 后者是 React 搬回节点后幂等恢复的唯一入口，漏了标记永久丢失。
+
+#### 3. 纯防抖会饿死
+
+上一轮把抬升从节流改成防抖（修 React 崩树），但流式输出时 DOM 每帧都变、
+timer 无限重置，座可能几秒都抬不上去。抽出纯函数 `seatLiftDelay(now, since)`：
+
+```
+静默窗口 600ms，但总等待 ≤ 1500ms
+刚调度 → 600 / 已等 800 → 600 / 已等 1200 → 300 / 已等 ≥1500 → 0
+```
+
+#### 4. 测试层次的教训
+
+CSS 断言看不到 JS 行为：删掉 `setAttribute`、把 delay 上限改没 ——
+CSS 测试全绿。补了驱动真实函数的测试（`liftOneSeat` 用替身节点、
+`seatLiftDelay` 纯函数逐档），四个新变异才全部变红。
+**规则生成对了不等于运行时状态对；两层要分别测。**
+
 ### 队友面板：修了对象、又栽在时序里（2026-10-27 第二十二轮）
+
 
 用户报「还是不行」—— 上一轮对 bug2 的修复**修错了对象**：
 `jIHOOq_frame` 是子智能体的**只读输入卡**，而截图里那块悬浮面板是

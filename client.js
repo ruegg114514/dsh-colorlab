@@ -2956,8 +2956,21 @@ window.__ModuleLoader__.load({
        * 被 CVUQCW_panel / v1kfCW_panel::before / _material_ri079 等消费 ——
        * 我们给 [role=dialog/menu] 已经加了自己的 backdrop-filter，
        * 两层糊同一个 backdrop = 双重模糊，观感发闷（参考插件同样处理）。
-       * 浮层的雾面由我们的 frostedFilter 统一负责。 */
+       * 浮层的雾面由我们的 frostedFilter 统一负责。
+       *
+       * ⚠️ 2026-10-27（用户报「后台任务悬浮窗没有玻璃模糊」）：关令牌的前提是
+       * 「我们的 frostedFilter 一定补得上」，但 MenuSurface 的底色/模糊其实
+       * 长在**内层 .material 子元素**上（`position:absolute;inset:0;z-index:-1;
+       * background:var(--dsw-menu-surface-fill);backdrop-filter:var(--dsw-menu-
+       * backdrop-filter)`），而我们的规则挂在**外层** [role=dialog/menu] 上。
+       * 后台任务面板（ui-jobs）这个实例的外层**没有 role**（role 由调用方透传，
+       * 它只传了 className/style）—— 于是：外层没我们的 blur，子层的 blur
+       * 又被这条令牌关了 → 半透明底 + 无模糊 = 文字直接穿透。
+       *
+       * 修法不是恢复令牌（那会让有 role 的对话框双重模糊），而是给
+       * MenuSurface 外层补上 `.material` 等效的 blur —— 见下面 ⑩b。 */
       out.push('--dsw-menu-backdrop-filter:none !important')
+
 
       /* ⑪（②#5 对齐参考插件）文件预览卡保持**近实色**。
        * 预览区是"读小字"的地方（PDF/文本正文），用户口径：压在糊掉的
@@ -3307,6 +3320,25 @@ window.__ModuleLoader__.load({
         : 'backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
           + '-webkit-backdrop-filter:blur(' + frosted + 'px) saturate(120%) !important;'
 
+      /* ⑩b MenuSurface 外壳（2026-10-27，用户报「后台任务悬浮窗没有玻璃模糊」）
+       *
+       * 宿主 primitives 的 MenuSurface 把底色与模糊做在**内层 .material 子元素**
+       * 上：`position:absolute;inset:0;z-index:-1;background:var(--dsw-menu-
+       * surface-fill);backdrop-filter:var(--dsw-menu-backdrop-filter)`。
+       * 而令牌层把 --dsw-menu-backdrop-filter 关了（避免与我们的 [role=dialog]
+       * blur 双重叠加），代价是：**外壳没有 role 的实例两头都没模糊**。
+       * 后台任务面板（ui-jobs）正是这种——它只传 className/style，role 留在
+       * 内层菜单上，外层 [data-menu-material] 命中不了任何 blur 规则，
+       * 于是半透明底 + 无模糊 = 背后正文直接穿透。
+       *
+       * 宿主给外壳打了稳定标记 data-menu-material="translucent"（恒写），
+       * 比类名/role 都可靠，用它补 blur。
+       * **只补 backdrop-filter，不补 background-color** —— 底色由内层
+       * .material 消费 --dsw-menu-surface-fill（已压成半透明），
+       * 外层再涂会和内层叠加变闷。
+       * 有 role 的实例（设置页对话框）两条规则给同一个 blur 值，不叠加。 */
+      lines.push(g + '[data-menu-material]{' + frostedFilter + '}')
+
       /* 对话框 / 菜单 / 列表：半透明 + 强模糊。
        * 🔧 差值 + 预补偿：它们浮在内容区之上（内容区合成 ≈ α），
        * 本层涂浮层档差值（再多 +0.02 的菜单可读性补偿），
@@ -3562,6 +3594,18 @@ window.__ModuleLoader__.load({
           inputAlpha) + ' !important;'
         + glassSurface + ';'
         + 'isolation:isolate !important}')
+
+      /* ⚠️ 2026-10-27（用户报「新会话时输入区透明，过一下才盖上」）：
+       * 硬裁依赖 JS 抬升，而抬升是防抖的（React 空闲才动手）。空窗期里
+       * 座还浮在滚动内容之上，正文从输入框底下穿过 —— 座透明 = 字压字。
+       * 修法：未抬升时（缺 JS 打的 lifted 标记）让座自己垫一层输入卡
+       * 浓度 + 模糊；抬升后标记出现，这条自动失效，回到硬裁。
+       * :not() 只接受简单选择器，属性标记正好够用。 */
+      lines.push(g + '[data-composer-seat]:not([' + SEAT_LIFTED_ATTR + ']){'
+        + 'background-color:' + hexToRgba(
+          glassSurfaceColor(seatColor, inputColor, alpha, glassComposite(alpha, inputAlpha)),
+          inputAlpha) + ' !important;'
+        + frostedFilter + '}')
 
       /* ══ ②（对齐参考插件）输入卡聚焦态：描边亮一档 + 一圈极淡外环。
        * ⚠️ 阴影层数与静置态必须一致（4 层 + 外环 = 5 层，静置也要 5 层，
@@ -4072,8 +4116,12 @@ window.__ModuleLoader__.load({
      *   · 不能给 seat 设 position:absolute —— 会脱离 flex 流，裁切失效；
      *   · 玻璃关闭/卸载时 restoreSeat 搬回去，不留结构改动。
      */
+    /** 座已抬升的标记（CSS 靠它决定座要不要自己垫底，见 buildGlassSheet ④）。 */
+    const SEAT_LIFTED_ATTR = 'data-dsh-seat-lifted'
     let seatObserver = null
     let seatLiftTimer = null
+    /** 本轮防抖开始等待的时刻（0 = 没在等）。用于最长等待上限。 */
+    let seatLiftSince = 0
     let seatBootGuarded = false
     let seatBootTimer = null
 
@@ -4081,8 +4129,19 @@ window.__ModuleLoader__.load({
       const seat = host.querySelector('[data-conversation-content] [data-composer-seat], [data-composer-seat]')
       const scroll = host.querySelector('[data-conversation-scroll]')
       if (seat === null || scroll === null || scroll === seat) return false
-      if (seat.parentElement === host) return true /* 已在正确位置 */
+      /* ⚠️ 2026-10-27（用户报「新会话时输入区透明、过一下才盖上」）：
+       * CSS 无法判断"座是否还在滚动容器里"（:has 只查后代），所以抬升
+       * 状态由 JS 打标记，样式表按标记决定座要不要自己垫底。
+       * 标记必须在**两个**提前 return 的分支里也补上 —— 已在正确位置
+       * 那条尤其重要，否则重排后标记丢失、CSS 会以为还没抬。 */
+      if (seat.parentElement === host) {
+        if (!seat.hasAttribute(SEAT_LIFTED_ATTR)) seat.setAttribute(SEAT_LIFTED_ATTR, '')
+        return true /* 已在正确位置 */
+      }
       scroll.insertAdjacentElement('afterend', seat)
+      try {
+        seat.setAttribute(SEAT_LIFTED_ATTR, '')
+      } catch { /* 极端情况下属性写不进，退化成"未抬升"样式（有毛玻璃，可接受） */ }
       return true
     }
 
@@ -4111,14 +4170,37 @@ window.__ModuleLoader__.load({
      * 改成**真防抖**：每次 DOM 变动都把 timer 往后推，
      * 直到 600ms 内没有任何变动（React 空闲了）才动手。
      * 流式输出期间永远不搬，输出结束才搬一次。 */
+    /* ⚠️ 2026-10-27 二修：纯防抖有**饿死**问题 —— 流式输出时 DOM 每帧都在变，
+     * timer 被无限重置，座可能好几秒都抬不上去（用户报的"过一下才盖上"
+     * 就是这个空窗）。加最长等待上限：从首次调度算起最多 SEAT_LIFT_MAX_WAIT
+     * 必须动手一次，哪怕 DOM 还在变。
+     * 崩溃风险仍由"900ms 冷启动保护 + 抬升幂等"兜住；上限只是不再无限顺延。 */
+    const SEAT_LIFT_QUIET = 600
+    const SEAT_LIFT_MAX_WAIT = 1500
+    /**
+     * 本轮该等多久 —— 纯函数，便于单测两条边界：
+     *   · 正常：等 QUIET 让 React 静下来；
+     *   · 但**总等待不超过 MAX_WAIT**（否则流式输出会把它无限顺延，
+     *     座永远抬不上去 = 用户报的"要过一下才盖上"）。
+     */
+    function seatLiftDelay(now, since) {
+      const budget = SEAT_LIFT_MAX_WAIT - (now - since)
+      return Math.max(0, Math.min(SEAT_LIFT_QUIET, budget))
+    }
     function scheduleSeatLift() {
+      const now = Date.now()
       if (seatLiftTimer !== null) {
         try { clearTimeout(seatLiftTimer) } catch { /* 已触发 */ }
+        seatLiftTimer = null
+      } else {
+        seatLiftSince = now
       }
+      const delay = seatLiftDelay(now, seatLiftSince)
       seatLiftTimer = setTimeout(() => {
         seatLiftTimer = null
+        seatLiftSince = 0
         try { liftSeats() } catch { /* DOM 变动中，下一轮 observer 再来 */ }
-      }, 600)
+      }, delay)
       if (seatLiftTimer && typeof seatLiftTimer.unref === 'function') seatLiftTimer.unref()
     }
 
@@ -4146,6 +4228,12 @@ window.__ModuleLoader__.load({
           const seat = hosts[i].querySelector('[data-composer-seat]')
           if (seat !== null && scroll !== null && seat.parentElement !== scroll) {
             scroll.appendChild(seat)
+          }
+          /* 搬回原位 → 标记必须一起清掉，否则 CSS 还按"已抬升"给透明。 */
+          if (seat !== null && seat.hasAttribute(SEAT_LIFTED_ATTR)) {
+            try {
+              seat.removeAttribute(SEAT_LIFTED_ATTR)
+            } catch { /* 无属性可清 */ }
           }
         } catch { /* 结构已变，随它去 */ }
       }
@@ -11754,6 +11842,11 @@ function makeColorizer(scheme) {
         buildCardSheet,
         detectCardTargets,
         detectFloatTargets,
+        liftOneSeat,
+        seatLiftDelay,
+        SEAT_LIFT_QUIET,
+        SEAT_LIFT_MAX_WAIT,
+        SEAT_LIFTED_ATTR,
         detectPopoverClasses,
         detectPopoverClassesWith: detectPopoverClasses,
         refreshPopoverClasses,

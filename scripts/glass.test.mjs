@@ -1516,6 +1516,122 @@ console.log('Q. 改实心：浮层（glassSolidFloats）')
       'loading 检查先于 ready')
   }
 
+  /* ---- 2026-10-27：菜单外壳雾面 + 座未抬升垫底 ----
+   *
+   * bug1（后台任务悬浮窗没模糊）：MenuSurface 把底色/模糊做在内层
+   * .material 上，走 --dsw-menu-backdrop-filter；我们把那个令牌关了
+   * （避免与 [role=dialog] 双重模糊），代价是**外壳没有 role 的实例两头
+   * 都没模糊** —— ui-jobs 的后台任务面板就是这种。宿主给外壳打了稳定
+   * 标记 data-menu-material，用它补 blur。
+   *
+   * bug2（新会话输入区先透明后盖上）：硬裁依赖 JS 抬升，抬升是防抖的；
+   * 空窗期座浮在正文上，座透明 = 字压字。未抬升时（缺 lifted 标记）
+   * 座自己垫输入卡浓度的底 + 模糊。 */
+  {
+    const st = { glass: 'on', glassTint: '65', glassFog: '16', glassBlur: '16', glassOverlayBlur: '9' }
+    const sheet = buildGlassSheet(st, dark, true, [], [], [])
+
+    /* --- 菜单外壳 --- */
+    const menu = sheet.split('\n').find((l) => l.includes('[data-menu-material]'))
+    check(menu !== undefined, '菜单外壳规则存在')
+    if (menu !== undefined) {
+      check(/backdrop-filter:blur\(9px\)/.test(menu),
+        '菜单外壳带 blur（用浮层模糊档，不是宿主 40px）', menu.slice(0, 90))
+      /* 只补模糊不补底色 —— 底色由内层 .material 消费令牌，外层再涂会叠加变闷。 */
+      check(!/background/.test(menu),
+        '菜单外壳不补 background-color（避免与内层 .material 叠加）', menu.slice(0, 90))
+    }
+    /* 令牌仍要关：有 role 的对话框靠我们的 blur，恢复令牌就双重模糊。 */
+    check(/--dsw-menu-backdrop-filter:none/.test(sheet),
+      '菜单材质令牌仍关着（避免有 role 的实例双重模糊）')
+
+    /* --- 座未抬升垫底 --- */
+    const seatPad = sheet.split('\n').find((l) => l.includes('[data-composer-seat]:not('))
+    check(seatPad !== undefined, '座未抬升的垫底规则存在')
+    if (seatPad !== undefined) {
+      check(seatPad.includes(':not([data-dsh-seat-lifted])'),
+        '垫底规则以 lifted 标记为开关', seatPad.slice(0, 80))
+      check(/background-color:rgba\(/.test(seatPad), '垫底有半透明背景')
+      check(/backdrop-filter:blur\(9px\)/.test(seatPad), '垫底带模糊（糊掉穿过的正文）')
+    }
+    /* 抬升后仍要有"透明 + flex:none"那条（硬裁态）。 */
+    const seatLifted = sheet.split('\n').find((l) => /\[data-composer-seat\]\{/.test(l) && /flex:none/.test(l))
+    check(seatLifted !== undefined, '硬裁态座保持透明 + flex:none')
+    /* 垫底浓度必须等于输入卡浓度 —— 抬升瞬间不能跳色。 */
+    const card = sheet.split('\n').find((l) => l.includes('RlGAzG_card') && /background-color:rgba/.test(l))
+    if (seatPad !== undefined && card !== undefined) {
+      const a = (seatPad.match(/background-color:(rgba\([^)]*\))/) || [])[1]
+      const b = (card.match(/background-color:(rgba\([^)]*\))/) || [])[1]
+      check(a !== undefined && a === b,
+        '垫底浓度 = 输入卡浓度（抬升瞬间不跳色）', a + ' vs ' + b)
+    }
+  }
+
+  /* ---- 2026-10-27：lifted 标记与防抖上限（JS 行为层）----
+   *
+   * CSS 测试抓不到这两条：标记由 JS 写、上限在 JS 算。
+   * 所以直接驱动 liftOneSeat（用替身节点）与 seatLiftDelay（纯函数）。 */
+  {
+    const ATTR = t.SEAT_LIFTED_ATTR
+    check(typeof ATTR === 'string' && ATTR.length > 0, 'lifted 标记常量已导出', String(ATTR))
+
+    function fakeEl(parent) {
+      return {
+        parentElement: parent,
+        attrs: {},
+        setAttribute(k) { this.attrs[k] = '' },
+        removeAttribute(k) { delete this.attrs[k] },
+        hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) },
+      }
+    }
+    /* 替身 host：seat 在 scroll 内 → 抬升后应成为 host 的直接子。 */
+    function scenario() {
+      const moved = []
+      const scroll = {
+        insertAdjacentElement(pos, el) { moved.push(pos); el.parentElement = host },
+      }
+      const seat = fakeEl(scroll)
+      const host = {
+        querySelector(sel) {
+          if (sel.includes('composer-seat')) return seat
+          if (sel.includes('conversation-scroll')) return scroll
+          return null
+        },
+      }
+      return { seat, scroll, host, moved }
+    }
+
+    /* 抬升成功必须打标记 —— 没标记，CSS 的垫底规则永不失效，
+     * 座会一直带背景（硬裁态本该透明）。 */
+    const a = scenario()
+    check(t.liftOneSeat(a.host) === true, '首次抬升返回 true')
+    check(a.moved.length === 1 && a.moved[0] === 'afterend', 'seat 插到 scroll 之后')
+    check(a.seat.hasAttribute(ATTR), '抬升后写入 lifted 标记（CSS 靠它撤垫底）')
+
+    /* 已在正确位置的分支也要补标记 —— React 把节点搬回后重排时，
+     * 这条分支是幂等恢复的唯一入口，漏了标记就永久丢失。 */
+    const b = scenario()
+    b.seat.parentElement = b.host
+    check(t.liftOneSeat(b.host) === true, '已抬升时返回 true')
+    check(b.moved.length === 0, '已抬升时不再搬动')
+    check(b.seat.hasAttribute(ATTR), '已抬升分支也补标记（React 搬回后能恢复）')
+
+    /* 缺节点 → false 且不打标记。 */
+    const c = { querySelector: () => null }
+    check(t.liftOneSeat(c) === false, '查不到节点返回 false')
+
+    /* 防抖上限：静默窗口 600ms，但总等待不超过 1500ms ——
+     * 流式输出每帧都重置 timer，没有上限座就永远抬不上去。 */
+    check(t.SEAT_LIFT_QUIET === 600, '静默窗口 600ms')
+    check(t.SEAT_LIFT_MAX_WAIT === 1500, '最长等待 1500ms')
+    const now = 10000
+    check(t.seatLiftDelay(now, now) === 600, '刚调度：等满静默窗口')
+    check(t.seatLiftDelay(now, now - 800) === 600, '已等 800ms：仍可等满 600')
+    check(t.seatLiftDelay(now, now - 1200) === 300, '已等 1200ms：压缩到剩余额度')
+    check(t.seatLiftDelay(now, now - 1500) === 0, '已等满上限：立即动手（不再顺延）')
+    check(t.seatLiftDelay(now, now - 3000) === 0, '超上限：钳到 0，不为负')
+  }
+
   /* ---- 2026-10-24：卡片本体必须用 ~= 词匹配，不能用 *= 子串 ----
    *
    * 用户截图实证：交付文件卡/计划卡内部出现"条中条"——
